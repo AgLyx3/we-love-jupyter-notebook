@@ -1,0 +1,1 @@
+"""Guarded notebook kernel execution."""

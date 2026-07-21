@@ -69,6 +69,10 @@ async def upload_notebook(
         expected_session_id=session_id,
         expected_revision=expected_revision,
     )
+    request.app.state.session_event_service.publish(
+        "notebook.updated",
+        {"sessionId": snapshot.session_id, "revision": snapshot.revision, "ownerId": "upload"},
+    )
     return serialize_snapshot(snapshot)
 
 
@@ -99,6 +103,10 @@ def update_cell_source(
         expected_revision=body.expected_revision,
         expected_session_id=body.session_id,
         owner="manual",
+    )
+    request.app.state.session_event_service.publish(
+        "notebook.updated",
+        {"sessionId": snapshot.session_id, "revision": snapshot.revision, "ownerId": "manual"},
     )
     cell = next(cell for cell in snapshot.notebook["cells"] if cell["id"] == cell_id)
     return {

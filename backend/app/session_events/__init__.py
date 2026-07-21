@@ -1,0 +1,1 @@
+"""Session-scoped operation events."""

@@ -31,6 +31,7 @@ def serialize_turn(turn: AgentTurn) -> dict[str, Any]:
         "attempts": turn.attempts,
         "finalOutput": turn.final_output,
         "appliedRevision": turn.applied_revision,
+        "executionOperationId": turn.execution_operation_id,
         "changes": [
             {"cellId": item.cell_id, "previousSource": item.previous_source, "nextSource": item.next_source}
             for item in turn.changes

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 from threading import RLock
@@ -136,6 +137,36 @@ class NotebookDocumentService:
                 self._revision += 1
                 self._dirty = True
                 self._last_mutation_owner = owner
+            return self._snapshot_unlocked()
+
+    def apply_execution_result_under_lease(
+        self, *, cell_id: str, outputs: list[dict[str, Any]],
+        execution_count: int | None, expected_revision: int,
+        expected_source_hash: str, owner: str, lease: MutationLease,
+    ) -> NotebookSnapshot:
+        """Commit a kernel result only while its exact source lineage is current."""
+        self.assert_lease(lease)
+        with self._lock:
+            self._require_notebook()
+            if expected_revision != self._revision:
+                raise RevisionConflict(self._revision)
+            cell = next((item for item in self._notebook["cells"] if item["id"] == cell_id), None)
+            if cell is None:
+                raise CellNotFound(cell_id)
+            source = cell.get("source", "")
+            source = "".join(source) if isinstance(source, list) else source
+            if hashlib.sha256(source.encode()).hexdigest() != expected_source_hash:
+                raise RevisionConflict(self._revision)
+            candidate = copy.deepcopy(self._notebook)
+            candidate_cell = next(item for item in candidate["cells"] if item["id"] == cell_id)
+            candidate_cell["outputs"] = copy.deepcopy(outputs)
+            candidate_cell["execution_count"] = execution_count
+            if len(self._serialize_notebook(candidate)) > MAX_NOTEBOOK_BYTES:
+                raise NotebookSizeError(MAX_NOTEBOOK_BYTES)
+            self._notebook = candidate
+            self._revision += 1
+            self._dirty = True
+            self._last_mutation_owner = owner
             return self._snapshot_unlocked()
 
     def restore_under_lease(

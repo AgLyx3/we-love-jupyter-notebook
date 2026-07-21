@@ -21,6 +21,8 @@ from ..notebook_document.models import (
 from ..notebook_document.service import NotebookDocumentService
 from ..turn_scope.models import FrozenTurnScope
 from ..turn_scope.service import TurnScopeService
+from ..kernel_execution.service import KernelExecutionService
+from ..session_events.service import SessionEventService
 
 
 TERMINAL_STATES = {"completed", "failed", "cancelled", "validation_incomplete"}
@@ -58,6 +60,7 @@ class AgentTurn:
     final_output: str = ""
     changes: tuple[CandidateCellSourceChange, ...] = ()
     applied_revision: int | None = None
+    execution_operation_id: str | None = None
     checkpoint: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -72,6 +75,8 @@ class AgentTurnService:
         adapter: AgentAdapter, builder: AgentWorkspaceBuilder | None = None,
         auditor: WorkspaceAuditor | None = None,
         validator: BoundaryValidator | None = None, timeout: float = 600,
+        executions: KernelExecutionService | None = None,
+        events: SessionEventService | None = None,
     ) -> None:
         self.documents = documents
         self.scopes = scopes
@@ -80,6 +85,8 @@ class AgentTurnService:
         self.auditor = auditor or WorkspaceAuditor()
         self.validator = validator or BoundaryValidator()
         self.timeout = timeout
+        self.executions = executions
+        self.events = events
         self._lock = RLock()
         self._turns: dict[str, AgentTurn] = {}
         self._latest_applied_turn_id: str | None = None
@@ -172,6 +179,8 @@ class AgentTurnService:
             if turn.state not in TERMINAL_STATES:
                 turn.accepted_cancel_revision = expected_revision
                 turn.cancel_event.set()
+                if self.executions is not None:
+                    self.executions.cancel_parent(turn_id)
         return self.get(turn_id)
 
     def _run_guarded(self, turn: AgentTurn, scope: FrozenTurnScope, lease, frozen_snapshot) -> None:
@@ -261,8 +270,26 @@ class AgentTurnService:
             self._latest_applied_turn_id = turn.turn_id
             if turn.cancel_event.is_set():
                 return "cancelled", AgentCancelled()
-            else:
-                return "completed", None
+        if self.events is not None:
+            self.events.publish("notebook.updated", {"sessionId": turn.session_id, "revision": updated.revision, "ownerId": turn.turn_id})
+        if self.executions is not None:
+            self._set_state(turn, "executing")
+            execution = self.executions.execute_downstream(
+                parent_turn_id=turn.turn_id, session_id=turn.session_id,
+                expected_revision=updated.revision,
+                changed_cell_ids={change.cell_id for change in changes},
+                lease=lease, cancel_event=turn.cancel_event,
+            )
+            with self._lock:
+                turn.execution_operation_id = execution.operation_id
+                turn.applied_revision = execution.current_revision
+            if execution.state == "validation_incomplete":
+                return "validation_incomplete", None
+            if execution.state == "cancelled":
+                return "cancelled", AgentCancelled()
+            if execution.state == "failed":
+                return "failed", RuntimeError((execution.error or {}).get("message", "Downstream execution failed"))
+        return "completed", None
 
     def undo(self, turn_id: str, *, session_id: str, expected_revision: int):
         turn = self._require_applied(turn_id)
@@ -283,6 +310,8 @@ class AgentTurnService:
             )
             with self._lock:
                 self._latest_applied_turn_id = None
+            if self.events is not None:
+                self.events.publish("notebook.updated", {"sessionId": restored.session_id, "revision": restored.revision, "ownerId": f"undo:{turn_id}"})
             return restored
         finally:
             self.documents.coordinator.release(lease)
@@ -308,11 +337,14 @@ class AgentTurnService:
             source = "".join(source) if isinstance(source, list) else source
             if self._source_hash(source) != self._source_hash(change.next_source):
                 raise RevertConflict()
-            return self.documents.apply_source_changes_under_lease(
+            updated = self.documents.apply_source_changes_under_lease(
                 changes={cell_id: change.previous_source},
                 expected_revision=expected_revision,
                 owner=f"revert:{turn_id}", lease=lease,
             )
+            if self.events is not None:
+                self.events.publish("notebook.updated", {"sessionId": updated.session_id, "revision": updated.revision, "ownerId": f"revert:{turn_id}"})
+            return updated
         finally:
             self.documents.coordinator.release(lease)
 
@@ -331,6 +363,8 @@ class AgentTurnService:
             if turn.state in TERMINAL_STATES:
                 return
             turn.state = state
+        if self.events is not None:
+            self.events.publish("turn.updated", {"turnId": turn.turn_id, "sessionId": turn.session_id, "state": state, "revision": turn.applied_revision or turn.base_revision})
 
     def _begin_commit(self, turn: AgentTurn) -> None:
         """Linearize cancellation against the transition into source apply."""
@@ -343,9 +377,8 @@ class AgentTurnService:
         with self._lock:
             self._finish_locked(turn, state, error)
 
-    @staticmethod
     def _finish_locked(
-        turn: AgentTurn, state: str, error: Exception | None = None,
+        self, turn: AgentTurn, state: str, error: Exception | None = None,
     ) -> None:
         turn.state = state
         turn.completed_at = datetime.now(timezone.utc)
@@ -362,3 +395,5 @@ class AgentTurnService:
                     "message": str(error),
                     "details": {},
                 }
+        if self.events is not None:
+            self.events.publish("turn.updated", {"turnId": turn.turn_id, "sessionId": turn.session_id, "state": state, "revision": turn.applied_revision or turn.base_revision, "error": copy.deepcopy(turn.error)})
