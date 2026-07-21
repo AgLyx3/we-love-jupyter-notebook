@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from backend.app.notebook_document.models import (
@@ -98,3 +100,42 @@ def test_scope_is_bound_to_notebook_revision(notebook_payload):
             )
     finally:
         documents.coordinator.release(lease)
+
+
+def test_adding_cell_at_new_revision_discards_all_prior_selections(
+    notebook_payload,
+):
+    payload = json.loads(notebook_payload())
+    payload["cells"].append({
+        "cell_type": "code",
+        "id": "third",
+        "metadata": {},
+        "source": "other = 1\n",
+        "execution_count": None,
+        "outputs": [],
+    })
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(json.dumps(payload).encode())
+    scopes = TurnScopeService(documents)
+    scopes.add("editable", editable=True)
+    edited = documents.update_cell_source(
+        cell_id="editable", source="value = 2\n",
+        expected_revision=snapshot.revision, owner="manual",
+    )
+    selection = scopes.add("intro", editable=False)
+    assert selection.editable_cell_ids == ()
+    assert selection.context_cell_ids == ("intro",)
+    scopes.add("third", editable=True)
+    lease = documents.coordinator.acquire(
+        operation_type="agent_turn", operation_id="turn"
+    )
+    try:
+        frozen = scopes.freeze(
+            turn_id="turn", session_id=edited.session_id,
+            revision=edited.revision, prompt="change third", lease=lease,
+        )
+    finally:
+        documents.coordinator.release(lease)
+    assert frozen.editable_cell_ids == ("third",)
+    assert frozen.context_cell_ids == ("intro",)
+    assert "editable" not in frozen.editable_cell_ids

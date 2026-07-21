@@ -55,7 +55,10 @@ class TurnScopeService:
             if editable and cell["cell_type"] not in {"code", "markdown"}:
                 raise CellNotFound(cell_id)
             with self._lock:
-                if self._selection_session_id not in {None, snapshot.session_id}:
+                if self._selection_session_id is not None and (
+                    self._selection_session_id != snapshot.session_id
+                    or self._selection_revision != snapshot.revision
+                ):
                     self._editable.clear()
                     self._context.clear()
                 self._selection_session_id = snapshot.session_id
