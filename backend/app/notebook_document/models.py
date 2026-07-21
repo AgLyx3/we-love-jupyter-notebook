@@ -26,6 +26,15 @@ class NotebookImportError(NotebookDomainError):
             self.code = code
 
 
+class NotebookSizeError(NotebookImportError):
+    code = "notebook_too_large"
+    message = "Notebook exceeds the size limit"
+    status_code = 413
+
+    def __init__(self, max_bytes: int) -> None:
+        NotebookDomainError.__init__(self, maxBytes=max_bytes)
+
+
 class NotebookNotLoaded(NotebookDomainError):
     code = "notebook_not_loaded"
     message = "No notebook is loaded"

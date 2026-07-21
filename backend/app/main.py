@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .api.notebook_routes import router as notebook_router
@@ -24,6 +26,21 @@ def create_app() -> FastAPI:
                     "code": error.code,
                     "message": error.message,
                     "details": error.details,
+                }
+            },
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error_handler(
+        _request: Request, error: RequestValidationError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": "invalid_request",
+                    "message": "Request validation failed",
+                    "details": {"errors": jsonable_encoder(error.errors())},
                 }
             },
         )

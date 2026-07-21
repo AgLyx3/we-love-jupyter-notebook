@@ -1,4 +1,5 @@
 import json
+from threading import Event, Thread
 
 import pytest
 
@@ -6,6 +7,7 @@ from backend.app.notebook_document import service as service_module
 from backend.app.notebook_document.models import (
     MutationConflict,
     NotebookImportError,
+    NotebookSizeError,
     RevisionConflict,
 )
 from backend.app.notebook_document.mutation_coordinator import MutationCoordinator
@@ -207,3 +209,108 @@ def test_generated_id_does_not_displace_valid_later_id(monkeypatch):
         "generated",
         "futureid",
     ]
+
+
+def test_competing_mutation_fails_without_waiting_for_document_lock(
+    monkeypatch, notebook_payload
+):
+    service = NotebookDocumentService()
+    imported = service.import_notebook(notebook_payload())
+    validation_started = Event()
+    release_validation = Event()
+    original_parse = service._parse_and_validate
+    replacement_errors = []
+
+    def slow_parse(payload):
+        validation_started.set()
+        assert release_validation.wait(timeout=2)
+        return original_parse(payload)
+
+    monkeypatch.setattr(service, "_parse_and_validate", slow_parse)
+
+    def replace_notebook():
+        try:
+            service.import_notebook(
+                notebook_payload(cell_ids=("new-intro", "new-code")),
+                expected_session_id=imported.session_id,
+                expected_revision=imported.revision,
+            )
+        except Exception as error:  # pragma: no cover - asserted after joining
+            replacement_errors.append(error)
+
+    competing_errors = []
+
+    def compete():
+        try:
+            service.update_cell_source(
+                cell_id="editable",
+                source="blocked = True",
+                expected_revision=imported.revision,
+                owner="manual",
+            )
+        except Exception as error:
+            competing_errors.append(error)
+
+    replacement = Thread(target=replace_notebook)
+    replacement.start()
+    assert validation_started.wait(timeout=1)
+    competing = Thread(target=compete)
+    competing.start()
+    competing.join(timeout=0.2)
+    returned_before_release = not competing.is_alive()
+    release_validation.set()
+    replacement.join(timeout=2)
+    competing.join(timeout=2)
+
+    assert returned_before_release is True
+    assert len(competing_errors) == 1
+    assert isinstance(competing_errors[0], MutationConflict)
+    assert replacement_errors == []
+
+
+def test_manual_mutations_have_unique_operation_ids_and_manual_owner(notebook_payload):
+    coordinator = MutationCoordinator()
+    service = NotebookDocumentService(coordinator)
+    imported = service.import_notebook(notebook_payload())
+    acquired = []
+    original_acquire = coordinator.acquire
+
+    def recording_acquire(**kwargs):
+        lease = original_acquire(**kwargs)
+        acquired.append(lease)
+        return lease
+
+    coordinator.acquire = recording_acquire
+    first = service.update_cell_source(
+        cell_id="editable",
+        source="value = 2",
+        expected_revision=imported.revision,
+        owner="manual",
+    )
+    second = service.update_cell_source(
+        cell_id="editable",
+        source="value = 3",
+        expected_revision=first.revision,
+        owner="manual",
+    )
+
+    assert [lease.operation_type for lease in acquired] == ["manual", "manual"]
+    assert acquired[0].operation_id != acquired[1].operation_id
+    assert all(lease.operation_id != "manual" for lease in acquired)
+    assert second.last_mutation_owner == "manual"
+
+
+def test_oversized_source_is_rejected_without_mutating_notebook(notebook_payload):
+    service = NotebookDocumentService()
+    imported = service.import_notebook(notebook_payload())
+
+    with pytest.raises(NotebookSizeError):
+        service.update_cell_source(
+            cell_id="editable",
+            source="x" * MAX_NOTEBOOK_BYTES,
+            expected_revision=imported.revision,
+            owner="manual",
+        )
+
+    assert service.get_snapshot() == imported
+    assert service.coordinator.active_lease is None

@@ -16,6 +16,7 @@ from .models import (
     MutationLease,
     NotebookImportError,
     NotebookNotLoaded,
+    NotebookSizeError,
     NotebookSnapshot,
     ReplacementPreconditionRequired,
     RevisionConflict,
@@ -36,6 +37,13 @@ def _is_valid_cell_id(value: Any) -> bool:
 
 
 class NotebookDocumentService:
+    """Owns the active document and its short, atomic mutations.
+
+    Mutation ordering is always coordinator lease, then document lock. A future
+    long-lived operation must retain its lease and enter only the document lock
+    when committing; no code may wait for a lease while holding the document lock.
+    """
+
     def __init__(self, coordinator: MutationCoordinator | None = None) -> None:
         self.coordinator = coordinator or MutationCoordinator()
         self._lock = RLock()
@@ -54,11 +62,11 @@ class NotebookDocumentService:
         expected_session_id: str | None = None,
         expected_revision: int | None = None,
     ) -> NotebookSnapshot:
-        with self._lock:
-            lease = self._acquire_lease(
-                operation_type="notebook_import", operation_id=uuid4().hex
-            )
-            try:
+        lease = self._acquire_lease(
+            operation_type="notebook_import", operation_id=uuid4().hex
+        )
+        try:
+            with self._lock:
                 candidate, normalized = self._parse_and_validate(payload)
                 if self._notebook is not None:
                     if expected_session_id is None or expected_revision is None:
@@ -72,8 +80,8 @@ class NotebookDocumentService:
                 self._dirty = normalized
                 self._last_mutation_owner = "normalization" if normalized else None
                 return self._snapshot_unlocked()
-            finally:
-                self.coordinator.release(lease)
+        finally:
+            self.coordinator.release(lease)
 
     def get_snapshot(self) -> NotebookSnapshot:
         with self._lock:
@@ -82,9 +90,7 @@ class NotebookDocumentService:
 
     def export_notebook(self) -> tuple[str, bytes]:
         snapshot = self.get_snapshot()
-        content = (json.dumps(snapshot.notebook, ensure_ascii=False, indent=1) + "\n").encode(
-            "utf-8"
-        )
+        content = self._serialize_notebook(snapshot.notebook)
         return snapshot.filename, content
 
     def update_cell_source(
@@ -96,9 +102,12 @@ class NotebookDocumentService:
         owner: str,
         expected_session_id: str | None = None,
     ) -> NotebookSnapshot:
-        with self._lock:
-            lease = self._acquire_lease(operation_type="manual_edit", operation_id=owner)
-            try:
+        lease = self._acquire_lease(
+            operation_type=owner,
+            operation_id=uuid4().hex,
+        )
+        try:
+            with self._lock:
                 self._require_notebook()
                 if (
                     expected_session_id is not None
@@ -114,20 +123,25 @@ class NotebookDocumentService:
                 )
                 if cell is None:
                     raise CellNotFound(cell_id)
-                cell["source"] = source
+                candidate = copy.deepcopy(self._notebook)
+                candidate_cell = next(
+                    item for item in candidate["cells"] if item["id"] == cell_id
+                )
+                candidate_cell["source"] = source
+                if len(self._serialize_notebook(candidate)) > MAX_NOTEBOOK_BYTES:
+                    raise NotebookSizeError(MAX_NOTEBOOK_BYTES)
+
+                self._notebook = candidate
                 self._revision += 1
                 self._dirty = True
                 self._last_mutation_owner = owner
                 return self._snapshot_unlocked()
-            finally:
-                self.coordinator.release(lease)
+        finally:
+            self.coordinator.release(lease)
 
     def _parse_and_validate(self, payload: bytes) -> tuple[dict[str, Any], bool]:
         if len(payload) > MAX_NOTEBOOK_BYTES:
-            raise NotebookImportError(
-                f"Notebook exceeds the {MAX_NOTEBOOK_BYTES}-byte limit",
-                code="notebook_too_large",
-            )
+            raise NotebookSizeError(MAX_NOTEBOOK_BYTES)
         try:
             raw = json.loads(payload.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -141,6 +155,8 @@ class NotebookDocumentService:
             nbformat.validate(notebook)
         except (NotebookValidationError, AttributeError, TypeError, ValueError) as error:
             raise NotebookImportError() from error
+        if len(self._serialize_notebook(notebook)) > MAX_NOTEBOOK_BYTES:
+            raise NotebookSizeError(MAX_NOTEBOOK_BYTES)
         return notebook, normalized
 
     @staticmethod
@@ -204,6 +220,12 @@ class NotebookDocumentService:
         except MutationConflict as error:
             error.details["currentDocumentRevision"] = self._revision
             raise
+
+    @staticmethod
+    def _serialize_notebook(notebook: dict[str, Any]) -> bytes:
+        return (json.dumps(notebook, ensure_ascii=False, indent=1) + "\n").encode(
+            "utf-8"
+        )
 
     def _require_notebook(self) -> None:
         if self._notebook is None or self._session_id is None:

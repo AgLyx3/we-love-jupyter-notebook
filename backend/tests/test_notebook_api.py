@@ -131,3 +131,98 @@ def test_active_lease_precedes_stale_edit_and_invalid_replacement(
             },
         }
     coordinator.release(lease)
+
+
+def test_request_validation_errors_use_structured_envelope(client, notebook_payload):
+    upload(client, notebook_payload())
+
+    response = client.post("/cells/editable/source", json={"source": 12})
+
+    assert response.status_code == 422
+    body = response.json()["error"]
+    assert body["code"] == "invalid_request"
+    assert body["message"] == "Request validation failed"
+    assert isinstance(body["details"]["errors"], list)
+
+
+def test_source_edit_reports_session_conflict_and_missing_cell(client, notebook_payload):
+    created = upload(client, notebook_payload()).json()
+
+    wrong_session = client.post(
+        "/cells/editable/source",
+        json={
+            "sessionId": "wrong-session",
+            "expectedDocumentRevision": created["revision"],
+            "source": "value = 2",
+        },
+    )
+    assert wrong_session.status_code == 409
+    assert wrong_session.json()["error"]["code"] == "session_conflict"
+
+    missing_cell = client.post(
+        "/cells/does-not-exist/source",
+        json={
+            "sessionId": created["sessionId"],
+            "expectedDocumentRevision": created["revision"],
+            "source": "value = 2",
+        },
+    )
+    assert missing_cell.status_code == 404
+    assert missing_cell.json()["error"]["code"] == "cell_not_found"
+
+
+def test_download_header_sanitizes_uploaded_filename(client, notebook_payload):
+    created = upload(
+        client,
+        notebook_payload(),
+        filename='../../unsafe"\r\nX-Evil: yes.ipynb',
+    ).json()
+
+    response = client.get("/notebooks/download")
+
+    disposition = response.headers["content-disposition"]
+    assert response.status_code == 200
+    assert "\r" not in disposition and "\n" not in disposition
+    assert "x-evil" not in response.headers
+    assert created["filename"] in disposition
+
+
+def test_normalized_cell_ids_persist_in_download(client):
+    payload = json.dumps(
+        {
+            "cells": [
+                {"cell_type": "markdown", "metadata": {}, "source": ["one"]},
+                {"cell_type": "markdown", "metadata": {}, "source": ["two"]},
+            ],
+            "metadata": {},
+            "nbformat": 4,
+            "nbformat_minor": 5,
+        }
+    ).encode()
+    created = upload(client, payload).json()
+
+    downloaded = json.loads(client.get("/notebooks/download").content)
+
+    response_ids = [cell["cellId"] for cell in created["cells"]]
+    assert created["revision"] == 1
+    assert created["dirty"] is True
+    assert [cell["id"] for cell in downloaded["cells"]] == response_ids
+
+
+def test_oversized_source_returns_structured_error_without_revision_change(
+    client, notebook_payload
+):
+    created = upload(client, notebook_payload()).json()
+
+    response = client.post(
+        "/cells/editable/source",
+        json={
+            "sessionId": created["sessionId"],
+            "expectedDocumentRevision": created["revision"],
+            "source": "x" * (5 * 1024 * 1024),
+        },
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "notebook_too_large"
+    assert client.get("/notebooks/current").json()["revision"] == created["revision"]
