@@ -88,6 +88,67 @@ class NotebookDocumentService:
             self._require_notebook()
             return self._snapshot_unlocked()
 
+    def assert_lease(self, lease: MutationLease) -> None:
+        active = self.coordinator.active_lease
+        if active is None or active.token != lease.token:
+            raise MutationConflict(
+                active_operation_type=active.operation_type if active else "none",
+                active_operation_id=active.operation_id if active else "none",
+            )
+
+    @staticmethod
+    def check_snapshot_preconditions(
+        snapshot: NotebookSnapshot, session_id: str, revision: int
+    ) -> None:
+        if snapshot.session_id != session_id:
+            raise SessionConflict(snapshot.session_id)
+        if snapshot.revision != revision:
+            raise RevisionConflict(snapshot.revision)
+
+    def apply_source_changes_under_lease(
+        self, *, changes: dict[str, str], expected_revision: int,
+        owner: str, lease: MutationLease,
+    ) -> NotebookSnapshot:
+        self.assert_lease(lease)
+        with self._lock:
+            self._require_notebook()
+            if expected_revision != self._revision:
+                raise RevisionConflict(self._revision)
+            candidate = copy.deepcopy(self._notebook)
+            indexed = {cell["id"]: cell for cell in candidate["cells"]}
+            for cell_id, source in changes.items():
+                if cell_id not in indexed:
+                    raise CellNotFound(cell_id)
+                indexed[cell_id]["source"] = source
+            if len(self._serialize_notebook(candidate)) > MAX_NOTEBOOK_BYTES:
+                raise NotebookSizeError(MAX_NOTEBOOK_BYTES)
+            if changes:
+                self._notebook = candidate
+                self._revision += 1
+                self._dirty = True
+                self._last_mutation_owner = owner
+            return self._snapshot_unlocked()
+
+    def restore_under_lease(
+        self, *, notebook: dict[str, Any], expected_revision: int,
+        owner: str, lease: MutationLease,
+    ) -> NotebookSnapshot:
+        self.assert_lease(lease)
+        with self._lock:
+            self._require_notebook()
+            if expected_revision != self._revision:
+                raise RevisionConflict(self._revision)
+            candidate = copy.deepcopy(notebook)
+            try:
+                nbformat.validate(nbformat.from_dict(candidate))
+            except (NotebookValidationError, AttributeError, TypeError, ValueError) as error:
+                raise NotebookImportError() from error
+            self._notebook = candidate
+            self._revision += 1
+            self._dirty = True
+            self._last_mutation_owner = owner
+            return self._snapshot_unlocked()
+
     def export_notebook(self) -> tuple[str, bytes]:
         snapshot = self.get_snapshot()
         content = self._serialize_notebook(snapshot.notebook)

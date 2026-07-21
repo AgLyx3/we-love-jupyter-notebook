@@ -1,0 +1,1 @@
+"""Turn-scoped notebook permissions."""

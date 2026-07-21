@@ -1,0 +1,1 @@
+"""Disposable external-agent workspaces."""
