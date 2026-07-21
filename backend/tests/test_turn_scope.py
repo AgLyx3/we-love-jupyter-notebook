@@ -1,8 +1,11 @@
 import pytest
 
-from backend.app.notebook_document.models import MutationConflict, RevisionConflict
+from backend.app.notebook_document.models import (
+    MutationConflict, NotebookImportError, RevisionConflict,
+)
 from backend.app.notebook_document.service import NotebookDocumentService
 from backend.app.turn_scope.service import TurnScopeService
+from backend.app.turn_scope.models import StaleTurnScope
 
 
 def _loaded(notebook_payload):
@@ -50,3 +53,48 @@ def test_terminal_expiration_clears_scope_and_records_history(notebook_payload):
     assert scopes.current().editable_cell_ids == ()
     assert scopes.history[-1].scope.editable_cell_ids == ("editable",)
     assert scopes.history[-1].outcome == "failed"
+
+
+def test_successful_replacement_clears_scope_even_with_colliding_ids(notebook_payload):
+    documents, snapshot = _loaded(notebook_payload)
+    scopes = TurnScopeService(documents)
+    scopes.add("editable", editable=True)
+    replacement = documents.import_notebook(
+        notebook_payload(), expected_session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
+    assert replacement.session_id != snapshot.session_id
+    assert scopes.current().editable_cell_ids == ()
+
+
+def test_failed_replacement_preserves_current_scope(notebook_payload):
+    documents, snapshot = _loaded(notebook_payload)
+    scopes = TurnScopeService(documents)
+    scopes.add("editable", editable=True)
+    with pytest.raises(NotebookImportError):
+        documents.import_notebook(
+            b"not-json", expected_session_id=snapshot.session_id,
+            expected_revision=snapshot.revision,
+        )
+    assert scopes.current().editable_cell_ids == ("editable",)
+
+
+def test_scope_is_bound_to_notebook_revision(notebook_payload):
+    documents, snapshot = _loaded(notebook_payload)
+    scopes = TurnScopeService(documents)
+    scopes.add("editable", editable=True)
+    edited = documents.update_cell_source(
+        cell_id="editable", source="value = 2\n",
+        expected_revision=snapshot.revision, owner="manual",
+    )
+    lease = documents.coordinator.acquire(
+        operation_type="agent_turn", operation_id="turn"
+    )
+    try:
+        with pytest.raises(StaleTurnScope):
+            scopes.freeze(
+                turn_id="turn", session_id=edited.session_id,
+                revision=edited.revision, prompt="change", lease=lease,
+            )
+    finally:
+        documents.coordinator.release(lease)

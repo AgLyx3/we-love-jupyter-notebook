@@ -6,7 +6,10 @@ from uuid import uuid4
 
 from ..notebook_document.models import CellNotFound, MutationLease
 from ..notebook_document.service import NotebookDocumentService
-from .models import EmptyEditableScope, FrozenTurnScope, ScopeSelection, TerminalScopeRecord
+from .models import (
+    EmptyEditableScope, FrozenTurnScope, ScopeSelection, StaleTurnScope,
+    TerminalScopeRecord,
+)
 
 
 class TurnScopeService:
@@ -17,10 +20,18 @@ class TurnScopeService:
         self._context: list[str] = []
         self._frozen: FrozenTurnScope | None = None
         self._history: list[TerminalScopeRecord] = []
+        self._selection_session_id: str | None = None
+        self._selection_revision: int | None = None
+        self.documents.register_session_replacement_listener(
+            self._on_session_replaced
+        )
 
     def current(self) -> ScopeSelection:
         with self._lock:
-            return ScopeSelection(tuple(self._editable), tuple(self._context))
+            return ScopeSelection(
+                tuple(self._editable), tuple(self._context),
+                self._selection_session_id, self._selection_revision,
+            )
 
     @property
     def history(self) -> tuple[TerminalScopeRecord, ...]:
@@ -44,6 +55,11 @@ class TurnScopeService:
             if editable and cell["cell_type"] not in {"code", "markdown"}:
                 raise CellNotFound(cell_id)
             with self._lock:
+                if self._selection_session_id not in {None, snapshot.session_id}:
+                    self._editable.clear()
+                    self._context.clear()
+                self._selection_session_id = snapshot.session_id
+                self._selection_revision = snapshot.revision
                 target = self._editable if editable else self._context
                 other = self._context if editable else self._editable
                 if cell_id in other:
@@ -68,6 +84,8 @@ class TurnScopeService:
             with self._lock:
                 self._editable.clear()
                 self._context.clear()
+                self._selection_session_id = None
+                self._selection_revision = None
                 return self.current()
         finally:
             self.documents.coordinator.release(lease)
@@ -83,6 +101,13 @@ class TurnScopeService:
         with self._lock:
             if not self._editable:
                 raise EmptyEditableScope()
+            if self._selection_session_id != session_id:
+                raise EmptyEditableScope()
+            if self._selection_revision != revision:
+                raise StaleTurnScope(
+                    scope_revision=self._selection_revision or 0,
+                    current_revision=revision,
+                )
             if not set(self._editable + self._context) <= valid_ids:
                 missing = next(iter(set(self._editable + self._context) - valid_ids))
                 raise CellNotFound(missing)
@@ -98,6 +123,28 @@ class TurnScopeService:
                 self._frozen = None
             self._editable.clear()
             self._context.clear()
+            self._selection_session_id = None
+            self._selection_revision = None
             self._history.append(TerminalScopeRecord(
                 scope=scope, outcome=outcome, completed_at=datetime.now(timezone.utc)
             ))
+
+    def _on_session_replaced(self, _session_id: str, _revision: int) -> None:
+        with self._lock:
+            self._editable.clear()
+            self._context.clear()
+            self._frozen = None
+            self._selection_session_id = None
+            self._selection_revision = None
+
+    def update_terminal_outcome(self, turn_id: str, outcome: str) -> None:
+        with self._lock:
+            for index in range(len(self._history) - 1, -1, -1):
+                record = self._history[index]
+                if record.scope.turn_id == turn_id:
+                    self._history[index] = TerminalScopeRecord(
+                        scope=record.scope,
+                        outcome=outcome,
+                        completed_at=record.completed_at,
+                    )
+                    return

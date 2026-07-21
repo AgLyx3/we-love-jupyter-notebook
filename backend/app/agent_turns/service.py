@@ -62,6 +62,7 @@ class AgentTurn:
     error: dict[str, Any] | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
+    accepted_cancel_revision: int | None = None
     cancel_event: Event = field(default_factory=Event, repr=False)
 
 
@@ -145,6 +146,14 @@ class AgentTurnService:
             snapshot = self.documents.get_snapshot()
             if snapshot.session_id != session_id or turn.session_id != session_id:
                 raise SessionConflict(snapshot.session_id)
+            if turn.accepted_cancel_revision is not None:
+                lineage_revision = turn.applied_revision or turn.base_revision
+                if (
+                    expected_revision != turn.accepted_cancel_revision
+                    or snapshot.revision != lineage_revision
+                ):
+                    raise RevisionConflict(snapshot.revision)
+                return self.get(turn_id)
             correlated_revisions: set[int] = set()
             if turn.state in TERMINAL_STATES:
                 if snapshot.revision == turn.base_revision:
@@ -161,28 +170,43 @@ class AgentTurnService:
             if expected_revision not in correlated_revisions:
                 raise RevisionConflict(snapshot.revision)
             if turn.state not in TERMINAL_STATES:
+                turn.accepted_cancel_revision = expected_revision
                 turn.cancel_event.set()
         return self.get(turn_id)
 
     def _run_guarded(self, turn: AgentTurn, scope: FrozenTurnScope, lease, frozen_snapshot) -> None:
         outcome = "failed"
+        terminal_error: Exception | None = None
         try:
-            self._run(turn, scope, lease, frozen_snapshot)
-            outcome = turn.state
+            outcome, terminal_error = self._run(turn, scope, lease, frozen_snapshot)
         except AgentCancelled as error:
-            self._finish(turn, "cancelled", error)
             outcome = "cancelled"
+            terminal_error = error
         except NotebookDomainError as error:
-            self._finish(turn, "failed", error)
+            terminal_error = error
         except Exception as error:  # keep worker failures observable
-            self._finish(turn, "failed", error)
+            terminal_error = error
         finally:
+            self._set_state(turn, "cleaning_up")
             try:
                 self.scopes.expire(scope, outcome)
-            finally:
-                self.documents.coordinator.release(lease)
+            except Exception as error:
+                outcome = "failed"
+                terminal_error = error
+            with self._lock:
+                if turn.cancel_event.is_set() and outcome == "completed":
+                    outcome = "cancelled"
+                    terminal_error = AgentCancelled()
+                try:
+                    self.scopes.update_terminal_outcome(turn.turn_id, outcome)
+                except Exception as error:
+                    outcome = "failed"
+                    terminal_error = error
+                finally:
+                    self.documents.coordinator.release(lease)
+                self._finish_locked(turn, outcome, terminal_error)
 
-    def _run(self, turn: AgentTurn, scope: FrozenTurnScope, lease, frozen_snapshot) -> None:
+    def _run(self, turn: AgentTurn, scope: FrozenTurnScope, lease, frozen_snapshot):
         correction = None
         last_violation: WorkspaceBoundaryError | None = None
         for attempt_number in range(1, 4):
@@ -193,11 +217,13 @@ class AgentTurnService:
                 frozen_snapshot, scope, correction=correction
             )
             try:
-                turn.attempts = attempt_number
+                with self._lock:
+                    turn.attempts = attempt_number
                 result = self.adapter.run(
                     workspace, timeout=self.timeout, cancel_event=turn.cancel_event
                 )
-                turn.final_output = result.final_output
+                with self._lock:
+                    turn.final_output = result.final_output
                 self._set_state(turn, "validating")
                 candidates = self.auditor.collect(
                     workspace, auxiliary_paths=self.adapter.auxiliary_paths
@@ -220,11 +246,10 @@ class AgentTurnService:
         if not changes:
             with self._lock:
                 if turn.cancel_event.is_set():
-                    self._finish_locked(turn, "cancelled", AgentCancelled())
+                    return "cancelled", AgentCancelled()
                 else:
                     turn.changes = ()
-                    self._finish_locked(turn, "completed")
-            return
+                    return "completed", None
         self._begin_commit(turn)
         updated = self.documents.apply_source_changes_under_lease(
             changes={change.cell_id: change.next_source for change in changes},
@@ -235,9 +260,9 @@ class AgentTurnService:
             turn.applied_revision = updated.revision
             self._latest_applied_turn_id = turn.turn_id
             if turn.cancel_event.is_set():
-                self._finish_locked(turn, "cancelled", AgentCancelled())
+                return "cancelled", AgentCancelled()
             else:
-                self._finish_locked(turn, "completed")
+                return "completed", None
 
     def undo(self, turn_id: str, *, session_id: str, expected_revision: int):
         turn = self._require_applied(turn_id)

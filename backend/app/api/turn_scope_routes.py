@@ -25,6 +25,8 @@ def _serialize(scope: ScopeSelection) -> dict[str, Any]:
     return {
         "editableCellIds": list(scope.editable_cell_ids),
         "contextCellIds": list(scope.context_cell_ids),
+        "sessionId": scope.session_id,
+        "notebookRevision": scope.notebook_revision,
     }
 
 

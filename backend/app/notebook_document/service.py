@@ -4,7 +4,7 @@ import copy
 import json
 import re
 from threading import RLock
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 import nbformat
@@ -53,6 +53,13 @@ class NotebookDocumentService:
         self._revision = 0
         self._dirty = False
         self._last_mutation_owner: str | None = None
+        self._session_replacement_listeners: list[Callable[[str, int], None]] = []
+
+    def register_session_replacement_listener(
+        self, listener: Callable[[str, int], None]
+    ) -> None:
+        with self._lock:
+            self._session_replacement_listeners.append(listener)
 
     def import_notebook(
         self,
@@ -79,6 +86,8 @@ class NotebookDocumentService:
                 self._revision = 1 if normalized else 0
                 self._dirty = normalized
                 self._last_mutation_owner = "normalization" if normalized else None
+                for listener in self._session_replacement_listeners:
+                    listener(self._session_id, self._revision)
                 return self._snapshot_unlocked()
         finally:
             self.coordinator.release(lease)

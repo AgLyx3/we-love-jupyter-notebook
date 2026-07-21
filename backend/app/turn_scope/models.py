@@ -17,10 +17,24 @@ class EmptyEditableScope(TurnScopeError):
     status_code = 422
 
 
+class StaleTurnScope(TurnScopeError):
+    code = "stale_turn_scope"
+    message = "Turn scope was selected for a different notebook revision"
+    status_code = 409
+
+    def __init__(self, *, scope_revision: int, current_revision: int) -> None:
+        super().__init__(
+            scopeRevision=scope_revision,
+            currentDocumentRevision=current_revision,
+        )
+
+
 @dataclass(frozen=True)
 class ScopeSelection:
     editable_cell_ids: tuple[str, ...] = ()
     context_cell_ids: tuple[str, ...] = ()
+    session_id: str | None = None
+    notebook_revision: int | None = None
 
 
 @dataclass(frozen=True)

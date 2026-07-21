@@ -1,5 +1,8 @@
 import os
+import sys
+import time
 from threading import Event
+from threading import Timer
 from types import SimpleNamespace
 
 import pytest
@@ -7,6 +10,8 @@ import pytest
 from backend.app.agent_workspace.models import WorkspaceBoundaryError
 from backend.app.agent_workspace.adapters import ClaudeAgentAdapter, FakeAgentAdapter, FakeAttempt
 from backend.app.agent_workspace.models import AgentAdapterError, AgentTimedOut
+from backend.app.agent_workspace.models import AgentCancelled
+from backend.app.agent_workspace.runner import ProcessRunner
 from backend.app.agent_workspace.workspace_auditor import WorkspaceAuditor
 from backend.app.agent_workspace.workspace_builder import AgentWorkspaceBuilder
 from backend.app.notebook_document.service import NotebookDocumentService
@@ -143,3 +148,71 @@ def test_claude_adapter_is_version_gated_and_effectively_whitelists_tools(
             ClaudeAgentAdapter().verify_supported()
     finally:
         builder.destroy(workspace)
+
+
+def _wait_process_gone(pid: int) -> bool:
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def _descendant_script(pid_file, *, output=b"ok", sleep=30, parent_sleep=0):
+    return (
+        "import pathlib,subprocess,sys; "
+        f"p=subprocess.Popen([sys.executable,'-c','import time;time.sleep({sleep})']); "
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(p.pid)); "
+        f"sys.stdout.buffer.write({output!r}); sys.stdout.flush(); "
+        f"import time;time.sleep({parent_sleep})"
+    )
+
+
+def test_process_runner_cleans_descendant_after_success_and_bounds_output(tmp_path):
+    pid_file = tmp_path / "child.pid"
+    stdout, _ = ProcessRunner(max_capture_bytes=64).run(
+        [sys.executable, "-c", _descendant_script(pid_file, output=b"x" * 1000)],
+        cwd=tmp_path, timeout=2, cancel_event=Event(), grace_period=0.05,
+    )
+    assert len(stdout) == 64
+    assert _wait_process_gone(int(pid_file.read_text()))
+
+
+def test_process_runner_timeout_cleans_process_group(tmp_path):
+    pid_file = tmp_path / "child.pid"
+    with pytest.raises(AgentTimedOut):
+        ProcessRunner().run(
+            [sys.executable, "-c", _descendant_script(pid_file, parent_sleep=30)],
+            cwd=tmp_path, timeout=0.1, cancel_event=Event(), grace_period=0.05,
+        )
+    assert _wait_process_gone(int(pid_file.read_text()))
+
+
+def test_process_runner_cancellation_cleans_process_group(tmp_path):
+    pid_file = tmp_path / "child.pid"
+    cancelled = Event()
+    timer = Timer(0.1, cancelled.set)
+    timer.start()
+    try:
+        with pytest.raises(AgentCancelled):
+            ProcessRunner().run(
+                [sys.executable, "-c", _descendant_script(pid_file, parent_sleep=30)],
+                cwd=tmp_path, timeout=2, cancel_event=cancelled,
+                grace_period=0.05,
+            )
+    finally:
+        timer.cancel()
+    assert _wait_process_gone(int(pid_file.read_text()))
+
+
+def test_process_runner_decode_error_still_cleans_descendant(tmp_path):
+    pid_file = tmp_path / "child.pid"
+    with pytest.raises(AgentAdapterError, match="valid UTF-8"):
+        ProcessRunner().run(
+            [sys.executable, "-c", _descendant_script(pid_file, output=b"\xff")],
+            cwd=tmp_path, timeout=2, cancel_event=Event(), grace_period=0.05,
+        )
+    assert _wait_process_gone(int(pid_file.read_text()))

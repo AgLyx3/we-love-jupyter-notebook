@@ -146,6 +146,7 @@ def test_scope_expiration_completes_before_lease_release(notebook_payload):
         expected_revision=snapshot.revision,
     )
     assert entered_expire.wait(2)
+    assert turns.get(turn.turn_id).state == "cleaning_up"
     with pytest.raises(MutationConflict):
         scopes.add("intro", editable=False)
     with pytest.raises(MutationConflict):
@@ -158,7 +159,71 @@ def test_scope_expiration_completes_before_lease_release(notebook_payload):
     while documents.coordinator.active_lease is not None and time.monotonic() < deadline:
         time.sleep(0.01)
     assert documents.coordinator.active_lease is None
+    assert turns.get(turn.turn_id).state == "completed"
+    scopes.add("intro", editable=False)
+    assert scopes.current().context_cell_ids == ("intro",)
     assert scopes.history[-1].scope.turn_id == turn.turn_id
+
+
+def test_api_publishes_terminal_only_after_cleanup_and_lease_release(
+    notebook_payload,
+):
+    entered_expire = Event()
+    allow_expire = Event()
+
+    class BarrierScopeService(TurnScopeService):
+        def expire(self, scope, outcome):
+            entered_expire.set()
+            assert allow_expire.wait(2)
+            super().expire(scope, outcome)
+
+    documents = NotebookDocumentService()
+    scopes = BarrierScopeService(documents)
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=FakeAgentAdapter()
+    )
+    app = create_app()
+    app.state.notebook_service = documents
+    app.state.turn_scope_service = scopes
+    app.state.agent_turn_service = turns
+    with TestClient(app) as api:
+        uploaded = api.post(
+            "/notebooks/upload",
+            files={"file": ("sample.ipynb", notebook_payload(), "application/json")},
+        ).json()
+        preconditions = {
+            "sessionId": uploaded["sessionId"],
+            "expectedDocumentRevision": uploaded["revision"],
+        }
+        api.post(
+            "/turn-scope/editable-cells",
+            json={**preconditions, "cellId": "editable"},
+        )
+        created = api.post(
+            "/agent-turns", json={**preconditions, "prompt": "inspect"}
+        ).json()
+        assert entered_expire.wait(2)
+        assert api.get(f"/agent-turns/{created['turnId']}").json()["state"] == "cleaning_up"
+        blocked = api.post(
+            "/turn-scope/context-cells",
+            json={**preconditions, "cellId": "intro"},
+        )
+        assert blocked.status_code == 409
+        allow_expire.set()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            state = api.get(f"/agent-turns/{created['turnId']}").json()["state"]
+            if state == "completed":
+                break
+            time.sleep(0.01)
+        assert state == "completed"
+        assert api.get("/turn-scope").json()["editableCellIds"] == []
+        accepted = api.post(
+            "/turn-scope/context-cells",
+            json={**preconditions, "cellId": "intro"},
+        )
+        assert accepted.status_code == 200
+    assert scopes.history[-1].scope.turn_id == created["turnId"]
 
 
 def test_cancel_immediately_before_commit_gate_prevents_apply(notebook_payload):
@@ -307,6 +372,19 @@ def test_api_cancel_accepts_base_revision_after_commit_before_publication(
         current = api.get("/notebooks/current").json()
         edited = next(cell for cell in current["cells"] if cell["cellId"] == "editable")
         assert edited["source"] == "value = 2\n"
+        retry = api.post(
+            f"/agent-turns/{created['turnId']}/cancel", json=preconditions,
+        )
+        assert retry.status_code == 200
+        assert retry.json()["state"] == "cancelled"
+        conflicting = api.post(
+            f"/agent-turns/{created['turnId']}/cancel",
+            json={
+                **preconditions,
+                "expectedDocumentRevision": uploaded["revision"] + 1,
+            },
+        )
+        assert conflicting.status_code == 409
 
 
 def test_only_latest_applied_turn_can_be_whole_undone(notebook_payload):
@@ -361,4 +439,36 @@ def test_agent_turn_api_exposes_status_and_terminal_scope(client, notebook_paylo
             break
         time.sleep(0.01)
     assert status["state"] == "completed"
+    assert client.get("/turn-scope").json()["editableCellIds"] == []
+
+
+def test_replacement_api_clears_scope_but_failed_replacement_does_not(
+    client, notebook_payload,
+):
+    uploaded = client.post(
+        "/notebooks/upload",
+        files={"file": ("one.ipynb", notebook_payload(), "application/json")},
+    ).json()
+    preconditions = {
+        "sessionId": uploaded["sessionId"],
+        "expectedDocumentRevision": uploaded["revision"],
+    }
+    client.post(
+        "/turn-scope/editable-cells",
+        json={**preconditions, "cellId": "editable"},
+    )
+    failed = client.post(
+        "/notebooks/upload",
+        files={"file": ("bad.ipynb", b"bad", "application/json")},
+        data=preconditions,
+    )
+    assert failed.status_code == 422
+    assert client.get("/turn-scope").json()["editableCellIds"] == ["editable"]
+    replaced = client.post(
+        "/notebooks/upload",
+        files={"file": ("two.ipynb", notebook_payload(), "application/json")},
+        data=preconditions,
+    )
+    assert replaced.status_code == 201
+    assert replaced.json()["sessionId"] != uploaded["sessionId"]
     assert client.get("/turn-scope").json()["editableCellIds"] == []
