@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from backend.app.notebook_document import service as service_module
 from backend.app.notebook_document.models import (
     MutationConflict,
     NotebookImportError,
@@ -138,3 +139,71 @@ def test_source_edit_reports_active_owner_and_preserves_document(notebook_payloa
     }
     assert service.get_snapshot().notebook == imported.notebook
     coordinator.release(lease)
+
+
+def test_active_owner_takes_precedence_over_stale_source_preconditions(notebook_payload):
+    coordinator = MutationCoordinator()
+    service = NotebookDocumentService(coordinator)
+    imported = service.import_notebook(notebook_payload())
+    lease = coordinator.acquire(operation_type="agent_turn", operation_id="turn-1")
+
+    with pytest.raises(MutationConflict) as error:
+        service.update_cell_source(
+            cell_id="missing",
+            source="should_not_apply = True",
+            expected_revision=imported.revision + 100,
+            expected_session_id="stale-session",
+            owner="manual",
+        )
+
+    assert error.value.details["activeOperationId"] == "turn-1"
+    assert error.value.details["currentDocumentRevision"] == imported.revision
+    coordinator.release(lease)
+
+
+def test_active_owner_takes_precedence_over_invalid_replacement(notebook_payload):
+    coordinator = MutationCoordinator()
+    service = NotebookDocumentService(coordinator)
+    imported = service.import_notebook(notebook_payload())
+    lease = coordinator.acquire(operation_type="agent_turn", operation_id="turn-1")
+
+    with pytest.raises(MutationConflict) as error:
+        service.import_notebook(
+            b"not-json",
+            expected_session_id="stale-session",
+            expected_revision=imported.revision + 100,
+        )
+
+    assert error.value.details["activeOperationId"] == "turn-1"
+    coordinator.release(lease)
+
+
+def test_generated_id_does_not_displace_valid_later_id(monkeypatch):
+    generated_ids = iter(("futureid", "generated"))
+    monkeypatch.setattr(
+        service_module,
+        "_new_cell_id",
+        lambda: next(generated_ids),
+        raising=False,
+    )
+    notebook = {
+        "cells": [
+            {"cell_type": "markdown", "metadata": {}, "source": ["missing"]},
+            {
+                "cell_type": "markdown",
+                "id": "futureid",
+                "metadata": {},
+                "source": ["preserve me"],
+            },
+        ],
+        "metadata": {},
+        "nbformat": 4,
+        "nbformat_minor": 5,
+    }
+
+    snapshot = NotebookDocumentService().import_notebook(json.dumps(notebook).encode())
+
+    assert [cell["id"] for cell in snapshot.notebook["cells"]] == [
+        "generated",
+        "futureid",
+    ]

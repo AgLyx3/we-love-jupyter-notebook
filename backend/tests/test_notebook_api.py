@@ -95,3 +95,39 @@ def test_api_reports_missing_notebook_and_invalid_upload(client):
     invalid = upload(client, b"not-json", filename="bad.ipynb")
     assert invalid.status_code == 422
     assert invalid.json()["error"]["code"] == "invalid_notebook"
+
+
+def test_active_lease_precedes_stale_edit_and_invalid_replacement(
+    client, notebook_payload
+):
+    created = upload(client, notebook_payload()).json()
+    coordinator = client.app.state.notebook_service.coordinator
+    lease = coordinator.acquire(operation_type="agent_turn", operation_id="turn-1")
+
+    stale_edit = client.post(
+        "/cells/editable/source",
+        json={
+            "sessionId": "stale-session",
+            "expectedDocumentRevision": 999,
+            "source": "should_not_apply = True",
+        },
+    )
+    invalid_replacement = upload(
+        client,
+        b"not-json",
+        sessionId="stale-session",
+        expectedDocumentRevision="999",
+    )
+
+    for response in (stale_edit, invalid_replacement):
+        assert response.status_code == 409
+        assert response.json()["error"] == {
+            "code": "mutation_conflict",
+            "message": "Another notebook mutation is active",
+            "details": {
+                "activeOperationType": "agent_turn",
+                "activeOperationId": "turn-1",
+                "currentDocumentRevision": created["revision"],
+            },
+        }
+    coordinator.release(lease)

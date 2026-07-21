@@ -27,6 +27,14 @@ MAX_NOTEBOOK_BYTES = 5 * 1024 * 1024
 _VALID_CELL_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
+def _new_cell_id() -> str:
+    return uuid4().hex[:8]
+
+
+def _is_valid_cell_id(value: Any) -> bool:
+    return isinstance(value, str) and _VALID_CELL_ID.fullmatch(value) is not None
+
+
 class NotebookDocumentService:
     def __init__(self, coordinator: MutationCoordinator | None = None) -> None:
         self.coordinator = coordinator or MutationCoordinator()
@@ -46,18 +54,17 @@ class NotebookDocumentService:
         expected_session_id: str | None = None,
         expected_revision: int | None = None,
     ) -> NotebookSnapshot:
-        candidate, normalized = self._parse_and_validate(payload)
-
         with self._lock:
-            if self._notebook is not None:
-                if expected_session_id is None or expected_revision is None:
-                    raise ReplacementPreconditionRequired()
-                self._check_preconditions(expected_session_id, expected_revision)
-
             lease = self._acquire_lease(
                 operation_type="notebook_import", operation_id=uuid4().hex
             )
             try:
+                candidate, normalized = self._parse_and_validate(payload)
+                if self._notebook is not None:
+                    if expected_session_id is None or expected_revision is None:
+                        raise ReplacementPreconditionRequired()
+                    self._check_preconditions(expected_session_id, expected_revision)
+
                 self._session_id = uuid4().hex
                 self._filename = self._safe_filename(filename)
                 self._notebook = candidate
@@ -90,14 +97,17 @@ class NotebookDocumentService:
         expected_session_id: str | None = None,
     ) -> NotebookSnapshot:
         with self._lock:
-            self._require_notebook()
-            if expected_session_id is not None and expected_session_id != self._session_id:
-                raise SessionConflict(self._session_id or "")
-            if expected_revision != self._revision:
-                raise RevisionConflict(self._revision)
-
             lease = self._acquire_lease(operation_type="manual_edit", operation_id=owner)
             try:
+                self._require_notebook()
+                if (
+                    expected_session_id is not None
+                    and expected_session_id != self._session_id
+                ):
+                    raise SessionConflict(self._session_id or "")
+                if expected_revision != self._revision:
+                    raise RevisionConflict(self._revision)
+
                 cell = next(
                     (cell for cell in self._notebook["cells"] if cell["id"] == cell_id),
                     None,
@@ -156,21 +166,26 @@ class NotebookDocumentService:
 
     @staticmethod
     def _normalize_cell_ids(notebook: dict[str, Any]) -> bool:
-        seen: set[str] = set()
+        reserved = {
+            cell["id"]
+            for cell in notebook["cells"]
+            if _is_valid_cell_id(cell.get("id"))
+        }
+        used = set(reserved)
+        seen_valid: set[str] = set()
         changed = False
         for cell in notebook["cells"]:
             cell_id = cell.get("id")
-            if (
-                not isinstance(cell_id, str)
-                or _VALID_CELL_ID.fullmatch(cell_id) is None
-                or cell_id in seen
-            ):
-                cell_id = uuid4().hex[:8]
-                while cell_id in seen:
-                    cell_id = uuid4().hex[:8]
-                cell["id"] = cell_id
-                changed = True
-            seen.add(cell_id)
+            if _is_valid_cell_id(cell_id) and cell_id not in seen_valid:
+                seen_valid.add(cell_id)
+                continue
+
+            cell_id = _new_cell_id()
+            while cell_id in used:
+                cell_id = _new_cell_id()
+            cell["id"] = cell_id
+            used.add(cell_id)
+            changed = True
         return changed
 
     def _check_preconditions(self, session_id: str, revision: int) -> None:
