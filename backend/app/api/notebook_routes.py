@@ -1,0 +1,110 @@
+from __future__ import annotations
+
+from typing import Annotated, Any
+
+from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
+
+from ..notebook_document.models import NotebookSnapshot
+from ..notebook_document.service import MAX_NOTEBOOK_BYTES, NotebookDocumentService
+
+router = APIRouter()
+
+
+class CellSourceRequest(BaseModel):
+    session_id: str = Field(alias="sessionId")
+    expected_revision: int = Field(alias="expectedDocumentRevision")
+    source: str
+
+
+def _service(request: Request) -> NotebookDocumentService:
+    return request.app.state.notebook_service
+
+
+def _cell_source(cell: dict[str, Any]) -> str:
+    source = cell.get("source", "")
+    return "".join(source) if isinstance(source, list) else source
+
+
+def serialize_snapshot(snapshot: NotebookSnapshot) -> dict[str, Any]:
+    cells = []
+    for index, cell in enumerate(snapshot.notebook["cells"]):
+        cells.append(
+            {
+                "cellId": cell["id"],
+                "index": index,
+                "cellType": cell["cell_type"],
+                "source": _cell_source(cell),
+                "metadata": cell.get("metadata", {}),
+                "outputs": cell.get("outputs", []),
+                "executionCount": cell.get("execution_count"),
+            }
+        )
+    return {
+        "sessionId": snapshot.session_id,
+        "filename": snapshot.filename,
+        "revision": snapshot.revision,
+        "dirty": snapshot.dirty,
+        "metadata": snapshot.notebook.get("metadata", {}),
+        "nbformat": snapshot.notebook["nbformat"],
+        "nbformatMinor": snapshot.notebook["nbformat_minor"],
+        "cells": cells,
+    }
+
+
+@router.post("/notebooks/upload", status_code=201)
+async def upload_notebook(
+    request: Request,
+    file: Annotated[UploadFile, File()],
+    session_id: Annotated[str | None, Form(alias="sessionId")] = None,
+    expected_revision: Annotated[
+        int | None, Form(alias="expectedDocumentRevision")
+    ] = None,
+) -> dict[str, Any]:
+    payload = await file.read(MAX_NOTEBOOK_BYTES + 1)
+    snapshot = _service(request).import_notebook(
+        payload,
+        filename=file.filename or "notebook.ipynb",
+        expected_session_id=session_id,
+        expected_revision=expected_revision,
+    )
+    return serialize_snapshot(snapshot)
+
+
+@router.get("/notebooks/current")
+def current_notebook(request: Request) -> dict[str, Any]:
+    return serialize_snapshot(_service(request).get_snapshot())
+
+
+@router.get("/notebooks/download")
+def download_notebook(request: Request) -> Response:
+    filename, content = _service(request).export_notebook()
+    return Response(
+        content=content,
+        media_type="application/x-ipynb+json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/cells/{cell_id}/source")
+def update_cell_source(
+    cell_id: str,
+    body: CellSourceRequest,
+    request: Request,
+) -> dict[str, Any]:
+    snapshot = _service(request).update_cell_source(
+        cell_id=cell_id,
+        source=body.source,
+        expected_revision=body.expected_revision,
+        expected_session_id=body.session_id,
+        owner="manual",
+    )
+    cell = next(cell for cell in snapshot.notebook["cells"] if cell["id"] == cell_id)
+    return {
+        "sessionId": snapshot.session_id,
+        "cellId": cell_id,
+        "source": _cell_source(cell),
+        "revision": snapshot.revision,
+        "dirty": snapshot.dirty,
+    }
