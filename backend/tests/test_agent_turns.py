@@ -1,4 +1,5 @@
 import time
+from threading import Event
 
 import pytest
 
@@ -116,6 +117,114 @@ def test_timeout_fails_without_apply_and_releases_lease(notebook_payload):
     assert turn.error["code"] == "agent_timed_out"
     assert _source(documents.get_snapshot()) == "value = 1\n"
     assert documents.coordinator.active_lease is None
+
+
+def test_scope_expiration_completes_before_lease_release(notebook_payload):
+    entered_expire = Event()
+    allow_expire = Event()
+
+    class BarrierScopeService(TurnScopeService):
+        def expire(self, scope, outcome):
+            entered_expire.set()
+            assert allow_expire.wait(2)
+            super().expire(scope, outcome)
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = BarrierScopeService(documents)
+    scopes.add("editable", editable=True)
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=FakeAgentAdapter()
+    )
+    turn = turns.start(
+        prompt="no-op", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
+    assert entered_expire.wait(2)
+    with pytest.raises(MutationConflict):
+        scopes.add("intro", editable=False)
+    with pytest.raises(MutationConflict):
+        turns.start(
+            prompt="interleave", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision,
+        )
+    allow_expire.set()
+    deadline = time.monotonic() + 2
+    while documents.coordinator.active_lease is not None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert documents.coordinator.active_lease is None
+    assert scopes.history[-1].scope.turn_id == turn.turn_id
+
+
+def test_cancel_immediately_before_commit_gate_prevents_apply(notebook_payload):
+    validator_entered = Event()
+    allow_validation = Event()
+
+    from backend.app.boundary_validation.validator import BoundaryValidator
+
+    class BarrierValidator(BoundaryValidator):
+        def validate(self, **kwargs):
+            result = super().validate(**kwargs)
+            validator_entered.set()
+            assert allow_validation.wait(2)
+            return result
+
+    documents, scopes, _turns, snapshot = _services(notebook_payload, [])
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes,
+        adapter=FakeAgentAdapter([
+            FakeAttempt(edits={"editable/cell_editable.py": "value = 2\n"})
+        ]),
+        validator=BarrierValidator(),
+    )
+    turn = turns.start(
+        prompt="change", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
+    assert validator_entered.wait(2)
+    turns.cancel(turn.turn_id)
+    allow_validation.set()
+    deadline = time.monotonic() + 2
+    while turns.get(turn.turn_id).state not in {"cancelled", "failed"} and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert turns.get(turn.turn_id).state == "cancelled"
+    assert _source(documents.get_snapshot()) == "value = 1\n"
+
+
+def test_cancel_during_apply_preserves_sources_and_finishes_cancelled(notebook_payload):
+    apply_entered = Event()
+    allow_apply = Event()
+
+    class BarrierDocumentService(NotebookDocumentService):
+        def apply_source_changes_under_lease(self, **kwargs):
+            apply_entered.set()
+            assert allow_apply.wait(2)
+            return super().apply_source_changes_under_lease(**kwargs)
+
+    documents = BarrierDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    scopes.add("editable", editable=True)
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes,
+        adapter=FakeAgentAdapter([
+            FakeAttempt(edits={"editable/cell_editable.py": "value = 2\n"})
+        ]),
+    )
+    turn = turns.start(
+        prompt="change", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
+    assert apply_entered.wait(2)
+    turns.cancel(turn.turn_id)
+    allow_apply.set()
+    deadline = time.monotonic() + 2
+    while turns.get(turn.turn_id).state not in {"cancelled", "completed", "failed"} and time.monotonic() < deadline:
+        time.sleep(0.01)
+    finished = turns.get(turn.turn_id)
+    assert finished.state == "cancelled"
+    assert finished.applied_revision == snapshot.revision + 1
+    assert _source(documents.get_snapshot()) == "value = 2\n"
 
 
 def test_only_latest_applied_turn_can_be_whole_undone(notebook_payload):

@@ -109,7 +109,11 @@ class AgentTurnService:
             with self._lock:
                 self._turns[turn_id] = turn
         except Exception:
-            self.documents.coordinator.release(lease)
+            try:
+                if scope is not None:
+                    self.scopes.expire(scope, "failed")
+            finally:
+                self.documents.coordinator.release(lease)
             raise
         if background:
             Thread(
@@ -152,8 +156,10 @@ class AgentTurnService:
         except Exception as error:  # keep worker failures observable
             self._finish(turn, "failed", error)
         finally:
-            self.documents.coordinator.release(lease)
-            self.scopes.expire(scope, outcome)
+            try:
+                self.scopes.expire(scope, outcome)
+            finally:
+                self.documents.coordinator.release(lease)
 
     def _run(self, turn: AgentTurn, scope: FrozenTurnScope, lease, frozen_snapshot) -> None:
         correction = None
@@ -190,22 +196,27 @@ class AgentTurnService:
                 self.builder.destroy(workspace)
         if last_violation is not None:
             raise last_violation
-        if turn.cancel_event.is_set():
-            raise AgentCancelled()
         if not changes:
-            turn.changes = ()
-            self._finish(turn, "completed")
+            with self._lock:
+                if turn.cancel_event.is_set():
+                    self._finish_locked(turn, "cancelled", AgentCancelled())
+                else:
+                    turn.changes = ()
+                    self._finish_locked(turn, "completed")
             return
-        self._set_state(turn, "applying")
+        self._begin_commit(turn)
         updated = self.documents.apply_source_changes_under_lease(
             changes={change.cell_id: change.next_source for change in changes},
             expected_revision=scope.notebook_revision, owner=turn.turn_id, lease=lease,
         )
-        turn.changes = changes
-        turn.applied_revision = updated.revision
         with self._lock:
+            turn.changes = changes
+            turn.applied_revision = updated.revision
             self._latest_applied_turn_id = turn.turn_id
-        self._finish(turn, "completed")
+            if turn.cancel_event.is_set():
+                self._finish_locked(turn, "cancelled", AgentCancelled())
+            else:
+                self._finish_locked(turn, "completed")
 
     def undo(self, turn_id: str, *, session_id: str, expected_revision: int):
         turn = self._require_applied(turn_id)
@@ -275,12 +286,33 @@ class AgentTurnService:
                 return
             turn.state = state
 
+    def _begin_commit(self, turn: AgentTurn) -> None:
+        """Linearize cancellation against the transition into source apply."""
+        with self._lock:
+            if turn.state in TERMINAL_STATES or turn.cancel_event.is_set():
+                raise AgentCancelled()
+            turn.state = "applying"
+
     def _finish(self, turn: AgentTurn, state: str, error: Exception | None = None) -> None:
         with self._lock:
-            turn.state = state
-            turn.completed_at = datetime.now(timezone.utc)
-            if error is not None:
-                if isinstance(error, NotebookDomainError):
-                    turn.error = {"code": error.code, "message": error.message, "details": error.details}
-                else:
-                    turn.error = {"code": "internal_error", "message": str(error), "details": {}}
+            self._finish_locked(turn, state, error)
+
+    @staticmethod
+    def _finish_locked(
+        turn: AgentTurn, state: str, error: Exception | None = None,
+    ) -> None:
+        turn.state = state
+        turn.completed_at = datetime.now(timezone.utc)
+        if error is not None:
+            if isinstance(error, NotebookDomainError):
+                turn.error = {
+                    "code": error.code,
+                    "message": error.message,
+                    "details": error.details,
+                }
+            else:
+                turn.error = {
+                    "code": "internal_error",
+                    "message": str(error),
+                    "details": {},
+                }

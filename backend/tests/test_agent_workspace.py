@@ -104,7 +104,9 @@ def test_fake_adapter_enforces_timeout(notebook_payload):
         builder.destroy(workspace)
 
 
-def test_claude_adapter_is_version_gated_and_has_no_bash(monkeypatch, notebook_payload):
+def test_claude_adapter_is_version_gated_and_effectively_whitelists_tools(
+    monkeypatch, notebook_payload,
+):
     builder, workspace = _workspace(notebook_payload)
     captured = {}
 
@@ -122,8 +124,17 @@ def test_claude_adapter_is_version_gated_and_has_no_bash(monkeypatch, notebook_p
             workspace, timeout=1, cancel_event=Event()
         )
         assert result.final_output == "finished"
-        assert "Bash" not in captured["args"]
-        assert captured["args"][-4:] == ["--allowedTools", "Read", "Edit", "Write"]
+        args = captured["args"]
+        assert "--allowedTools" not in args
+        tools = args[args.index("--tools") + 1].split(",")
+        assert set(tools) == {"Read", "Edit", "Write"}
+        assert "Bash" not in tools
+        assert "--safe-mode" in args
+        assert "--disable-slash-commands" in args
+        assert "--strict-mcp-config" in args
+        mcp_config = args[args.index("--mcp-config") + 1]
+        assert mcp_config == '{"mcpServers":{}}'
+        assert "--no-session-persistence" in args
         monkeypatch.setattr(
             "backend.app.agent_workspace.adapters.subprocess.run",
             lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="2.2.0", stderr=""),

@@ -57,7 +57,7 @@ class FakeAgentAdapter:
 
 
 class ClaudeAgentAdapter:
-    auxiliary_paths = frozenset({".claude"})
+    auxiliary_paths = frozenset()
     _VERSION = re.compile(r"(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)")
 
     def __init__(self, executable: str = "claude", runner: ProcessRunner | None = None) -> None:
@@ -83,7 +83,9 @@ class ClaudeAgentAdapter:
         prompt = (workspace.root / "INSTRUCTIONS.md").read_text(encoding="utf-8")
         args = [
             self.executable, "-p", prompt, "--no-session-persistence",
-            "--permission-mode", "acceptEdits", "--allowedTools", "Read", "Edit", "Write",
+            "--safe-mode", "--disable-slash-commands", "--no-chrome",
+            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+            "--tools", "Read,Edit,Write", "--permission-mode", "acceptEdits",
         ]
         stdout, _stderr = self.runner.run(
             args, cwd=workspace.root, timeout=timeout, cancel_event=cancel_event
