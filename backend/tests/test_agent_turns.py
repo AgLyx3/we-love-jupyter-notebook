@@ -2,6 +2,7 @@ import time
 from threading import Event
 
 import pytest
+from fastapi.testclient import TestClient
 
 from backend.app.agent_turns.service import (
     AgentTurnService, RevertConflict, UndoConflict,
@@ -9,6 +10,7 @@ from backend.app.agent_turns.service import (
 from backend.app.agent_workspace.adapters import FakeAgentAdapter, FakeAttempt
 from backend.app.notebook_document.models import MutationConflict, RevisionConflict
 from backend.app.notebook_document.service import NotebookDocumentService
+from backend.app.main import create_app
 from backend.app.turn_scope.service import TurnScopeService
 
 
@@ -94,7 +96,10 @@ def test_active_turn_blocks_other_mutations_and_can_be_cancelled(notebook_payloa
         documents.update_cell_source(
             cell_id="editable", source="manual\n", expected_revision=snapshot.revision, owner="manual"
         )
-    turns.cancel(turn.turn_id)
+    turns.cancel(
+        turn.turn_id, session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
     deadline = time.monotonic() + 2
     while turns.get(turn.turn_id).state not in {"cancelled", "failed"} and time.monotonic() < deadline:
         time.sleep(0.01)
@@ -182,7 +187,10 @@ def test_cancel_immediately_before_commit_gate_prevents_apply(notebook_payload):
         expected_revision=snapshot.revision,
     )
     assert validator_entered.wait(2)
-    turns.cancel(turn.turn_id)
+    turns.cancel(
+        turn.turn_id, session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
     allow_validation.set()
     deadline = time.monotonic() + 2
     while turns.get(turn.turn_id).state not in {"cancelled", "failed"} and time.monotonic() < deadline:
@@ -216,7 +224,10 @@ def test_cancel_during_apply_preserves_sources_and_finishes_cancelled(notebook_p
         expected_revision=snapshot.revision,
     )
     assert apply_entered.wait(2)
-    turns.cancel(turn.turn_id)
+    turns.cancel(
+        turn.turn_id, session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
     allow_apply.set()
     deadline = time.monotonic() + 2
     while turns.get(turn.turn_id).state not in {"cancelled", "completed", "failed"} and time.monotonic() < deadline:
@@ -225,6 +236,77 @@ def test_cancel_during_apply_preserves_sources_and_finishes_cancelled(notebook_p
     assert finished.state == "cancelled"
     assert finished.applied_revision == snapshot.revision + 1
     assert _source(documents.get_snapshot()) == "value = 2\n"
+
+
+def test_api_cancel_accepts_base_revision_after_commit_before_publication(
+    notebook_payload,
+):
+    committed = Event()
+    allow_publication = Event()
+
+    class PostCommitBarrierDocumentService(NotebookDocumentService):
+        def apply_source_changes_under_lease(self, **kwargs):
+            result = super().apply_source_changes_under_lease(**kwargs)
+            committed.set()
+            assert allow_publication.wait(2)
+            return result
+
+    documents = PostCommitBarrierDocumentService()
+    scopes = TurnScopeService(documents)
+    turns = AgentTurnService(
+        documents=documents,
+        scopes=scopes,
+        adapter=FakeAgentAdapter([
+            FakeAttempt(edits={"editable/cell_editable.py": "value = 2\n"})
+        ]),
+    )
+    app = create_app()
+    app.state.notebook_service = documents
+    app.state.turn_scope_service = scopes
+    app.state.agent_turn_service = turns
+    with TestClient(app) as api:
+        uploaded = api.post(
+            "/notebooks/upload",
+            files={"file": ("sample.ipynb", notebook_payload(), "application/json")},
+        ).json()
+        preconditions = {
+            "sessionId": uploaded["sessionId"],
+            "expectedDocumentRevision": uploaded["revision"],
+        }
+        assert api.post(
+            "/turn-scope/editable-cells",
+            json={**preconditions, "cellId": "editable"},
+        ).status_code == 200
+        created = api.post(
+            "/agent-turns", json={**preconditions, "prompt": "change"}
+        ).json()
+        assert committed.wait(2)
+        assert documents.get_snapshot().revision == uploaded["revision"] + 1
+        stale = api.post(
+            f"/agent-turns/{created['turnId']}/cancel",
+            json={
+                **preconditions,
+                "expectedDocumentRevision": uploaded["revision"] + 99,
+            },
+        )
+        assert stale.status_code == 409
+        assert stale.json()["error"]["code"] == "revision_conflict"
+        cancellation = api.post(
+            f"/agent-turns/{created['turnId']}/cancel", json=preconditions,
+        )
+        assert cancellation.status_code == 200
+        allow_publication.set()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            finished = api.get(f"/agent-turns/{created['turnId']}").json()
+            if finished["state"] in {"cancelled", "completed", "failed"}:
+                break
+            time.sleep(0.01)
+        assert finished["state"] == "cancelled"
+        assert finished["appliedRevision"] == uploaded["revision"] + 1
+        current = api.get("/notebooks/current").json()
+        edited = next(cell for cell in current["cells"] if cell["cellId"] == "editable")
+        assert edited["source"] == "value = 2\n"
 
 
 def test_only_latest_applied_turn_can_be_whole_undone(notebook_payload):

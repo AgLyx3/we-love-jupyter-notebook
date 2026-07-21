@@ -16,6 +16,7 @@ from ..agent_workspace.workspace_builder import AgentWorkspaceBuilder
 from ..boundary_validation.validator import BoundaryValidator, CandidateCellSourceChange
 from ..notebook_document.models import (
     CellNotFound, MutationConflict, NotebookDomainError, RevisionConflict,
+    SessionConflict,
 )
 from ..notebook_document.service import NotebookDocumentService
 from ..turn_scope.models import FrozenTurnScope
@@ -134,11 +135,31 @@ class AgentTurnService:
             except KeyError as error:
                 raise AgentTurnNotFound(turn_id) from error
 
-    def cancel(self, turn_id: str) -> AgentTurn:
+    def cancel(
+        self, turn_id: str, *, session_id: str, expected_revision: int,
+    ) -> AgentTurn:
         with self._lock:
             turn = self._turns.get(turn_id)
             if turn is None:
                 raise AgentTurnNotFound(turn_id)
+            snapshot = self.documents.get_snapshot()
+            if snapshot.session_id != session_id or turn.session_id != session_id:
+                raise SessionConflict(snapshot.session_id)
+            correlated_revisions: set[int] = set()
+            if turn.state in TERMINAL_STATES:
+                if snapshot.revision == turn.base_revision:
+                    correlated_revisions.add(turn.base_revision)
+                if (
+                    turn.applied_revision is not None
+                    and snapshot.revision == turn.applied_revision
+                ):
+                    correlated_revisions.add(turn.applied_revision)
+            else:
+                correlated_revisions.add(turn.base_revision)
+                if snapshot.last_mutation_owner == turn.turn_id:
+                    correlated_revisions.add(snapshot.revision)
+            if expected_revision not in correlated_revisions:
+                raise RevisionConflict(snapshot.revision)
             if turn.state not in TERMINAL_STATES:
                 turn.cancel_event.set()
         return self.get(turn_id)

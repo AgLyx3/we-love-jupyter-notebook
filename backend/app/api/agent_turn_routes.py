@@ -58,13 +58,10 @@ def get_turn(turn_id: str, request: Request) -> dict[str, Any]:
 def cancel_turn(
     turn_id: str, body: MutationRequest, request: Request,
 ) -> dict[str, Any]:
-    turn = request.app.state.agent_turn_service.get(turn_id)
-    if turn.state not in {"completed", "failed", "cancelled", "validation_incomplete"}:
-        request.app.state.notebook_service.check_snapshot_preconditions(
-            request.app.state.notebook_service.get_snapshot(),
-            body.session_id, body.expected_revision,
-        )
-    return serialize_turn(request.app.state.agent_turn_service.cancel(turn_id))
+    return serialize_turn(request.app.state.agent_turn_service.cancel(
+        turn_id, session_id=body.session_id,
+        expected_revision=body.expected_revision,
+    ))
 
 
 @router.post("/{turn_id}/undo")
