@@ -56,6 +56,30 @@ class FakeAgentAdapter:
         return AdapterResult(attempt.final_output)
 
 
+class DevelopmentFakeAgentAdapter:
+    """Prompt-driven adapter used only by the explicit local fake mode."""
+
+    auxiliary_paths = frozenset()
+
+    def run(self, workspace: AgentWorkspace, *, timeout: float, cancel_event: Event) -> AdapterResult:
+        if cancel_event.is_set():
+            raise AgentCancelled()
+        instructions = (workspace.root / "INSTRUCTIONS.md").read_text(encoding="utf-8")
+        prompt = instructions.splitlines()[0].lower() if instructions else ""
+        editable = workspace.manifest.editable_cells
+        if not editable:
+            return AdapterResult("No editable cell was selected.")
+        target = workspace.root / editable[0].relative_path
+        if "[risk]" in prompt:
+            source = "import os\nvalues = [5, 10, 15]\n_ = os.getenv('HOME')\n"
+            output = "Updated values and added an environment lookup for approval testing."
+        else:
+            source = "values = [3, 6, 9]\n"
+            output = "Updated the selected values deterministically."
+        target.write_text(source, encoding="utf-8")
+        return AdapterResult(output)
+
+
 class ClaudeAgentAdapter:
     auxiliary_paths = frozenset()
     _VERSION = re.compile(r"(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)")

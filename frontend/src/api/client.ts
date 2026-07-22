@@ -134,7 +134,7 @@ export const api = {
     return request<NotebookSnapshot>("/notebooks/upload", { method: "POST", body });
   },
   saveSource: (snapshot: NotebookSnapshot, cellId: string, source: string) =>
-    request<{ revision: number; dirty: boolean }>(`/cells/${encodeURIComponent(cellId)}/source`, { method: "POST", body: JSON.stringify({ ...mutation(snapshot), source }) }),
+    request<{ sessionId: string; cellId: string; source: string; revision: number; dirty: boolean }>(`/cells/${encodeURIComponent(cellId)}/source`, { method: "POST", body: JSON.stringify({ ...mutation(snapshot), source }) }),
   addScope: (snapshot: NotebookSnapshot, cellId: string, editable: boolean) =>
     request<TurnScope>(`/turn-scope/${editable ? "editable-cells" : "context-cells"}`, { method: "POST", body: JSON.stringify({ ...mutation(snapshot), cellId }) }),
   clearScope: (snapshot: NotebookSnapshot) => request<TurnScope>("/turn-scope", { method: "DELETE", body: JSON.stringify(mutation(snapshot)) }),

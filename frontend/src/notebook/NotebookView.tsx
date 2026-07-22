@@ -19,6 +19,7 @@ export default function NotebookView({ notebook, scope, turn, disabled, focusReq
     const id = notebook.cells[next]?.cellId ?? focused; setFocused(id); const node = refs.current.get(id); node?.focus(); node?.scrollIntoView({ block: "nearest" });
   }}>
     {notebook.cells.map((cell) => <NotebookCell key={cell.cellId} cell={cell} focused={focused === cell.cellId}
+      documentRevision={notebook.revision}
       editable={scope.editableCellIds.includes(cell.cellId)} context={scope.contextCellIds.includes(cell.cellId)} disabled={disabled}
       cellRef={(node) => { if (node) refs.current.set(cell.cellId, node); else refs.current.delete(cell.cellId); }}
       change={turn?.changes.find((change) => change.cellId === cell.cellId)} onFocus={() => setFocused(cell.cellId)}

@@ -5,9 +5,13 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    proxy: { "/api": { target: "http://127.0.0.1:8000", rewrite: (path) => path.replace(/^\/api/, "") } },
+    proxy: { "/api": { target: `http://127.0.0.1:${process.env.BACKEND_PORT ?? "8000"}`, rewrite: (path) => path.replace(/^\/api/, "") } },
   },
-  test: { environment: "jsdom", setupFiles: ["./frontend/src/test/setup.ts"] },
+  test: {
+    environment: "jsdom",
+    setupFiles: ["./frontend/src/test/setup.ts"],
+    exclude: ["e2e/**", "node_modules/**", "dist/**"],
+  },
   build: {
     rollupOptions: {
       output: {

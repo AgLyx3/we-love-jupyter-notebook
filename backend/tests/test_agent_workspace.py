@@ -8,7 +8,13 @@ from types import SimpleNamespace
 import pytest
 
 from backend.app.agent_workspace.models import WorkspaceBoundaryError
-from backend.app.agent_workspace.adapters import ClaudeAgentAdapter, FakeAgentAdapter, FakeAttempt
+from backend.app.agent_workspace.adapters import (
+    ClaudeAgentAdapter,
+    DevelopmentFakeAgentAdapter,
+    FakeAgentAdapter,
+    FakeAttempt,
+)
+from backend.app.main import configured_agent_adapter
 from backend.app.agent_workspace.models import AgentAdapterError, AgentTimedOut
 from backend.app.agent_workspace.models import AgentCancelled
 from backend.app.agent_workspace.runner import ProcessRunner
@@ -216,3 +222,16 @@ def test_process_runner_decode_error_still_cleans_descendant(tmp_path):
             cwd=tmp_path, timeout=2, cancel_event=Event(), grace_period=0.05,
         )
     assert _wait_process_gone(int(pid_file.read_text()))
+
+
+def test_configured_adapter_defaults_to_claude(monkeypatch):
+    monkeypatch.delenv("NOTEBOOK_AGENT_ADAPTER", raising=False)
+    assert isinstance(configured_agent_adapter(), ClaudeAgentAdapter)
+
+
+def test_configured_adapter_requires_explicit_fake_mode(monkeypatch):
+    monkeypatch.setenv("NOTEBOOK_AGENT_ADAPTER", "fake")
+    assert isinstance(configured_agent_adapter(), DevelopmentFakeAgentAdapter)
+    monkeypatch.setenv("NOTEBOOK_AGENT_ADAPTER", "unknown")
+    with pytest.raises(RuntimeError, match="must be either"):
+        configured_agent_adapter()

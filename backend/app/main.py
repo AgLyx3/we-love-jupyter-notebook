@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import os
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -15,7 +16,7 @@ from .api.execution_routes import router as execution_router
 from .api.event_routes import router as event_router
 from .api.session_routes import router as session_router
 from .agent_turns.service import AgentTurnService
-from .agent_workspace.adapters import FakeAgentAdapter
+from .agent_workspace.adapters import ClaudeAgentAdapter, DevelopmentFakeAgentAdapter, FakeAgentAdapter
 from .agent_workspace.models import AgentAdapter
 from .notebook_document.models import NotebookDomainError
 from .notebook_document.service import NotebookDocumentService
@@ -98,4 +99,13 @@ def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
     return app
 
 
-app = create_app()
+def configured_agent_adapter() -> AgentAdapter:
+    mode = os.getenv("NOTEBOOK_AGENT_ADAPTER", "claude").strip().lower()
+    if mode == "claude":
+        return ClaudeAgentAdapter()
+    if mode == "fake":
+        return DevelopmentFakeAgentAdapter()
+    raise RuntimeError("NOTEBOOK_AGENT_ADAPTER must be either 'claude' or 'fake'")
+
+
+app = create_app(agent_adapter=configured_agent_adapter())

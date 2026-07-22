@@ -179,7 +179,16 @@ export default function App() {
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
     <div className="editor-layout">
       <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} disabled={mutationsDisabled || busy} focusRequest={focusRequest}
-        onSave={(cellId, source) => void mutate(() => api.saveSource(notebook, cellId, source), { conflictText: "Notebook changed elsewhere. Your unsaved edit was not applied; the latest revision has been loaded." })}
+        onSave={(cellId, source) => void mutate(
+          () => api.saveSource(notebook, cellId, source),
+          { conflictText: "Notebook changed elsewhere. Your unsaved edit was not applied; the latest revision has been loaded." },
+          (saved) => setNotebook((current) => current && current.sessionId === saved.sessionId ? {
+            ...current,
+            revision: saved.revision,
+            dirty: saved.dirty,
+            cells: current.cells.map((cell) => cell.cellId === saved.cellId ? { ...cell, source: saved.source } : cell),
+          } : current),
+        )}
         onRun={(cellId) => void mutate(() => api.runCell(notebook, cellId), { refreshAfter: false }, setOperation)}
         onScope={(cellId, editable) => void mutate(() => api.addScope(notebook, cellId, editable), { refreshAfter: false }, setScope)}
         onRevert={(turnId, cellId) => void mutate(() => api.revertCell(notebook, turnId, cellId), { refreshAfter: false }, setNotebook)} />
