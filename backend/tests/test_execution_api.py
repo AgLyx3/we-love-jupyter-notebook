@@ -155,3 +155,116 @@ def test_risky_decision_rejects_mismatched_correlation(
     service.skip(attempt.attempt_id, session_id=uploaded["sessionId"], expected_revision=revision, turn_id="turn-api", cell_id="editable")
     worker.join(2)
     client.app.state.notebook_service.coordinator.release(lease)
+
+
+def test_running_manual_execution_accepts_idempotent_null_turn_cancel(
+    client, notebook_payload,
+):
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingKernel(ApiKernel):
+        def __init__(self):
+            self.busy_attempt_id = None
+            self.interrupts = 0
+
+        def execute(self, source, attempt_id):
+            self.busy_attempt_id = attempt_id
+            entered.set()
+            assert release.wait(2)
+            self.busy_attempt_id = None
+            return KernelResult([
+                {"output_type": "stream", "name": "stdout", "text": "late\n"},
+            ], 1, False)
+
+        def interrupt(self):
+            self.interrupts += 1
+
+    uploaded = client.post(
+        "/notebooks/upload",
+        files={"file": ("example.ipynb", notebook_payload(), "application/json")},
+    ).json()
+    kernel = BlockingKernel()
+    client.app.state.kernel_execution_service.kernel = kernel
+    created = client.post("/execution/cells/editable/run", json={
+        "sessionId": uploaded["sessionId"],
+        "expectedDocumentRevision": uploaded["revision"],
+    }).json()
+    assert entered.wait(2)
+    running = client.get(f"/execution/{created['operationId']}").json()
+    attempt_id = running["currentExecutionAttemptId"]
+    body = {
+        "sessionId": uploaded["sessionId"],
+        "expectedDocumentRevision": uploaded["revision"],
+        "turnId": None,
+        "cellId": "editable",
+    }
+    mismatched = client.post(
+        f"/execution/{attempt_id}/cancel", json={**body, "turnId": "turn-x"},
+    )
+    assert mismatched.status_code == 409
+    first = client.post(f"/execution/{attempt_id}/cancel", json=body)
+    second = client.post(f"/execution/{attempt_id}/cancel", json=body)
+    assert first.status_code == second.status_code == 200
+    release.set()
+    for _ in range(100):
+        cancelled = client.get(f"/execution/{created['operationId']}").json()
+        if cancelled["state"] == "cancelled":
+            break
+        time.sleep(.01)
+    assert cancelled["state"] == "cancelled"
+    current = client.get("/notebooks/current").json()
+    assert current["revision"] == uploaded["revision"]
+    assert current["cells"][1]["outputs"] == []
+    assert kernel.interrupts == 1
+
+
+def test_downstream_cancel_rejects_null_turn_id(client, notebook_payload):
+    uploaded = client.post(
+        "/notebooks/upload",
+        files={"file": ("example.ipynb", notebook_payload(), "application/json")},
+    ).json()
+    service, lease, worker, pending, revision = pending_risky_execution(
+        client, uploaded,
+    )
+    attempt = pending.attempts[0]
+    response = client.post(f"/execution/{attempt.attempt_id}/cancel", json={
+        "sessionId": uploaded["sessionId"],
+        "expectedDocumentRevision": revision,
+        "turnId": None,
+        "cellId": "editable",
+    })
+    assert response.status_code == 409
+    service.skip(
+        attempt.attempt_id, session_id=uploaded["sessionId"],
+        expected_revision=revision, turn_id="turn-api", cell_id="editable",
+    )
+    worker.join(2)
+    client.app.state.notebook_service.coordinator.release(lease)
+
+
+@pytest.mark.parametrize("decision", ["approve", "skip"])
+def test_downstream_approve_and_skip_reject_null_turn_schema(
+    client, notebook_payload, decision,
+):
+    uploaded = client.post(
+        "/notebooks/upload",
+        files={"file": ("example.ipynb", notebook_payload(), "application/json")},
+    ).json()
+    service, lease, worker, pending, revision = pending_risky_execution(
+        client, uploaded,
+    )
+    attempt = pending.attempts[0]
+    response = client.post(f"/execution/{attempt.attempt_id}/{decision}", json={
+        "sessionId": uploaded["sessionId"],
+        "expectedDocumentRevision": revision,
+        "turnId": None,
+        "cellId": "editable",
+    })
+    assert response.status_code == 422
+    service.skip(
+        attempt.attempt_id, session_id=uploaded["sessionId"],
+        expected_revision=revision, turn_id="turn-api", cell_id="editable",
+    )
+    worker.join(2)
+    client.app.state.notebook_service.coordinator.release(lease)

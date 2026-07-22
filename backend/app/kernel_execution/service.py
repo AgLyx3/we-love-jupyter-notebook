@@ -261,11 +261,16 @@ class KernelExecutionService:
             if pair is None:
                 raise ExecutionDecisionConflict()
             operation, attempt = pair
+            turn_matches = (
+                turn_id is None
+                if operation.kind == "manual"
+                else turn_id is not None and operation.parent_turn_id == turn_id
+            )
             if (
                 operation.session_id != session_id
                 or operation.current_revision != expected_revision
                 or operation.current_attempt_id != attempt_id
-                or operation.parent_turn_id != turn_id
+                or not turn_matches
                 or attempt.cell_id != cell_id
             ):
                 raise ExecutionDecisionConflict()

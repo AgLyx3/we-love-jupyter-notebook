@@ -20,6 +20,11 @@ class DecisionRequest(ExecutionRequest):
     cell_id: str = Field(alias="cellId")
 
 
+class CancelDecisionRequest(ExecutionRequest):
+    turn_id: str | None = Field(alias="turnId")
+    cell_id: str = Field(alias="cellId")
+
+
 class KernelControlRequest(BaseModel):
     session_id: str = Field(alias="sessionId")
     expected_revision: int = Field(alias="expectedDocumentRevision")
@@ -45,17 +50,37 @@ def get_execution(execution_id: str, request: Request) -> dict[str, Any]:
     return serialize_operation(_service(request).get(execution_id))
 
 
-@router.post("/execution/{attempt_id}/{decision}")
-def decide_execution(attempt_id: str, decision: str, body: DecisionRequest, request: Request) -> dict[str, Any]:
-    if decision not in {"approve", "skip", "cancel"}:
-        from fastapi import HTTPException
-        raise HTTPException(404)
+def _decide(
+    attempt_id: str, decision: str, body: DecisionRequest | CancelDecisionRequest,
+    request: Request,
+) -> dict[str, Any]:
     operation = getattr(_service(request), decision)(
         attempt_id, session_id=body.session_id,
         expected_revision=body.expected_revision,
         turn_id=body.turn_id, cell_id=body.cell_id,
     )
     return serialize_operation(operation)
+
+
+@router.post("/execution/{attempt_id}/approve")
+def approve_execution(
+    attempt_id: str, body: DecisionRequest, request: Request,
+) -> dict[str, Any]:
+    return _decide(attempt_id, "approve", body, request)
+
+
+@router.post("/execution/{attempt_id}/skip")
+def skip_execution(
+    attempt_id: str, body: DecisionRequest, request: Request,
+) -> dict[str, Any]:
+    return _decide(attempt_id, "skip", body, request)
+
+
+@router.post("/execution/{attempt_id}/cancel")
+def cancel_execution(
+    attempt_id: str, body: CancelDecisionRequest, request: Request,
+) -> dict[str, Any]:
+    return _decide(attempt_id, "cancel", body, request)
 
 
 @router.get("/kernel/status")
