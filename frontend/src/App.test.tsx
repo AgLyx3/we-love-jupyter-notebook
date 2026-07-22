@@ -71,7 +71,7 @@ describe("Notebook editor", () => {
   it("renders a fully correlated risky execution approval", async () => {
     const riskyOperation = {
       operationId: "op-1", sessionId: "session-1", baseRevision: 3, currentDocumentRevision: 3, kind: "all", parentTurnId: "turn-1", state: "running", currentExecutionAttemptId: "attempt-1",
-      attempts: [{ executionAttemptId: "attempt-1", cellId: "code-1", cellIndex: 1, state: "awaiting_approval", risk: { level: "confirm", reasons: ["Runs a shell command"], matchedPatterns: ["os.system"] }, decision: null, outputs: [], executionCount: null, error: null }], error: null, createdAt: "", completedAt: null,
+      attempts: [{ executionAttemptId: "attempt-1", cellId: "code-1", cellIndex: 1, sourcePreview: "os.system('echo guarded')", state: "awaiting_approval", risk: { level: "confirm", reasons: ["Runs a shell command"], matchedPatterns: ["os.system"] }, decision: null, outputs: [], executionCount: null, error: null }], error: null, createdAt: "", completedAt: null,
     };
     vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
       const path = String(input);

@@ -226,6 +226,8 @@ def pending_risky_execution(client, uploaded):
             break
         time.sleep(.01)
     assert pending.state == "awaiting_approval"
+    serialized = client.get(f"/execution/{pending.operation_id}").json()
+    assert serialized["attempts"][0]["sourcePreview"] == "!echo guarded"
     return service, lease, worker, pending, updated["revision"]
 
 

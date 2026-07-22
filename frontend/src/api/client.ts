@@ -52,6 +52,7 @@ export interface ExecutionAttempt {
   executionAttemptId: string;
   cellId: string;
   cellIndex: number;
+  sourcePreview: string;
   state: string;
   risk: { level: string; reasons: string[]; matchedPatterns: string[] };
   decision: string | null;

@@ -81,6 +81,7 @@ class CellExecutionAttempt:
     cell_index: int
     source_hash: str
     starting_revision: int
+    source_preview: str = ""
     state: str = "created"
     risk: RiskClassification = field(default_factory=lambda: RiskClassification("safe"))
     decision: str | None = None

@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.agent_turns.service import (
-    AgentTurnService, RevertConflict, UndoConflict,
+    AgentTurnService, MAX_TURN_HISTORY_BYTES, RevertConflict, UndoConflict,
 )
 from backend.app.agent_workspace.adapters import FakeAgentAdapter, FakeAttempt
 from backend.app.notebook_document.models import MutationConflict, RevisionConflict
@@ -110,6 +110,39 @@ def test_completed_turn_memory_is_bounded(notebook_payload):
     assert len(history) == 50
     assert history[0].prompt == "turn 54"
     assert history[-1].prompt == "turn 5"
+
+
+def test_large_turn_history_keeps_only_latest_undo_checkpoint(notebook_payload):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    sources = [f"value = {index}\n#" + (str(index) * 700_000) for index in range(3)]
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes,
+        adapter=FakeAgentAdapter([
+            FakeAttempt(edits={"editable/cell_editable.py": source})
+            for source in sources
+        ]), timeout=2,
+    )
+    created = []
+    for index in range(3):
+        current = documents.get_snapshot()
+        scopes.add("editable", editable=True)
+        created.append(turns.start(
+            prompt=f"large {index}", session_id=current.session_id,
+            expected_revision=current.revision, background=False,
+        ))
+    history = turns.history_for_session(snapshot.session_id, limit=100)
+    assert len(history) < 3
+    assert sum(turns._history_size(item) for item in history) <= MAX_TURN_HISTORY_BYTES
+    assert sum(item.checkpoint is not None for item in history) == 1
+    latest = turns.get(created[-1].turn_id)
+    assert turns.is_undo_eligible(latest)
+    restored = turns.undo(
+        latest.turn_id, session_id=latest.session_id,
+        expected_revision=latest.applied_revision,
+    )
+    assert _source(restored).startswith("value = 1\n")
 
 
 def test_turn_rejects_stale_revision_and_releases_lease(notebook_payload):

@@ -22,7 +22,7 @@ const notebook: NotebookSnapshot = {
 const scope: TurnScope = { editableCellIds: ["code-1"], contextCellIds: [], sessionId: "session-1", notebookRevision: 3 };
 const operation: ExecutionOperation = {
   operationId: "op-1", sessionId: "session-1", baseRevision: 3, currentDocumentRevision: 7, kind: "manual", parentTurnId: null, state: "running", currentExecutionAttemptId: "attempt-1",
-  attempts: [{ executionAttemptId: "attempt-1", cellId: "code-1", cellIndex: 0, state: "running", risk: { level: "safe", reasons: [], matchedPatterns: [] }, decision: null, outputs: [], executionCount: null, error: null }], error: null, createdAt: "", completedAt: null,
+  attempts: [{ executionAttemptId: "attempt-1", cellId: "code-1", cellIndex: 0, sourcePreview: "print('preview')", state: "running", risk: { level: "safe", reasons: [], matchedPatterns: [] }, decision: null, outputs: [], executionCount: null, error: null }], error: null, createdAt: "", completedAt: null,
 };
 const turn = (id: string, state = "completed"): AgentTurn => ({ turnId: id, sessionId: "session-1", baseRevision: 3, prompt: `Prompt ${id}`, editableCellIds: ["code-1"], contextCellIds: [], undoEligible: state === "completed", state, attempts: 1, finalOutput: "Done", appliedRevision: state === "completed" ? 4 : null, executionOperationId: null, changes: [], error: null, createdAt: "", completedAt: state === "completed" ? "" : null });
 
@@ -206,6 +206,71 @@ describe("remediation behaviors", () => {
     expect(screen.getByText("Revision 5")).toBeInTheDocument();
   });
 
+  it("does not let a refresh started before run-cell clear the created operation", async () => {
+    let currentCall = 0; let resolveRefresh!: (value: Response) => void;
+    const pendingRefresh = new Promise<Response>((resolve) => { resolveRefresh = resolve; });
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current")) { currentCall += 1; return currentCall === 2 ? pendingRefresh : json(notebook); }
+      if (path.endsWith("/execution/cells/code-1/run") && init?.method === "POST") return json(operation);
+      if (path.endsWith("/session/status")) return json({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: null, turnHistory: [] });
+      return baseFetch(input, init);
+    });
+    render(<App />);
+    await screen.findByText("Revision 3");
+    EventSourceMock.instances[0].emit("notebook.updated", { revision: 3 }, 1);
+    await userEvent.click(screen.getByLabelText("Run code cell 1"));
+    expect(await screen.findByText("Execution: running")).toBeInTheDocument();
+    resolveRefresh(new Response(JSON.stringify(notebook), { headers: { "Content-Type": "application/json" } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByText("Execution: running")).toBeInTheDocument();
+    expect(screen.getByLabelText("Run code cell 1")).toBeDisabled();
+  });
+
+  it("does not let a refresh started before start-turn clear the created turn", async () => {
+    let currentCall = 0; let resolveRefresh!: (value: Response) => void;
+    const pendingRefresh = new Promise<Response>((resolve) => { resolveRefresh = resolve; });
+    const active = turn("created-turn", "agent_running");
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current")) { currentCall += 1; return currentCall === 2 ? pendingRefresh : json(notebook); }
+      if (path.endsWith("/agent-turns") && init?.method === "POST") return json(active);
+      if (path.endsWith("/session/status")) return json({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: null, turnHistory: [] });
+      return baseFetch(input, init);
+    });
+    render(<App />);
+    await screen.findByText("Revision 3");
+    EventSourceMock.instances[0].emit("notebook.updated", { revision: 3 }, 1);
+    await userEvent.type(screen.getByLabelText("Agent instruction"), "Update selected cell");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("agent running")).toBeInTheDocument();
+    resolveRefresh(new Response(JSON.stringify(notebook), { headers: { "Content-Type": "application/json" } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByText("agent running")).toBeInTheDocument();
+    expect(screen.getByLabelText("Run code cell 1")).toBeDisabled();
+  });
+
+  it("keeps a newer execution fetch when an older aggregate refresh finishes", async () => {
+    let currentCall = 0; let resolveRefresh!: (value: Response) => void;
+    const pendingRefresh = new Promise<Response>((resolve) => { resolveRefresh = resolve; });
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current")) { currentCall += 1; return currentCall === 2 ? pendingRefresh : json(notebook); }
+      if (path.endsWith("/execution/op-1")) return json(operation);
+      if (path.endsWith("/session/status")) return json({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: null, turnHistory: [] });
+      return baseFetch(input, init);
+    });
+    render(<App />);
+    await screen.findByText("Revision 3");
+    const source = EventSourceMock.instances[0];
+    source.emit("notebook.updated", { revision: 3 }, 1);
+    source.emit("execution.updated", { operationId: "op-1" }, 2);
+    expect(await screen.findByText("Execution: running")).toBeInTheDocument();
+    resolveRefresh(new Response(JSON.stringify(notebook), { headers: { "Content-Type": "application/json" } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByText("Execution: running")).toBeInTheDocument();
+  });
+
   it("renders raster and SVG notebook outputs as images", () => {
     render(<Outputs outputs={[
       { output_type: "display_data", data: { "image/png": "aGVsbG8=" } },
@@ -229,6 +294,7 @@ describe("remediation behaviors", () => {
     const { unmount } = render(<RiskyExecutionDialog operation={risky} attempt={risky.attempts[0]} busy={false} onDecision={decide} />);
     const approve = screen.getByRole("button", { name: "Approve and run" });
     expect(approve).toHaveFocus();
+    expect(screen.getByLabelText("Source preview for cell 1")).toHaveTextContent("print('preview')");
     fireEvent.keyDown(approve, { key: "Tab" });
     expect(screen.getByRole("button", { name: "Cancel run" })).toHaveFocus();
     fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" });

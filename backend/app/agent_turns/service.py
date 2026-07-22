@@ -28,6 +28,7 @@ from ..session_events.service import SessionEventService
 
 TERMINAL_STATES = {"completed", "failed", "cancelled", "validation_incomplete"}
 MAX_TERMINAL_TURNS = 50
+MAX_TURN_HISTORY_BYTES = 2 * 1024 * 1024
 
 
 class AgentTurnNotFound(NotebookDomainError):
@@ -182,11 +183,19 @@ class AgentTurnService:
             snapshot = self.documents.get_snapshot()
         except NotebookDomainError:
             return False
-        return (
+        eligible = (
             turn.applied_revision is not None
             and turn.session_id == snapshot.session_id
             and turn.applied_revision == snapshot.revision
         )
+        if not eligible:
+            with self._lock:
+                if self._latest_applied_turn_id == turn.turn_id:
+                    self._latest_applied_turn_id = None
+                    stored = self._turns.get(turn.turn_id)
+                    if stored is not None:
+                        stored.checkpoint = None
+        return eligible
 
     def cancel(
         self, turn_id: str, *, session_id: str, expected_revision: int,
@@ -466,7 +475,40 @@ class AgentTurnService:
             key=lambda item: item.completed_at or item.created_at,
             reverse=True,
         )
-        for expired in terminal[MAX_TERMINAL_TURNS:]:
+        for item in terminal:
+            if item.turn_id != self._latest_applied_turn_id:
+                item.checkpoint = None
+        retained: set[str] = set()
+        retained_bytes = 0
+        protected = {self._latest_applied_turn_id} if self._latest_applied_turn_id else set()
+        for item in terminal:
+            if item.turn_id in protected:
+                retained.add(item.turn_id)
+                retained_bytes += self._history_size(item)
+        for item in terminal:
+            if item.turn_id in retained:
+                continue
+            size = self._history_size(item)
+            if (
+                len(retained) < MAX_TERMINAL_TURNS
+                and retained_bytes + size <= MAX_TURN_HISTORY_BYTES
+            ):
+                retained.add(item.turn_id)
+                retained_bytes += size
+        for expired in terminal:
+            if expired.turn_id in retained:
+                continue
             self._turns.pop(expired.turn_id, None)
             if self._latest_applied_turn_id == expired.turn_id:
                 self._latest_applied_turn_id = None
+
+    @staticmethod
+    def _history_size(turn: AgentTurn) -> int:
+        values = [turn.prompt, turn.final_output]
+        values.extend(turn.editable_cell_ids)
+        values.extend(turn.context_cell_ids)
+        for change in turn.changes:
+            values.extend((change.cell_id, change.previous_source, change.next_source))
+        if turn.error is not None:
+            values.append(str(turn.error))
+        return sum(len(value.encode("utf-8")) for value in values) + 512

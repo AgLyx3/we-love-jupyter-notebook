@@ -154,7 +154,9 @@ class KernelExecutionService:
             source_hash = hashlib.sha256(source.encode()).hexdigest()
             attempt = CellExecutionAttempt(
                 uuid4().hex, operation.operation_id, cell["id"], index,
-                source_hash, snapshot.revision, risk=self.classifier.classify(source),
+                source_hash, snapshot.revision,
+                source_preview=(source[:400] + ("..." if len(source) > 400 else "")),
+                risk=self.classifier.classify(source),
             )
             with self._lock:
                 operation.attempts.append(attempt)
@@ -578,6 +580,7 @@ def serialize_operation(operation: ExecutionOperation) -> dict[str, Any]:
                 "executionAttemptId": item.attempt_id,
                 "cellId": item.cell_id,
                 "cellIndex": item.cell_index,
+                "sourcePreview": item.source_preview,
                 "state": item.state,
                 "risk": {"level": item.risk.level, "reasons": list(item.risk.reasons), "matchedPatterns": list(item.risk.matched_patterns)},
                 "decision": item.decision,

@@ -26,29 +26,26 @@ export default function App() {
   const [notice, setNotice] = useState<{ tone: "error" | "warning"; text: string } | null>(null);
   const [polling, setPolling] = useState(false);
   const snapshotRef = useRef(notebook);
-  const turnRef = useRef(turn);
-  const operationRef = useRef(operation);
   const scopeRef = useRef(scope);
   const eventCursorRef = useRef({ sessionId: "", sequence: 0 });
   const refreshGenerationRef = useRef(0);
   const turnGenerationRef = useRef(new Map<string, number>());
   const executionGenerationRef = useRef(new Map<string, number>());
   const resourceEpochRef = useRef(0);
+  const mutationGenerationRef = useRef(0);
   useEffect(() => { snapshotRef.current = notebook; }, [notebook]);
-  useEffect(() => { turnRef.current = turn; }, [turn]);
-  useEffect(() => { operationRef.current = operation; }, [operation]);
   useEffect(() => { scopeRef.current = scope; }, [scope]);
 
   const refresh = useCallback(async () => {
+    const epoch = ++resourceEpochRef.current;
     const generation = ++refreshGenerationRef.current;
     try {
       const current = await api.current();
       const [nextScope, nextKernel, status] = await Promise.all([api.scope(), api.kernel(), api.status()]);
-      if (generation !== refreshGenerationRef.current) return snapshotRef.current;
+      if (generation !== refreshGenerationRef.current || resourceEpochRef.current !== epoch) return snapshotRef.current;
       const existing = snapshotRef.current;
       if (existing && existing.sessionId === current.sessionId && existing.revision > current.revision) return existing;
       const nextNotebook = current;
-      resourceEpochRef.current += 1;
       setNotebook(nextNotebook);
       setScope(nextScope);
       setKernel(nextKernel);
@@ -67,7 +64,7 @@ export default function App() {
   useEffect(() => { refresh().catch((error) => showError(error)).finally(() => setLoading(false)); }, [refresh]);
 
   const fetchTurn = useCallback(async (id: string) => {
-    const epoch = resourceEpochRef.current;
+    const epoch = ++resourceEpochRef.current;
     const generation = (turnGenerationRef.current.get(id) ?? 0) + 1;
     turnGenerationRef.current.set(id, generation);
     try {
@@ -88,7 +85,7 @@ export default function App() {
   }, [refresh]);
 
   const fetchExecution = useCallback(async (id: string) => {
-    const epoch = resourceEpochRef.current;
+    const epoch = ++resourceEpochRef.current;
     const generation = (executionGenerationRef.current.get(id) ?? 0) + 1;
     executionGenerationRef.current.set(id, generation);
     try {
@@ -112,10 +109,6 @@ export default function App() {
   useEffect(() => {
     if (!polling) return;
     const timer = window.setInterval(() => {
-      const currentTurn = turnRef.current;
-      const currentOperation = operationRef.current;
-      if (currentTurn && !terminalTurns.has(currentTurn.state)) void fetchTurn(currentTurn.turnId);
-      if (currentOperation && !terminalExecutions.has(currentOperation.state)) void fetchExecution(currentOperation.operationId);
       void refresh();
     }, 1500);
     return () => window.clearInterval(timer);
@@ -126,25 +119,31 @@ export default function App() {
     setNotice({ tone: "error", text });
   }
 
-  async function mutate(work: () => Promise<unknown>, options: { conflictText?: string; refreshAfter?: boolean } = {}) {
+  async function mutate<T>(work: () => Promise<T>, options: { conflictText?: string; refreshAfter?: boolean } = {}, commit?: (result: T) => void) {
+    const mutationGeneration = ++mutationGenerationRef.current;
+    resourceEpochRef.current += 1;
     setBusy(true); setNotice(null);
     try {
       const result = await work();
+      if (mutationGenerationRef.current !== mutationGeneration) return null;
+      resourceEpochRef.current += 1;
+      commit?.(result);
       if (options.refreshAfter !== false) await refresh();
       return result;
     } catch (error) {
+      if (mutationGenerationRef.current !== mutationGeneration) return null;
+      resourceEpochRef.current += 1;
       if (error instanceof ApiError && error.isConflict) {
         await refresh();
         setNotice({ tone: "warning", text: options.conflictText ?? "Notebook changed elsewhere. The latest revision has been loaded." });
       } else showError(error);
       return null;
-    } finally { setBusy(false); }
+    } finally { if (mutationGenerationRef.current === mutationGeneration) setBusy(false); }
   }
 
   const handleUpload = async (file: File) => {
     const current = snapshotRef.current;
-    const uploaded = await mutate(() => api.upload(file, current ?? undefined), { refreshAfter: false });
-    if (uploaded) { setNotebook(uploaded as NotebookSnapshot); setScope(emptyScope); setTurn(null); setHistory([]); setSelectedTurnId(null); setOperation(null); setKernel(await api.kernel()); }
+    await mutate(async () => { const uploaded = await api.upload(file, current ?? undefined); return { uploaded, kernel: await api.kernel() }; }, { refreshAfter: false }, ({ uploaded, kernel }) => { setNotebook(uploaded); setScope(emptyScope); setTurn(null); setHistory([]); setSelectedTurnId(null); setOperation(null); setKernel(kernel); });
   };
 
   const handleDownload = async () => {
@@ -175,22 +174,22 @@ export default function App() {
   return <div className="app-shell">
     <header className="topbar">
       <div className="brand"><BookOpen /><strong>{notebook.filename}</strong><span className={notebook.dirty ? "dirty" : ""}>{notebook.dirty ? "Unsaved" : "Clean"}</span><span>Revision {notebook.revision}</span></div>
-      <div className="toolbar-actions"><KernelControls status={kernel} mutationDisabled={mutationsDisabled || busy} onRunAll={() => void mutate(async () => { const result = await api.runAll(notebook); setOperation(result); }, { refreshAfter: false })} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} /><FileToolbar notebook={notebook} uploadDisabled={mutationsDisabled || busy} onUpload={handleUpload} onDownload={() => void handleDownload()} /></div>
+      <div className="toolbar-actions"><KernelControls status={kernel} mutationDisabled={mutationsDisabled || busy} onRunAll={() => void mutate(() => api.runAll(notebook), { refreshAfter: false }, setOperation)} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} /><FileToolbar notebook={notebook} uploadDisabled={mutationsDisabled || busy} onUpload={handleUpload} onDownload={() => void handleDownload()} /></div>
     </header>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
     <div className="editor-layout">
       <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} disabled={mutationsDisabled || busy} focusRequest={focusRequest}
         onSave={(cellId, source) => void mutate(() => api.saveSource(notebook, cellId, source), { conflictText: "Notebook changed elsewhere. Your unsaved edit was not applied; the latest revision has been loaded." })}
-        onRun={(cellId) => void mutate(async () => { const result = await api.runCell(notebook, cellId); setOperation(result); }, { refreshAfter: false })}
-        onScope={(cellId, editable) => void mutate(async () => setScope(await api.addScope(notebook, cellId, editable)), { refreshAfter: false })}
-        onRevert={(turnId, cellId) => void mutate(async () => setNotebook(await api.revertCell(notebook, turnId, cellId)), { refreshAfter: false })} />
+        onRun={(cellId) => void mutate(() => api.runCell(notebook, cellId), { refreshAfter: false }, setOperation)}
+        onScope={(cellId, editable) => void mutate(() => api.addScope(notebook, cellId, editable), { refreshAfter: false }, setScope)}
+        onRevert={(turnId, cellId) => void mutate(() => api.revertCell(notebook, turnId, cellId), { refreshAfter: false }, setNotebook)} />
       <AgentChatPanel notebook={notebook} scope={scope} turn={selectedTurn} activeTurn={activeTurn} history={history} operation={operation} busy={busy} mutationsDisabled={mutationsDisabled}
-        onClearScope={() => void mutate(async () => setScope(await api.clearScope(notebook)), { refreshAfter: false })}
-        onSubmit={(prompt) => void mutate(async () => { const frozen = { ...scope, editableCellIds: [...scope.editableCellIds], contextCellIds: [...scope.contextCellIds] }; const result = await api.startTurn(notebook, prompt); setTurn(result); setSelectedTurnId(result.turnId); setHistory((items) => upsertRecord(items, result, frozen, prompt)); }, { refreshAfter: false })}
-        onCancel={() => activeTurn && void mutate(async () => { const result = await api.cancelTurn(notebook, activeTurn.turnId); setTurn(result); setHistory((items) => upsertRecord(items, result)); }, { refreshAfter: false })}
-        onUndo={() => selectedTurn && void mutate(async () => setNotebook(await api.undoTurn(notebook, selectedTurn.turnId)), { refreshAfter: false })}
-        onDecision={(attempt: ExecutionAttempt, decision) => operation && void mutate(async () => setOperation(await api.decide(operation, attempt, decision)), { refreshAfter: false })}
-        onSelectTurn={setSelectedTurnId} onFocusCell={requestCellFocus} onDropCell={(cellId) => void mutate(async () => setScope(await api.addScope(notebook, cellId, true)), { refreshAfter: false })} />
+        onClearScope={() => void mutate(() => api.clearScope(notebook), { refreshAfter: false }, setScope)}
+        onSubmit={(prompt) => { const frozen = { ...scope, editableCellIds: [...scope.editableCellIds], contextCellIds: [...scope.contextCellIds] }; void mutate(() => api.startTurn(notebook, prompt), { refreshAfter: false }, (result) => { setTurn(result); setSelectedTurnId(result.turnId); setHistory((items) => upsertRecord(items, result, frozen, prompt)); }); }}
+        onCancel={() => activeTurn && void mutate(() => api.cancelTurn(notebook, activeTurn.turnId), { refreshAfter: false }, (result) => { setTurn(result); setHistory((items) => upsertRecord(items, result)); })}
+        onUndo={() => selectedTurn && void mutate(() => api.undoTurn(notebook, selectedTurn.turnId), { refreshAfter: false }, setNotebook)}
+        onDecision={(attempt: ExecutionAttempt, decision) => operation && void mutate(() => api.decide(operation, attempt, decision), { refreshAfter: false }, setOperation)}
+        onSelectTurn={setSelectedTurnId} onFocusCell={requestCellFocus} onDropCell={(cellId) => void mutate(() => api.addScope(notebook, cellId, true), { refreshAfter: false }, setScope)} />
     </div>
   </div>;
 }

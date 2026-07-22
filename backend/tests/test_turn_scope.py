@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -7,7 +8,7 @@ from backend.app.notebook_document.models import (
 )
 from backend.app.notebook_document.service import NotebookDocumentService
 from backend.app.turn_scope.service import TurnScopeService
-from backend.app.turn_scope.models import StaleTurnScope
+from backend.app.turn_scope.models import FrozenTurnScope, StaleTurnScope
 
 
 def _loaded(notebook_payload):
@@ -55,6 +56,20 @@ def test_terminal_expiration_clears_scope_and_records_history(notebook_payload):
     assert scopes.current().editable_cell_ids == ()
     assert scopes.history[-1].scope.editable_cell_ids == ("editable",)
     assert scopes.history[-1].outcome == "failed"
+
+
+def test_terminal_scope_history_is_count_and_byte_bounded(notebook_payload):
+    documents, snapshot = _loaded(notebook_payload)
+    scopes = TurnScopeService(documents)
+    for index in range(120):
+        scopes.expire(FrozenTurnScope(
+            turn_id=f"turn-{index}", session_id=snapshot.session_id,
+            notebook_revision=snapshot.revision,
+            editable_cell_ids=("editable",), context_cell_ids=(),
+            prompt=str(index) * 20_000, frozen_at=datetime.now(timezone.utc),
+        ), "completed")
+    assert len(scopes.history) < 30
+    assert scopes.history[-1].scope.turn_id == "turn-119"
 
 
 def test_successful_replacement_clears_scope_even_with_colliding_ids(notebook_payload):

@@ -11,6 +11,9 @@ from .models import (
     TerminalScopeRecord,
 )
 
+MAX_TERMINAL_SCOPE_RECORDS = 100
+MAX_TERMINAL_SCOPE_BYTES = 512 * 1024
+
 
 class TurnScopeService:
     def __init__(self, documents: NotebookDocumentService) -> None:
@@ -131,6 +134,7 @@ class TurnScopeService:
             self._history.append(TerminalScopeRecord(
                 scope=scope, outcome=outcome, completed_at=datetime.now(timezone.utc)
             ))
+            self._prune_history_locked()
 
     def _on_session_replaced(self, _session_id: str, _revision: int) -> None:
         with self._lock:
@@ -151,3 +155,24 @@ class TurnScopeService:
                         completed_at=record.completed_at,
                     )
                     return
+
+    def _prune_history_locked(self) -> None:
+        retained: list[TerminalScopeRecord] = []
+        retained_bytes = 0
+        for record in reversed(self._history):
+            scope = record.scope
+            size = (
+                len(scope.prompt.encode("utf-8"))
+                + sum(len(value.encode("utf-8")) for value in scope.editable_cell_ids)
+                + sum(len(value.encode("utf-8")) for value in scope.context_cell_ids)
+                + len(record.outcome.encode("utf-8"))
+                + 256
+            )
+            if retained and (
+                len(retained) >= MAX_TERMINAL_SCOPE_RECORDS
+                or retained_bytes + size > MAX_TERMINAL_SCOPE_BYTES
+            ):
+                continue
+            retained.append(record)
+            retained_bytes += size
+        self._history = list(reversed(retained))
