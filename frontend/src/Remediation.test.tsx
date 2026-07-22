@@ -468,25 +468,31 @@ describe("remediation behaviors", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Kernel status unavailable");
   });
 
-  it("retains cached history omitted from a truncated aggregate response", async () => {
-    const newest = { ...turn("newest"), prompt: "Newest turn" };
-    const older = { ...turn("older"), prompt: "Cached older turn" };
+  it("rehydrates eligibility before allowing undo for cached truncated history", async () => {
+    const newest = { ...turn("newest", "failed"), prompt: "Newer failed turn" };
+    const older = { ...turn("older"), prompt: "Cached applied turn" };
     let statusCalls = 0;
+    let detailCalls = 0;
+    let resolveDetail!: (response: Response) => void;
+    const detail = new Promise<Response>((resolve) => { resolveDetail = resolve; });
     vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
       const path = String(input);
       if (path.endsWith("/session/status")) {
         statusCalls += 1;
         return json({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: null, turnHistory: statusCalls === 1 ? [newest, older] : [newest], turnHistoryTruncated: statusCalls > 1 });
       }
+      if (path.endsWith("/agent-turns/older")) { detailCalls += 1; return detail; }
       return baseFetch(input, init);
     });
     render(<App />);
-    expect(await screen.findByText("Cached older turn")).toBeInTheDocument();
+    expect(await screen.findByText("Cached applied turn")).toBeInTheDocument();
     EventSourceMock.instances[0].emit("notebook.updated", { revision: 3 }, 1);
     await waitFor(() => expect(statusCalls).toBeGreaterThanOrEqual(2));
-    expect(screen.getByText("Cached older turn")).toBeInTheDocument();
-    await userEvent.click(screen.getByText("Cached older turn"));
+    await userEvent.click(screen.getByText("Cached applied turn"));
     expect(screen.queryByRole("button", { name: "Undo turn" })).not.toBeInTheDocument();
+    await waitFor(() => expect(detailCalls).toBe(1));
+    resolveDetail(new Response(JSON.stringify({ ...older, historyTruncated: false, undoEligible: true }), { headers: { "Content-Type": "application/json" } }));
+    expect(await screen.findByRole("button", { name: "Undo turn" })).toBeEnabled();
   });
 
   it("reconciles terminal turn detail after earlier notebook and execution refreshes", async () => {

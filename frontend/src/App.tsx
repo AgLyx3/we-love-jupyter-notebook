@@ -286,7 +286,7 @@ function reconcileHistory(summaries: TurnRecord[], existing: TurnRecord[], noteb
     .filter((item) => item.turn.sessionId === notebook.sessionId && !returnedIds.has(item.turn.turnId))
     .map((item) => ({
       ...item,
-      turn: reconcileTurnChanges({ ...item.turn, undoEligible: false }, notebook),
+      turn: reconcileTurnChanges({ ...item.turn, undoEligible: false, historyTruncated: true }, notebook),
     }));
   return [...reconciled, ...cachedTail].slice(0, 50);
 }
