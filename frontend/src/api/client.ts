@@ -46,6 +46,7 @@ export interface AgentTurn {
   error: ApiErrorBody | null;
   createdAt: string;
   completedAt: string | null;
+  historyTruncated?: boolean;
 }
 
 export interface ExecutionAttempt {

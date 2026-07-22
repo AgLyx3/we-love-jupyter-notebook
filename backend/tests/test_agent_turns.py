@@ -91,6 +91,7 @@ def test_session_status_persists_bounded_turn_history_with_frozen_scope(
             if current["state"] == "completed":
                 break
             time.sleep(.01)
+        assert current["historyTruncated"] is False
         status = api.get("/session/status").json()
         assert status["activeTurn"] is None
         assert len(status["turnHistory"]) == 1

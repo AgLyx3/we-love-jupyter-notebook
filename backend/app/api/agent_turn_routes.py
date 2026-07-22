@@ -45,6 +45,7 @@ def serialize_turn(turn: AgentTurn, *, undo_eligible: bool = False) -> dict[str,
         "error": turn.error,
         "createdAt": turn.created_at.isoformat(),
         "completedAt": turn.completed_at.isoformat() if turn.completed_at else None,
+        "historyTruncated": False,
     }
 
 

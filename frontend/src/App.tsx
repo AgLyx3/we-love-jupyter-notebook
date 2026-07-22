@@ -51,8 +51,8 @@ export default function App() {
       setScope(nextScope);
       setKernel(nextKernel);
       const hydrated = (status.turnHistory ?? []).map(turnToRecord).slice(0, 50);
-      setHistory(hydrated);
-      setTurn(status.activeTurn ?? hydrated[0]?.turn ?? null);
+      setHistory((items) => reconcileHistory(hydrated, items, nextNotebook));
+      setTurn(status.activeTurn ? reconcileTurnChanges(status.activeTurn, nextNotebook) : hydrated[0]?.turn ?? null);
       setSelectedTurnId((selected) => hydrated.some((item) => item.turn.turnId === selected) ? selected : hydrated[0]?.turn.turnId ?? null);
       setOperation(status.activeExecution);
       return nextNotebook;
@@ -71,8 +71,9 @@ export default function App() {
     try {
       const next = await api.turn(id);
       if (turnGenerationRef.current.get(id) !== generation || resourceEpochRef.current !== epoch) return;
-      setTurn(next); setSelectedTurnId((selected) => selected ?? id);
-      setHistory((items) => upsertRecord(items, next, scopeRef.current, items.find((item) => item.turn.turnId === id)?.prompt ?? "Agent turn"));
+      const detailed = reconcileTurnChanges(next, snapshotRef.current);
+      setTurn(detailed); setSelectedTurnId((selected) => selected ?? id);
+      setHistory((items) => upsertRecord(items, detailed, scopeRef.current, items.find((item) => item.turn.turnId === id)?.prompt ?? "Agent turn"));
       if (next.executionOperationId) {
         const operationId = next.executionOperationId;
         const operationGeneration = (executionGenerationRef.current.get(operationId) ?? 0) + 1;
@@ -84,6 +85,11 @@ export default function App() {
       if (terminalTurns.has(next.state)) await refresh();
     } catch (error) { showError(error); }
   }, [refresh]);
+
+  useEffect(() => {
+    const selected = history.find((item) => item.turn.turnId === selectedTurnId)?.turn;
+    if (selected?.historyTruncated) void fetchTurn(selected.turnId);
+  }, [fetchTurn, history, selectedTurnId]);
 
   const fetchExecution = useCallback(async (id: string) => {
     const epoch = ++resourceEpochRef.current;
@@ -196,12 +202,20 @@ export default function App() {
         )}
         onRun={(cellId) => void mutate(() => api.runCell(notebook, cellId), { refreshAfter: false }, setOperation)}
         onScope={(cellId, editable) => void mutate(() => api.addScope(notebook, cellId, editable), { refreshAfter: false }, setScope)}
-        onRevert={(turnId, cellId) => void mutate(() => api.revertCell(notebook, turnId, cellId), { refreshAfter: false }, setNotebook)} />
+        onRevert={(turnId, cellId) => void mutate(() => api.revertCell(notebook, turnId, cellId), {}, (updated) => {
+          setNotebook(updated);
+          setHistory((items) => updateTurnRecord(items, turnId, (item) => ({ ...item, changes: item.changes.filter((change) => change.cellId !== cellId) })));
+          setTurn((item) => item?.turnId === turnId ? { ...item, changes: item.changes.filter((change) => change.cellId !== cellId) } : item);
+        })} />
       <AgentChatPanel notebook={notebook} scope={scope} turn={selectedTurn} activeTurn={activeTurn} history={history} operation={operation} busy={busy} mutationsDisabled={mutationsDisabled}
         onClearScope={() => void mutate(() => api.clearScope(notebook), { refreshAfter: false }, setScope)}
         onSubmit={(prompt) => { const frozen = { ...scope, editableCellIds: [...scope.editableCellIds], contextCellIds: [...scope.contextCellIds] }; void mutate(() => api.startTurn(notebook, prompt), { refreshAfter: false }, (result) => { setTurn(result); setSelectedTurnId(result.turnId); setHistory((items) => upsertRecord(items, result, frozen, prompt)); }); }}
         onCancel={() => activeTurn && void mutate(() => api.cancelTurn(notebook, activeTurn.turnId), { refreshAfter: false }, (result) => { setTurn(result); setHistory((items) => upsertRecord(items, result)); })}
-        onUndo={() => selectedTurn && void mutate(() => api.undoTurn(notebook, selectedTurn.turnId), { refreshAfter: false }, setNotebook)}
+        onUndo={() => selectedTurn && void mutate(() => api.undoTurn(notebook, selectedTurn.turnId), {}, (updated) => {
+          setNotebook(updated);
+          setHistory((items) => updateTurnRecord(items, selectedTurn.turnId, (item) => ({ ...item, undoEligible: false, changes: [] })));
+          setTurn((item) => item?.turnId === selectedTurn.turnId ? { ...item, undoEligible: false, changes: [] } : item);
+        })}
         onDecision={(attempt: ExecutionAttempt, decision) => operation && void mutate(() => api.decide(operation, attempt, decision), { refreshAfter: false }, setOperation)}
         onSelectTurn={setSelectedTurnId} onFocusCell={requestCellFocus} onDropCell={(cellId) => void mutate(() => api.addScope(notebook, cellId, true), { refreshAfter: false }, setScope)} />
     </div>
@@ -221,6 +235,42 @@ function upsertRecord(items: TurnRecord[], turn: AgentTurn, scope?: TurnScope, p
 
 function turnToRecord(turn: AgentTurn): TurnRecord {
   return { turn, editableCellIds: turn.editableCellIds, contextCellIds: turn.contextCellIds, prompt: turn.prompt };
+}
+
+function reconcileHistory(summaries: TurnRecord[], existing: TurnRecord[], notebook: NotebookSnapshot): TurnRecord[] {
+  return summaries.map((summary) => {
+    const detail = existing.find((item) => item.turn.turnId === summary.turn.turnId);
+    const turn = summary.turn.historyTruncated && detail && !detail.turn.historyTruncated
+      ? {
+        ...summary.turn,
+        prompt: detail.turn.prompt,
+        editableCellIds: detail.turn.editableCellIds,
+        contextCellIds: detail.turn.contextCellIds,
+        finalOutput: detail.turn.finalOutput,
+        changes: detail.turn.changes,
+        error: detail.turn.error,
+        historyTruncated: false,
+      }
+      : summary.turn;
+    return {
+      turn: reconcileTurnChanges(turn, notebook),
+      editableCellIds: detail?.editableCellIds ?? summary.editableCellIds,
+      contextCellIds: detail?.contextCellIds ?? summary.contextCellIds,
+      prompt: detail && summary.turn.historyTruncated ? detail.prompt : summary.prompt,
+    };
+  });
+}
+
+function reconcileTurnChanges(turn: AgentTurn, notebook: NotebookSnapshot | null): AgentTurn {
+  if (!notebook) return turn;
+  return {
+    ...turn,
+    changes: turn.changes.filter((change) => notebook.cells.find((cell) => cell.cellId === change.cellId)?.source === change.nextSource),
+  };
+}
+
+function updateTurnRecord(items: TurnRecord[], turnId: string, update: (turn: AgentTurn) => AgentTurn): TurnRecord[] {
+  return items.map((item) => item.turn.turnId === turnId ? { ...item, turn: update(item.turn) } : item);
 }
 
 function Notice({ notice, onClose }: { notice: { tone: "error" | "warning"; text: string }; onClose: () => void }) {

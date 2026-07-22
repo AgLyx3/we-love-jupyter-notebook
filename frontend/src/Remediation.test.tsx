@@ -181,6 +181,89 @@ describe("remediation behaviors", () => {
     expect(within(screen.getByLabelText("Frozen turn scope")).getAllByTitle("Cell ID: code-1")).toHaveLength(2);
   });
 
+  it("hydrates a truncated selected turn before showing its large diff", async () => {
+    const prefix = Array.from({ length: 400 }, (_, index) => `shared line ${index}`).join("\n");
+    const previousSource = `${prefix}\nold ending`;
+    const nextSource = `${prefix}\nfull detail ending`;
+    const detailed = {
+      ...turn("large"),
+      changes: [{ cellId: "code-1", previousSource, nextSource }],
+      historyTruncated: false,
+    };
+    const summary = {
+      ...detailed,
+      changes: [{ cellId: "code-1", previousSource: previousSource.slice(0, 2048) + "...", nextSource: nextSource.slice(0, 2048) + "..." }],
+      historyTruncated: true,
+    };
+    const current = { ...notebook, cells: [{ ...notebook.cells[0], source: nextSource }] };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current")) return json(current);
+      if (path.endsWith("/session/status")) return json({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: null, turnHistory: [summary] });
+      if (path.endsWith("/agent-turns/large")) return json(detailed);
+      return baseFetch(input, init);
+    });
+    render(<App />);
+    const disclosure = await screen.findByText("Agent change");
+    await userEvent.click(disclosure);
+    expect(await screen.findByText("full detail ending")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/agent-turns/large"), expect.anything());
+  });
+
+  it("refreshes turn eligibility and clears inline changes after undo", async () => {
+    const applied = {
+      ...turn("undoable"),
+      changes: [{ cellId: "code-1", previousSource: "a = 1\nprint(a)", nextSource: "a = 2\nprint(a)" }],
+      historyTruncated: false,
+    };
+    let current = { ...notebook, cells: [{ ...notebook.cells[0], source: applied.changes[0].nextSource }] };
+    let undone = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current")) return json(current);
+      if (path.endsWith("/session/status")) return json({ sessionId: "session-1", documentRevision: current.revision, activeTurn: null, activeExecution: null, turnHistory: [{ ...applied, undoEligible: !undone }] });
+      if (path.endsWith("/agent-turns/undoable/undo") && init?.method === "POST") {
+        undone = true;
+        current = { ...notebook, revision: 4, cells: [{ ...notebook.cells[0], source: applied.changes[0].previousSource }] };
+        return json(current);
+      }
+      return baseFetch(input, init);
+    });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Undo turn" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Undo turn" })).not.toBeInTheDocument());
+    expect(screen.queryByLabelText("Revert agent change to code cell 1")).not.toBeInTheDocument();
+    expect(screen.queryByText("Agent change")).not.toBeInTheDocument();
+    expect(screen.getByText("Revision 4")).toBeInTheDocument();
+  });
+
+  it("removes a reverted cell change so it cannot be submitted twice", async () => {
+    const applied = {
+      ...turn("revertible"),
+      undoEligible: false,
+      changes: [{ cellId: "code-1", previousSource: "a = 1\nprint(a)", nextSource: "a = 2\nprint(a)" }],
+      historyTruncated: false,
+    };
+    let current = { ...notebook, cells: [{ ...notebook.cells[0], source: applied.changes[0].nextSource }] };
+    let revertCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current")) return json(current);
+      if (path.endsWith("/session/status")) return json({ sessionId: "session-1", documentRevision: current.revision, activeTurn: null, activeExecution: null, turnHistory: [applied] });
+      if (path.endsWith("/agent-turns/revertible/cells/code-1/revert") && init?.method === "POST") {
+        revertCalls += 1;
+        current = { ...notebook, revision: 4 };
+        return json(current);
+      }
+      return baseFetch(input, init);
+    });
+    render(<App />);
+    await userEvent.click(await screen.findByLabelText("Revert agent change to code cell 1"));
+    await waitFor(() => expect(screen.queryByLabelText("Revert agent change to code cell 1")).not.toBeInTheDocument());
+    expect(screen.queryByText("Agent change")).not.toBeInTheDocument();
+    expect(revertCalls).toBe(1);
+  });
+
   it("ignores late refreshes and clears absent active operations", async () => {
     let currentCall = 0; let statusCall = 0;
     let resolveOlder!: (value: Response) => void; let resolveNewer!: (value: Response) => void;
