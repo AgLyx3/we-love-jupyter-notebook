@@ -443,7 +443,6 @@ class KernelExecutionService:
                 operation.cancel_event.set()
                 operation.state = "cancelled"
                 operation.completed_at = datetime.now(timezone.utc)
-                self._prune_history_locked()
                 matched_operation = operation
 
         try:
@@ -454,7 +453,10 @@ class KernelExecutionService:
         except Exception as error:
             if matched_operation is not None:
                 with self._lock:
-                    attempt = self._attempts[execution_attempt_id][1]
+                    attempt = next(
+                        item for item in matched_operation.attempts
+                        if item.attempt_id == execution_attempt_id
+                    )
                     attempt.state = "failed"
                     attempt.error = {
                         "code": "kernel_restart_failed",
@@ -463,11 +465,15 @@ class KernelExecutionService:
                     matched_operation.state = "failed"
                     matched_operation.error = copy.deepcopy(attempt.error)
                 self._publish(matched_operation)
+                with self._lock:
+                    self._prune_history_locked()
             raise
         if not matched:
             raise KernelSessionConflict()
         if matched_operation is not None:
             self._publish(matched_operation)
+            with self._lock:
+                self._prune_history_locked()
         return self.kernel_status()
 
     def shutdown(self) -> None:

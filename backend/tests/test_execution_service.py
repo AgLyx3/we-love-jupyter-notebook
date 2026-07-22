@@ -8,7 +8,7 @@ import pytest
 
 from backend.app.kernel_execution.kernel_session import KernelResult, KernelSession
 from backend.app.kernel_execution.models import (
-    ExecutionDecisionConflict, KernelCellTimeout, KernelExecutionCancelled,
+    CellExecutionAttempt, ExecutionDecisionConflict, KernelCellTimeout, KernelExecutionCancelled,
     KernelOutputLimitExceeded, KernelRestartRequired,
 )
 from backend.app.kernel_execution.models import ExecutionNotFound
@@ -787,6 +787,42 @@ def test_restart_failure_marks_correlated_attempt_structured_and_inactive():
     assert failed.state == "failed"
     assert failed.error["code"] == "kernel_restart_failed"
     assert failed.attempts[0].active is False
+
+
+def test_restart_failure_preserves_original_error_when_history_evicts_operation():
+    class FailingRestartKernel(FakeKernel):
+        def restart_correlated(self, kernel_session_id, attempt_id, on_matched=None):
+            if on_matched is not None:
+                on_matched()
+            raise RuntimeError("restart failed before eviction")
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook("value = 1"))
+    kernel = FailingRestartKernel()
+    service = KernelExecutionService(
+        documents=documents, kernel=kernel, max_history_bytes=1,
+    )
+    operation = service.create_downstream(
+        parent_turn_id="turn-1", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, cancel_event=threading.Event(),
+    )
+    attempt = CellExecutionAttempt(
+        "attempt-1", operation.operation_id, "cell-0", 0,
+        "hash", snapshot.revision, state="running",
+    )
+    with service._lock:
+        stored = service._operations[operation.operation_id]
+        stored.state = "running"
+        stored.current_attempt_id = attempt.attempt_id
+        stored.attempts.append(attempt)
+        service._attempts[attempt.attempt_id] = (stored, attempt)
+    kernel.busy_attempt_id = attempt.attempt_id
+
+    with pytest.raises(RuntimeError, match="restart failed before eviction"):
+        service.restart(kernel.kernel_session_id, execution_attempt_id=attempt.attempt_id)
+
+    with pytest.raises(ExecutionNotFound):
+        service.get(operation.operation_id)
 
 
 def test_kernel_message_output_state_machine_and_stdin_policy():
