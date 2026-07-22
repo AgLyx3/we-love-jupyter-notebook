@@ -27,6 +27,8 @@ medium Jupyter notebooks and AI coding agents.
 - Provide a local notebook-first editor with native AI scope controls.
 - Make it obvious which cells the agent can edit in the current turn.
 - Mechanically enforce the editable-cell boundary in the backend.
+- Support read-only agent turns that answer or explain through the same scope
+  selector and write boundary, without requiring an edit.
 - Provide Cursor-style immediate application of valid changes with visible color-coded diffs.
 - Provide whole-turn undo in chat and per-cell revert in the notebook UI.
 - Run affected downstream notebook cells after valid edits and show results to both user and future agent context.
@@ -171,6 +173,9 @@ Rules:
 - A cell mentioned as editable in one turn is not editable in the next turn unless explicitly added again.
 - Drag/drop into chat adds a cell to the editable set by default.
 - Cell gutter controls expose both "Add as context" and "Add to edit".
+- The editable set may be empty. A turn with no editable cells is a valid
+  read-only turn: the agent reads and answers but is granted no write surface.
+  Context cells are optional and independent of whether the turn can write.
 
 Core use cases:
 
@@ -537,6 +542,34 @@ Write enforcement:
 - The live `.ipynb` document is never edited directly by the CLI agent.
 - Only validated source changes from editable temp files can enter the notebook.
 
+Read-only turns:
+
+- The editor is a scoped-context selector wrapped in a write boundary; editing
+  is one thing an agent may do inside that boundary, not a requirement of every
+  turn. A turn with an empty editable set is a valid read-only turn — for
+  example "explain what these cells do".
+- A read-only turn is the strongest case of the same boundary: an empty editable
+  set is zero write surface, so no candidate change can be valid. The turn
+  completes as a no-op whose payload is the agent's final textual answer, with no
+  applied changes and no downstream execution.
+- Read-only turns require a prompt but no editable or context cells. They read
+  the full notebook like any turn; because context is already not a read
+  boundary, a read-only turn changes nothing about confidentiality — it only
+  removes write capability.
+
+Edit permission is a grant, not an obligation:
+
+- Placing a cell in the editable set grants write permission for the turn; it
+  does not require the agent to write. The agent answers the request first and
+  edits only when the request calls for a concrete change.
+- A question asked with editable cells in scope (for example "what would be
+  useful here?") may complete with only an answer and no change, using the same
+  empty-candidate no-op path as any other turn. When the agent does edit, it
+  explains the change; the applied edit is reviewable through the diff and
+  reversible through per-cell revert and whole-turn undo.
+- The turn instructions state this explicitly so the agent does not treat edit
+  permission as a command to modify code.
+
 ## Cell Identity
 
 Cell boundaries use standard nbformat cell IDs.
@@ -635,6 +668,10 @@ Rules:
 
 - The CLI agent may read the temp workspace.
 - The CLI agent may edit files listed in `editableCells`.
+- When the editable set is empty (a read-only turn), the app launches the adapter
+  with a read-only tool set (no edit or write tools) and writes no editable
+  files. The boundary is then enforced at the tool level as well as by the
+  workspace audit — the agent cannot attempt a write at all.
 - The app configures the supported adapter so terminal/tool execution requests
   are denied and never approved by the app in v1.
 - If the adapter reports a terminal request or loses the configured denial
@@ -648,7 +685,9 @@ execution policy.
 
 ## Agent Turn Flow
 
-1. User adds editable/context cells for the next turn.
+1. User adds editable/context cells for the next turn. The editable set may be
+   left empty for a read-only turn, in which case the workspace has no writable
+   editable files and the adapter runs with a read-only tool set.
 2. User sends prompt.
 3. Backend validates the request revision and atomically acquires the mutation
    lease, freezes the turn scope, and checkpoints the full notebook document.
@@ -1314,6 +1353,32 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
 - Decision: Edit permissions expire after every agent turn.
 - Alternatives: Thread-level persistent permissions.
 - Rationale: Prevents stale permission assumptions and makes each turn explicit.
+
+### Read-Only Turns
+
+- Decision: Allow agent turns with an empty editable set as read-only turns
+  (e.g. "explain these cells"). Launch the adapter with a read-only tool set and
+  no writable files, and complete the turn as a no-op whose payload is the
+  agent's final answer.
+- Alternatives: Require at least one editable cell for every turn; add a separate
+  chat/Q&A surface disconnected from cell scope.
+- Rationale: The product is a scoped-context selector wrapped in a write
+  boundary, not an edit-only tool. A read-only turn is the strongest case of the
+  same boundary (zero write surface), so it needs no new mechanism and keeps
+  scope selection and answering in one place.
+
+### Edit Permission Is A Grant
+
+- Decision: Treat an editable cell as write permission, not a command to write.
+  The turn instructions tell the agent to answer the request first and edit only
+  when it calls for a concrete change; an editable turn may complete with only an
+  answer.
+- Alternatives: Always edit when any cell is editable; add a separate "ask" mode
+  toggle distinct from scope.
+- Rationale: Users often ask questions with cells already scoped for editing
+  ("what would be useful here?"). Forcing an edit produces unwanted changes and
+  buries the answer. Answer-first, edit-when-warranted keeps the same immediate-
+  apply-with-diff model without compelling edits.
 
 ### Boundary Violation Handling
 
