@@ -27,6 +27,7 @@ def serialize_turn(turn: AgentTurn) -> dict[str, Any]:
         "turnId": turn.turn_id,
         "sessionId": turn.session_id,
         "baseRevision": turn.base_revision,
+        "prompt": turn.prompt,
         "state": turn.state,
         "attempts": turn.attempts,
         "finalOutput": turn.final_output,

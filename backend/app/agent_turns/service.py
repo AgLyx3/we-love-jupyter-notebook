@@ -145,6 +145,20 @@ class AgentTurnService:
             except KeyError as error:
                 raise AgentTurnNotFound(turn_id) from error
 
+    def active_for_session(self, session_id: str) -> AgentTurn | None:
+        with self._lock:
+            active = [
+                turn for turn in self._turns.values()
+                if turn.session_id == session_id and turn.state not in TERMINAL_STATES
+            ]
+            if not active:
+                return None
+            turn = max(active, key=lambda item: item.created_at)
+            result = copy.copy(turn)
+            result.checkpoint = copy.deepcopy(result.checkpoint)
+            result.error = copy.deepcopy(result.error)
+            return result
+
     def cancel(
         self, turn_id: str, *, session_id: str, expected_revision: int,
     ) -> AgentTurn:

@@ -13,6 +13,7 @@ from .api.agent_turn_routes import router as agent_turn_router
 from .api.turn_scope_routes import router as turn_scope_router
 from .api.execution_routes import router as execution_router
 from .api.event_routes import router as event_router
+from .api.session_routes import router as session_router
 from .agent_turns.service import AgentTurnService
 from .agent_workspace.adapters import FakeAgentAdapter
 from .agent_workspace.models import AgentAdapter
@@ -62,6 +63,7 @@ def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
     app.include_router(agent_turn_router)
     app.include_router(execution_router)
     app.include_router(event_router)
+    app.include_router(session_router)
 
     @app.exception_handler(NotebookDomainError)
     async def notebook_error_handler(

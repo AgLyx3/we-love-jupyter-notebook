@@ -1,10 +1,11 @@
 import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
 
-export default function CellEditor({ value, label, onChange, onSave }: { value: string; label: string; onChange: (value: string) => void; onSave: () => void }) {
+export default function CellEditor({ value, label, disabled, onChange, onSave }: { value: string; label: string; disabled: boolean; onChange: (value: string) => void; onSave: () => void }) {
   return <CodeMirror
     value={value}
     aria-label={label}
+    readOnly={disabled}
     extensions={[python()]}
     basicSetup={{ lineNumbers: true, foldGutter: false, highlightActiveLine: true }}
     onChange={onChange}

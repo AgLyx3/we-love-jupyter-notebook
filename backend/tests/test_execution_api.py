@@ -50,6 +50,37 @@ def test_manual_execution_api_returns_pollable_operation(client, notebook_payloa
     assert current["currentDocumentRevision"] == uploaded["revision"] + 1
 
 
+def test_session_status_discovers_active_operation(client, notebook_payload):
+    uploaded = client.post(
+        "/notebooks/upload",
+        files={"file": ("example.ipynb", notebook_payload(), "application/json")},
+    ).json()
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingKernel(ApiKernel):
+        def execute(self, source, attempt_id):
+            self.busy_attempt_id = attempt_id
+            entered.set()
+            assert release.wait(2)
+            self.busy_attempt_id = None
+            return KernelResult([], 1, False)
+
+    client.app.state.kernel_execution_service.kernel = BlockingKernel()
+    created = client.post("/execution/cells/editable/run", json={
+        "sessionId": uploaded["sessionId"],
+        "expectedDocumentRevision": uploaded["revision"],
+    }).json()
+    assert entered.wait(2)
+    status = client.get("/session/status").json()
+    assert status["sessionId"] == uploaded["sessionId"]
+    assert status["documentRevision"] == uploaded["revision"]
+    assert status["activeTurn"] is None
+    assert status["activeExecution"]["operationId"] == created["operationId"]
+    assert status["activeExecution"]["state"] == "running"
+    release.set()
+
+
 def test_kernel_restart_rejects_stale_session(client, notebook_payload):
     uploaded = client.post("/notebooks/upload", files={"file": ("example.ipynb", notebook_payload(), "application/json")}).json()
     client.app.state.kernel_execution_service.kernel = ApiKernel()

@@ -33,6 +33,7 @@ export interface AgentTurn {
   turnId: string;
   sessionId: string;
   baseRevision: number;
+  prompt: string;
   state: string;
   attempts: number;
   finalOutput: string | null;
@@ -77,6 +78,13 @@ export interface KernelStatus {
   executionAttemptId: string | null;
 }
 
+export interface SessionStatus {
+  sessionId: string;
+  documentRevision: number;
+  activeTurn: AgentTurn | null;
+  activeExecution: ExecutionOperation | null;
+}
+
 export interface ApiErrorBody { code: string; message: string; details: Record<string, unknown> }
 
 export class ApiError extends Error {
@@ -97,12 +105,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function blobRequest(path: string): Promise<Blob> {
+  const response = await fetch(`${API}${path}`);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: ApiErrorBody } | null;
+    throw new ApiError(response.status, payload?.error ?? { code: "download_failed", message: "Notebook download failed", details: {} });
+  }
+  return response.blob();
+}
+
 const mutation = (snapshot: NotebookSnapshot) => ({ sessionId: snapshot.sessionId, expectedDocumentRevision: snapshot.revision });
 
 export const api = {
   current: () => request<NotebookSnapshot>("/notebooks/current"),
   scope: () => request<TurnScope>("/turn-scope"),
   kernel: () => request<KernelStatus>("/kernel/status"),
+  status: () => request<SessionStatus>("/session/status"),
+  download: () => blobRequest("/notebooks/download"),
   upload: (file: File, current?: NotebookSnapshot) => {
     const body = new FormData();
     body.append("file", file);
@@ -124,11 +143,13 @@ export const api = {
   cancelTurn: (snapshot: NotebookSnapshot, id: string) => request<AgentTurn>(`/agent-turns/${encodeURIComponent(id)}/cancel`, { method: "POST", body: JSON.stringify(mutation(snapshot)) }),
   undoTurn: (snapshot: NotebookSnapshot, id: string) => request<NotebookSnapshot>(`/agent-turns/${encodeURIComponent(id)}/undo`, { method: "POST", body: JSON.stringify(mutation(snapshot)) }),
   revertCell: (snapshot: NotebookSnapshot, turnId: string, cellId: string) => request<NotebookSnapshot>(`/agent-turns/${encodeURIComponent(turnId)}/cells/${encodeURIComponent(cellId)}/revert`, { method: "POST", body: JSON.stringify(mutation(snapshot)) }),
-  decide: (snapshot: NotebookSnapshot, operation: ExecutionOperation, attempt: ExecutionAttempt, decision: "approve" | "skip" | "cancel") =>
-    request<ExecutionOperation>(`/execution/${encodeURIComponent(attempt.executionAttemptId)}/${decision}`, { method: "POST", body: JSON.stringify({ ...mutation(snapshot), turnId: operation.parentTurnId, cellId: attempt.cellId }) }),
+  decide: (operation: ExecutionOperation, attempt: ExecutionAttempt, decision: "approve" | "skip" | "cancel") => {
+    if (operation.currentDocumentRevision == null) throw new Error("Execution correlation is incomplete");
+    return request<ExecutionOperation>(`/execution/${encodeURIComponent(attempt.executionAttemptId)}/${decision}`, { method: "POST", body: JSON.stringify({ sessionId: operation.sessionId, expectedDocumentRevision: operation.currentDocumentRevision, turnId: operation.parentTurnId, cellId: attempt.cellId }) });
+  },
 };
 
-export function connectEvents(sessionId: string, handlers: { notebook: () => void; turn: (id: string) => void; execution: (id: string) => void; disconnected: () => void }) {
+export function connectEvents(sessionId: string, handlers: { notebook: () => void; turn: (id: string) => void; execution: (id: string) => void; disconnected: () => void; connected: () => void }) {
   const source = new EventSource(`${API}/events?sessionId=${encodeURIComponent(sessionId)}`);
   const listen = (name: string, callback: (data: Record<string, unknown>) => void) => source.addEventListener(name, (event) => {
     const envelope = JSON.parse((event as MessageEvent).data) as { data: Record<string, unknown> };
@@ -138,5 +159,6 @@ export function connectEvents(sessionId: string, handlers: { notebook: () => voi
   listen("turn.updated", (data) => handlers.turn(String(data.turnId)));
   listen("execution.updated", (data) => handlers.execution(String(data.operationId)));
   source.onerror = () => handlers.disconnected();
+  source.onopen = () => handlers.connected();
   return () => source.close();
 }

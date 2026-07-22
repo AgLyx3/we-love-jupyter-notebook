@@ -387,6 +387,18 @@ class KernelExecutionService:
                 raise ExecutionNotFound(execution_id)
             return self._copy_operation(operation)
 
+    def active_for_session(self, session_id: str) -> ExecutionOperation | None:
+        with self._lock:
+            self._prune_history_locked()
+            active = [
+                operation for operation in self._operations.values()
+                if operation.session_id == session_id
+                and operation.state not in TERMINAL_EXECUTION_STATES
+            ]
+            if not active:
+                return None
+            return self._copy_operation(max(active, key=lambda item: item.created_at))
+
     def kernel_status(self) -> dict[str, Any]:
         return {"kernelSessionId": self.kernel.kernel_session_id, "state": self.kernel.status, "executionAttemptId": self.kernel.busy_attempt_id}
 
