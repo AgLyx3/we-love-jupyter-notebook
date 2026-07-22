@@ -110,6 +110,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const payload = await response.json().catch(() => null) as { error?: ApiErrorBody } | null;
     throw new ApiError(response.status, payload?.error ?? { code: "request_failed", message: response.statusText || "Request failed", details: {} });
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -130,6 +131,7 @@ export const api = {
   kernel: () => request<KernelStatus>("/kernel/status"),
   status: () => request<SessionStatus>("/session/status"),
   download: () => blobRequest("/notebooks/download"),
+  close: (snapshot: NotebookSnapshot) => request<void>("/notebooks/current", { method: "DELETE", body: JSON.stringify(mutation(snapshot)) }),
   upload: (file: File, current?: NotebookSnapshot) => {
     const body = new FormData();
     body.append("file", file);

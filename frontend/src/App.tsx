@@ -184,12 +184,30 @@ export default function App() {
     } catch (error) { showError(error); }
     finally { if (url) URL.revokeObjectURL(url); }
   };
+  const handleClose = () => {
+    if (!notebook) return;
+    void mutate(() => api.close(notebook), { refreshAfter: false }, () => {
+      setNotebook(null);
+      setScope(emptyScope);
+      setKernel(emptyKernel);
+      setTurn(null);
+      setHistory([]);
+      setSelectedTurnId(null);
+      setOperation(null);
+      setDirtyCellIds(new Set());
+      setFocusRequest(null);
+      setPolling(false);
+      eventCursorRef.current = { sessionId: "", sequence: 0 };
+      turnGenerationRef.current.clear();
+      executionGenerationRef.current.clear();
+    });
+  };
   const requestCellFocus = (cellId: string) => setFocusRequest((current) => ({ cellId, requestId: (current?.requestId ?? 0) + 1 }));
 
   if (loading) return <div className="loading-screen"><span className="spinner" />Loading notebook…</div>;
 
   if (!notebook) return <div className="app-shell empty-shell">
-    <header className="topbar"><div className="brand"><BookOpen /><strong>Notebook Agent</strong></div><FileToolbar notebook={null} onUpload={handleUpload} onDownload={() => void handleDownload()} /></header>
+    <header className="topbar"><div className="brand"><BookOpen /><strong>Notebook Agent</strong></div><FileToolbar notebook={null} onUpload={handleUpload} onDownload={() => void handleDownload()} onClose={handleClose} /></header>
     <main className="upload-state"><BookOpen /><h1>Open a notebook to begin</h1><p>Upload a local <code>.ipynb</code> file. Edits remain in this editor until downloaded.</p><label className="upload-button">Choose notebook<input type="file" accept=".ipynb,application/x-ipynb+json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleUpload(file); }} /></label></main>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
   </div>;
@@ -203,7 +221,7 @@ export default function App() {
   return <div className="app-shell">
     <header className="topbar">
       <div className="brand"><BookOpen /><strong>{notebook.filename}</strong><span className={notebook.dirty ? "dirty" : ""}>{notebook.dirty ? "Unsaved" : "Clean"}</span><span>Revision {notebook.revision}</span></div>
-      <div className="toolbar-actions"><KernelControls status={kernel} mutationDisabled={mutationsDisabled || busy || hasDirtyDrafts} onRunAll={() => void mutate(() => api.runAll(notebook), { refreshAfter: false }, setOperation)} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} /><FileToolbar notebook={notebook} uploadDisabled={mutationsDisabled || busy || hasDirtyDrafts} onUpload={handleUpload} onDownload={() => void handleDownload()} /></div>
+      <div className="toolbar-actions"><KernelControls status={kernel} mutationDisabled={mutationsDisabled || busy || hasDirtyDrafts} onRunAll={() => void mutate(() => api.runAll(notebook), { refreshAfter: false }, setOperation)} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} /><FileToolbar notebook={notebook} uploadDisabled={mutationsDisabled || busy || hasDirtyDrafts} closeDisabled={mutationsDisabled || busy || hasDirtyDrafts} onUpload={handleUpload} onDownload={() => void handleDownload()} onClose={handleClose} /></div>
     </header>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
     <div className="editor-layout">

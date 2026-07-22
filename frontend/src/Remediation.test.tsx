@@ -46,6 +46,7 @@ describe("remediation behaviors", () => {
     expect(await screen.findByLabelText("Run code cell 1")).toBeDisabled();
     expect(screen.getByLabelText("Allow agent edit code cell 1")).toBeDisabled();
     expect(screen.getByLabelText("Upload notebook").querySelector("input")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Close notebook" })).toBeDisabled();
     expect(screen.getByLabelText("Download notebook")).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: "Cancel run" }));
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/execution/attempt-1/cancel"), expect.objectContaining({ body: JSON.stringify({ sessionId: "session-1", expectedDocumentRevision: 7, turnId: null, cellId: "code-1" }) }));

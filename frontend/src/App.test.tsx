@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import AgentChatPanel from "./agentChat/AgentChatPanel";
+import FileToolbar from "./fileOperations/FileToolbar";
 import type { NotebookSnapshot, TurnScope } from "./api/client";
 
 vi.mock("@uiw/react-codemirror", () => ({
@@ -26,11 +27,76 @@ function response(value: unknown, status = 200) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("Notebook editor", () => {
+  it("shows a close control only for a loaded notebook", async () => {
+    const onClose = vi.fn();
+    const view = render(<FileToolbar notebook={notebook} onUpload={vi.fn()} onDownload={vi.fn()} onClose={onClose} />);
+    const close = screen.getByRole("button", { name: "Close notebook" });
+    expect(close).toHaveAttribute("title", "Close notebook");
+    await userEvent.click(close);
+    expect(onClose).toHaveBeenCalledOnce();
+
+    view.rerender(<FileToolbar notebook={null} onUpload={vi.fn()} onDownload={vi.fn()} onClose={onClose} />);
+    expect(screen.queryByRole("button", { name: "Close notebook" })).not.toBeInTheDocument();
+  });
+
   it("shows an upload state when no notebook is loaded", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(() => response({ error: { code: "notebook_not_loaded", message: "No notebook is loaded", details: {} } }, 404));
     render(<App />);
     expect(screen.getByText("Loading notebook…")).toBeInTheDocument();
     expect(await screen.findByText("Open a notebook to begin")).toBeInTheDocument();
+  });
+
+  it("closes the current notebook and resets to the upload screen", async () => {
+    const historical = {
+      turnId: "turn-1", sessionId: notebook.sessionId, baseRevision: notebook.revision,
+      prompt: "Persisted turn", editableCellIds: ["code-1"], contextCellIds: [],
+      undoEligible: false, state: "failed", attempts: 1, finalOutput: null,
+      appliedRevision: null, executionOperationId: null, changes: [], error: null,
+      createdAt: "", completedAt: "", historyTruncated: false,
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current") && init?.method === "DELETE") return Promise.resolve(new Response(null, { status: 204 }));
+      if (path.endsWith("/notebooks/current")) return response(notebook);
+      if (path.endsWith("/turn-scope")) return response({ editableCellIds: ["code-1"], contextCellIds: [], sessionId: notebook.sessionId, notebookRevision: notebook.revision });
+      if (path.endsWith("/kernel/status")) return response({ state: "idle", kernelSessionId: "kernel-1", executionAttemptId: null });
+      if (path.endsWith("/session/status")) return response({ sessionId: notebook.sessionId, documentRevision: notebook.revision, activeTurn: null, activeExecution: null, turnHistory: [historical], turnHistoryTruncated: false });
+      return response({});
+    });
+    render(<App />);
+    expect(await screen.findByText("Persisted turn")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Close notebook" }));
+
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/notebooks/current"), expect.objectContaining({
+      method: "DELETE",
+      body: JSON.stringify({ sessionId: notebook.sessionId, expectedDocumentRevision: notebook.revision }),
+    }));
+    expect(await screen.findByText("Open a notebook to begin")).toBeInTheDocument();
+    expect(screen.queryByText("Persisted turn")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Close notebook" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the notebook open and refreshes after a close conflict", async () => {
+    let currentCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current") && init?.method === "DELETE") {
+        return response({ error: { code: "revision_conflict", message: "Notebook revision does not match", details: { currentDocumentRevision: 4 } } }, 409);
+      }
+      if (path.endsWith("/notebooks/current")) { currentCalls += 1; return response({ ...notebook, revision: currentCalls === 1 ? 3 : 4 }); }
+      if (path.endsWith("/turn-scope")) return response({ editableCellIds: [], contextCellIds: [], sessionId: notebook.sessionId, notebookRevision: currentCalls === 1 ? 3 : 4 });
+      if (path.endsWith("/kernel/status")) return response({ state: "not_started", kernelSessionId: null, executionAttemptId: null });
+      if (path.endsWith("/session/status")) return response({ sessionId: notebook.sessionId, documentRevision: currentCalls === 1 ? 3 : 4, activeTurn: null, activeExecution: null, turnHistory: [], turnHistoryTruncated: false });
+      return response({});
+    });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Close notebook" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Notebook changed elsewhere");
+    expect(await screen.findByText("Revision 4")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close notebook" })).toBeEnabled();
+    expect(screen.queryByText("Open a notebook to begin")).not.toBeInTheDocument();
   });
 
   it("adds cells to editable and context scope", async () => {
@@ -146,6 +212,7 @@ describe("Notebook editor", () => {
     expect(screen.getByLabelText("Allow agent edit code cell 2")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     expect(screen.getByLabelText("Upload notebook").querySelector("input")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Close notebook" })).toBeDisabled();
     expect(screen.getByLabelText("Download notebook")).toBeEnabled();
   });
 
