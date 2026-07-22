@@ -54,9 +54,9 @@ export default function NotebookCell({ cell, focused, editable, context, change,
         {dirty && <button disabled={disabled} title="Save source" aria-label={`Save ${description}`} onClick={() => onSave(source)}><Save /></button>}
         {change && <button disabled={dependentDisabled} title="Revert this agent change" aria-label={`Revert agent change to ${description}`} onClick={onRevert}><RotateCcw /></button>}
       </div>
-      {cell.cellType === "code" || cell.cellType === "raw" || editingMarkdown ? <CellEditor value={source} label={`Source for ${description}`} disabled={disabled} language={cell.cellType} onChange={setSource} onSave={() => dirty && onSave(source)} /> : <div className="markdown-preview"><ReactMarkdown>{source}</ReactMarkdown></div>}
+      {cell.cellType === "code" || cell.cellType === "raw" || editingMarkdown ? <CellEditor value={source} label={`Source for ${description}`} disabled={disabled} language={cell.cellType} change={change} onChange={setSource} onSave={() => dirty && onSave(source)} /> : <div className="markdown-preview"><ReactMarkdown>{source}</ReactMarkdown></div>}
       <Outputs outputs={cell.outputs} />
-      {change && <details className="cell-diff"><summary>Agent change</summary><LineDiff before={change.previousSource} after={change.nextSource} /></details>}
+      {change && <div className="cell-diff" aria-label="Agent change"><p className="cell-diff-label">Agent change</p><LineDiff before={change.previousSource} after={change.nextSource} /></div>}
     </div>
   </article>;
 }

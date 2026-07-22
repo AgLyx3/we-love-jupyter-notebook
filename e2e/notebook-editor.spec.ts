@@ -212,7 +212,6 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   await page.getByLabel("Agent instruction").press("Enter");
   await waitForTurn(page, /completed/);
   const diff = page.locator(".cell-diff").first();
-  await diff.locator("summary").click();
   await expect(diff.locator(".diff-removed")).toContainText("values = [2, 4, 6]");
   await expect(diff.locator(".diff-added")).toContainText("values = [3, 6, 9]");
   await expect(page.getByLabel("Cell output").filter({ hasText: "Total: 18" })).toBeVisible();

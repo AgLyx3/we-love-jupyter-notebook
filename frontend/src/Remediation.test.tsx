@@ -205,8 +205,7 @@ describe("remediation behaviors", () => {
       return baseFetch(input, init);
     });
     render(<App />);
-    const disclosure = await screen.findByText("Agent change");
-    await userEvent.click(disclosure);
+    expect(await screen.findByText("Agent change")).toBeInTheDocument();
     expect(await screen.findByText("full detail ending")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/agent-turns/large"), expect.anything());
   });
@@ -260,8 +259,8 @@ describe("remediation behaviors", () => {
     expect(await screen.findByText("failed")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText((_, element) => element?.tagName === "P" && element.textContent?.endsWith("full outcome tail") === true)).toBeInTheDocument());
     expect(screen.getByText((_, element) => element?.classList.contains("error-text") === true && element.textContent?.endsWith("full error tail") === true)).toBeInTheDocument();
-    await userEvent.click(screen.getByText("Agent change"));
-    expect(screen.getByText("full detail ending")).toBeInTheDocument();
+    expect(await screen.findByText("Agent change")).toBeInTheDocument();
+    expect(await screen.findByText("full detail ending")).toBeInTheDocument();
     expect(detailCalls).toBeGreaterThanOrEqual(1);
   });
 
