@@ -26,5 +26,6 @@ export default defineConfig({
     url: `http://127.0.0.1:${frontendPort}`,
     reuseExistingServer: false,
     timeout: 30_000,
+    gracefulShutdown: { signal: "SIGTERM", timeout: 10_000 },
   },
 });
