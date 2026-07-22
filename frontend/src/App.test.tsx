@@ -66,6 +66,40 @@ describe("Notebook editor", () => {
     await userEvent.click(screen.getByLabelText("Save code cell 2"));
     expect(await screen.findByRole("alert")).toHaveTextContent("Notebook changed elsewhere");
     await waitFor(() => expect(screen.getByText("Revision 4")).toBeInTheDocument());
+    expect(editor).toHaveValue("print('ok')");
+  });
+
+  it("preserves an unrelated unsaved draft when another cell save advances the revision", async () => {
+    let current = {
+      ...notebook,
+      cells: [
+        { ...notebook.cells[1], cellId: "code-a", index: 0, source: "a = 1" },
+        { ...notebook.cells[1], cellId: "code-b", index: 1, source: "b = 1" },
+      ],
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current")) return response(current);
+      if (path.endsWith("/turn-scope")) return response({ editableCellIds: [], contextCellIds: [], sessionId: null, notebookRevision: null });
+      if (path.endsWith("/kernel/status")) return response({ state: "not_started", kernelSessionId: null });
+      if (path.endsWith("/session/status")) return response({ sessionId: current.sessionId, documentRevision: current.revision, activeTurn: null, activeExecution: null, turnHistory: [] });
+      if (path.includes("/cells/code-a/source") && init?.method === "POST") {
+        current = { ...current, revision: 4, dirty: true, cells: current.cells.map((cell) => cell.cellId === "code-a" ? { ...cell, source: "a = 2" } : cell) };
+        return response({ sessionId: current.sessionId, cellId: "code-a", source: "a = 2", revision: 4, dirty: true });
+      }
+      return response({});
+    });
+    render(<App />);
+    const editorA = await screen.findByLabelText("Source for code cell 1");
+    const editorB = screen.getByLabelText("Source for code cell 2");
+    await userEvent.clear(editorA);
+    await userEvent.type(editorA, "a = 2");
+    await userEvent.clear(editorB);
+    await userEvent.type(editorB, "b = unsaved");
+    await userEvent.click(screen.getByLabelText("Save code cell 1"));
+    await waitFor(() => expect(screen.getByText("Revision 4")).toBeInTheDocument());
+    expect(editorA).toHaveValue("a = 2");
+    expect(editorB).toHaveValue("b = unsaved");
   });
 
   it("renders a fully correlated risky execution approval", async () => {

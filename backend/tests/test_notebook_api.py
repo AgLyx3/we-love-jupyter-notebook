@@ -9,6 +9,12 @@ def upload(client, payload, filename="sample.ipynb", **data):
     )
 
 
+def test_backend_readiness(client):
+    response = client.get("/health/ready")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+
+
 def test_upload_current_edit_and_download_round_trip(client, notebook_payload):
     response = upload(client, notebook_payload())
     assert response.status_code == 201

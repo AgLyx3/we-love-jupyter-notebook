@@ -26,15 +26,15 @@ export function Outputs({ outputs }: { outputs: Record<string, unknown>[] }) {
   })}</div>;
 }
 
-export default function NotebookCell({ cell, documentRevision, focused, editable, context, change, disabled, cellRef, onFocus, onSave, onRun, onAddEditable, onAddContext, onRevert }: {
+export default function NotebookCell({ cell, draftResetGeneration, focused, editable, context, change, disabled, cellRef, onFocus, onSave, onRun, onAddEditable, onAddContext, onRevert }: {
   cell: NotebookCellData; focused: boolean; editable: boolean; context: boolean; change?: AgentChange;
-  documentRevision: number;
+  draftResetGeneration: number;
   disabled: boolean; cellRef: (node: HTMLElement | null) => void;
   onFocus: () => void; onSave: (source: string) => void; onRun: () => void; onAddEditable: () => void; onAddContext: () => void; onRevert: () => void;
 }) {
   const [source, setSource] = useState(cell.source);
   const [editingMarkdown, setEditingMarkdown] = useState(false);
-  useEffect(() => setSource(cell.source), [cell.source, documentRevision]);
+  useEffect(() => setSource(cell.source), [cell.source, draftResetGeneration]);
   const dirty = source !== cell.source;
   const description = `${cell.cellType} cell ${cell.index + 1}`;
   return <article ref={cellRef} draggable={!disabled} onDragStart={(event) => { event.dataTransfer.setData("application/x-notebook-cell", cell.cellId); event.dataTransfer.effectAllowed = "copy"; }} className={`notebook-cell ${focused ? "is-focused" : ""}`} tabIndex={0} onFocus={onFocus} aria-label={description}>

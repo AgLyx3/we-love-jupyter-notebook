@@ -1,9 +1,15 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 const sample = path.resolve("examples/sample.ipynb");
 const terminalTurn = /completed|validation incomplete/;
 const backendUrl = `http://127.0.0.1:${process.env.E2E_BACKEND_PORT ?? "8001"}`;
+const frontendUrl = `http://127.0.0.1:${process.env.E2E_FRONTEND_PORT ?? "5174"}`;
+
+function sourceText(cell: { source: string | string[] }) {
+  return Array.isArray(cell.source) ? cell.source.join("") : cell.source;
+}
 
 async function replaceEditor(page: Page, label: string, source: string) {
   const editor = page.getByLabel(label).locator(".cm-content");
@@ -104,15 +110,32 @@ async function assertUsableLayout(page: Page) {
 }
 
 test("edits a notebook through scoped agent and execution workflows", async ({ page }, testInfo) => {
-  const consoleErrors: string[] = [];
+  const consoleErrors: Array<{ text: string; url: string }> = [];
+  const pageErrors: string[] = [];
   const unexpectedResponses: string[] = [];
   const allowedConsoleCounts = new Map<string, number>();
   const unexpectedRequestFailures: string[] = [];
+  let phase: "initial" | "upload" | "workflow" | "conflict" = "initial";
+  let initialNotFoundResponses = 0;
+  let intentionalConflictResponses = 0;
   let eventStreamTeardowns = 0;
-  page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
+  let replacedSessionId: string | null = null;
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push({ text: message.text(), url: message.location().url });
+  });
+  page.on("pageerror", (error) => pageErrors.push(error.message));
   page.on("requestfailed", (request) => {
     const failure = request.failure()?.errorText ?? "unknown failure";
-    if (request.url().includes("/api/events?") && failure === "net::ERR_ABORTED") {
+    const url = new URL(request.url());
+    const expectedEventTeardown = testInfo.project.name === "mobile"
+      && replacedSessionId !== null
+      && url.origin === frontendUrl
+      && url.pathname === "/api/events"
+      && url.searchParams.get("sessionId") === replacedSessionId
+      && url.searchParams.get("after") === "0"
+      && request.method() === "GET"
+      && failure === "net::ERR_ABORTED";
+    if (expectedEventTeardown) {
       eventStreamTeardowns += 1;
       return;
     }
@@ -120,22 +143,51 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   });
   page.on("response", (response) => {
     if (response.status() < 400) return;
-    const expectedInitial = response.status() === 404 && response.url().includes("/api/notebooks/current");
-    const expectedConflict = response.status() === 409 && response.url().includes("/api/cells/downstream/source");
+    const url = new URL(response.url());
+    const expectedInitial = testInfo.project.name === "desktop"
+      && phase === "initial"
+      && response.status() === 404
+      && response.request().method() === "GET"
+      && url.origin === frontendUrl
+      && url.pathname === "/api/notebooks/current"
+      && url.search === "";
+    const expectedConflict = phase === "conflict"
+      && response.status() === 409
+      && response.request().method() === "POST"
+      && url.origin === frontendUrl
+      && url.pathname === "/api/cells/downstream/source"
+      && url.search === "";
     if (!expectedInitial && !expectedConflict) {
       unexpectedResponses.push(`${response.status()} ${response.url()}`);
       return;
     }
+    if (expectedInitial) initialNotFoundResponses += 1;
+    if (expectedConflict) intentionalConflictResponses += 1;
     const statusText = response.status() === 404 ? "Not Found" : "Conflict";
     const message = `Failed to load resource: the server responded with a status of ${response.status()} (${statusText})`;
-    allowedConsoleCounts.set(message, (allowedConsoleCounts.get(message) ?? 0) + 1);
+    const key = `${message}\n${response.url()}`;
+    allowedConsoleCounts.set(key, (allowedConsoleCounts.get(key) ?? 0) + 1);
+  });
+  await expect.poll(async () => {
+    const response = await page.request.get(`${backendUrl}/health/ready`).catch(() => null);
+    return response?.status() ?? 0;
+  }, { timeout: 15_000 }).toBe(200);
+  const initialCurrent = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.origin === frontendUrl && url.pathname === "/api/notebooks/current" && response.request().method() === "GET";
   });
   await page.goto("/");
+  const initialCurrentResponse = await initialCurrent;
+  if (initialCurrentResponse.ok()) {
+    replacedSessionId = String((await initialCurrentResponse.json()).sessionId);
+  }
+  phase = "upload";
   const uploadFinished = page.waitForResponse((response) => response.url().includes("/api/notebooks/upload") && response.request().method() === "POST");
   await page.locator('input[type="file"]').first().setInputFiles(sample);
   expect((await uploadFinished).ok()).toBeTruthy();
   await expect(page.getByText("sample.ipynb", { exact: true })).toBeVisible();
   await expect(page.locator('input[type="file"]').first()).toBeEnabled();
+  phase = "workflow";
 
   await replaceEditor(page, "Source for code cell 4", "average = total / len(values)\nprint(f'Average: {average}')");
   const manualSave = page.waitForResponse((response) => response.url().includes("/api/cells/downstream/source") && response.request().method() === "POST");
@@ -186,6 +238,7 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
     expect(conflict.ok()).toBeTruthy();
     await route.continue();
   }, { times: 1 });
+  phase = "conflict";
   await page.getByLabel("Save code cell 4").click();
   await expect(page.getByRole("alert")).toContainText("Notebook changed elsewhere");
   await assertOverlayLayout(page, ".notice", "button");
@@ -195,13 +248,34 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   await page.getByLabel("Download notebook").click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe("sample.ipynb");
+  const downloadedPath = await download.path();
+  expect(downloadedPath).not.toBeNull();
+  const downloadedText = await readFile(downloadedPath!, "utf8");
+  expect(downloadedText.length).toBeGreaterThan(100);
+  const downloaded = JSON.parse(downloadedText) as {
+    nbformat: number;
+    cells: Array<{ id: string; cell_type: string; source: string | string[] }>;
+  };
+  expect(downloaded.nbformat).toBe(4);
+  expect(Array.isArray(downloaded.cells)).toBe(true);
+  expect(downloaded.cells.length).toBe(4);
+  expect(sourceText(downloaded.cells.find((cell) => cell.id === "parameters")!)).toBe("values = [2, 4, 6]\n");
+  expect(sourceText(downloaded.cells.find((cell) => cell.id === "safe-summary")!)).toContain("# external revision");
+  expect(sourceText(downloaded.cells.find((cell) => cell.id === "downstream")!)).toContain("Average: {average}");
+  expect(downloadedText).not.toContain("stale save");
 
   await assertUsableLayout(page);
   await page.screenshot({ path: testInfo.outputPath("notebook-editor.png"), fullPage: true });
   const observedConsoleCounts = new Map<string, number>();
-  for (const message of consoleErrors) observedConsoleCounts.set(message, (observedConsoleCounts.get(message) ?? 0) + 1);
-  for (const [message, count] of observedConsoleCounts) expect(count).toBeLessThanOrEqual(allowedConsoleCounts.get(message) ?? 0);
+  for (const message of consoleErrors) {
+    const key = `${message.text}\n${message.url}`;
+    observedConsoleCounts.set(key, (observedConsoleCounts.get(key) ?? 0) + 1);
+  }
+  expect(initialNotFoundResponses).toBe(testInfo.project.name === "desktop" ? 1 : 0);
+  expect(intentionalConflictResponses).toBe(1);
+  expect(observedConsoleCounts).toEqual(allowedConsoleCounts);
   expect(unexpectedResponses).toEqual([]);
   expect(unexpectedRequestFailures).toEqual([]);
-  expect(eventStreamTeardowns).toBeLessThanOrEqual(1);
+  expect(eventStreamTeardowns).toBe(testInfo.project.name === "mobile" ? 1 : 0);
+  expect(pageErrors).toEqual([]);
 });

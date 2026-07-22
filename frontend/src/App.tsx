@@ -24,6 +24,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ tone: "error" | "warning"; text: string } | null>(null);
+  const [draftResetRequest, setDraftResetRequest] = useState<{ cellId: string; generation: number } | null>(null);
   const [polling, setPolling] = useState(false);
   const snapshotRef = useRef(notebook);
   const scopeRef = useRef(scope);
@@ -119,7 +120,7 @@ export default function App() {
     setNotice({ tone: "error", text });
   }
 
-  async function mutate<T>(work: () => Promise<T>, options: { conflictText?: string; refreshAfter?: boolean } = {}, commit?: (result: T) => void) {
+  async function mutate<T>(work: () => Promise<T>, options: { conflictText?: string; refreshAfter?: boolean; onConflict?: () => void } = {}, commit?: (result: T) => void) {
     const mutationGeneration = ++mutationGenerationRef.current;
     resourceEpochRef.current += 1;
     setBusy(true); setNotice(null);
@@ -135,6 +136,7 @@ export default function App() {
       resourceEpochRef.current += 1;
       if (error instanceof ApiError && error.isConflict) {
         await refresh();
+        options.onConflict?.();
         setNotice({ tone: "warning", text: options.conflictText ?? "Notebook changed elsewhere. The latest revision has been loaded." });
       } else showError(error);
       return null;
@@ -178,10 +180,13 @@ export default function App() {
     </header>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
     <div className="editor-layout">
-      <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} disabled={mutationsDisabled || busy} focusRequest={focusRequest}
+      <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} disabled={mutationsDisabled || busy} focusRequest={focusRequest} draftResetRequest={draftResetRequest}
         onSave={(cellId, source) => void mutate(
           () => api.saveSource(notebook, cellId, source),
-          { conflictText: "Notebook changed elsewhere. Your unsaved edit was not applied; the latest revision has been loaded." },
+          {
+            conflictText: "Notebook changed elsewhere. Your unsaved edit was not applied; the latest revision has been loaded.",
+            onConflict: () => setDraftResetRequest((current) => ({ cellId, generation: (current?.generation ?? 0) + 1 })),
+          },
           (saved) => setNotebook((current) => current && current.sessionId === saved.sessionId ? {
             ...current,
             revision: saved.revision,

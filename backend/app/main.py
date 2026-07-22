@@ -66,6 +66,10 @@ def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
     app.include_router(event_router)
     app.include_router(session_router)
 
+    @app.get("/health/ready")
+    def health_ready() -> dict[str, str]:
+        return {"status": "ready"}
+
     @app.exception_handler(NotebookDomainError)
     async def notebook_error_handler(
         _request: Request, error: NotebookDomainError
