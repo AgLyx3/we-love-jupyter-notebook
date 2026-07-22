@@ -40,6 +40,14 @@ def signal_process_groups(
     return errors
 
 
+def _process_group_exists(process_group_id: int) -> bool:
+    try:
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
 def terminate_process_groups(
     children: list[subprocess.Popen[bytes]], *, grace_period: float = 5,
 ) -> list[str]:
@@ -59,8 +67,6 @@ def terminate_process_groups(
         uncertain = id(child) in uncertain_children
         try:
             exited = child.poll() is not None
-            if exited and not uncertain:
-                continue
         except OSError as error:
             errors.append(_process_error("poll", child, error))
             uncertain = True
@@ -75,24 +81,44 @@ def terminate_process_groups(
                 errors.append(_process_error("wait for", child, error))
                 uncertain = True
 
-        if not uncertain:
+        group_exists = False
+        try:
+            while not uncertain and _process_group_exists(child.pid):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(0.02, remaining))
+            group_exists = _process_group_exists(child.pid)
+        except OSError as error:
+            errors.append(_process_error("inspect", child, error))
+            uncertain = True
+
+        if not uncertain and not group_exists:
             continue
 
-        kill_succeeded = True
+        kill_succeeded = False
         try:
             os.killpg(child.pid, signal.SIGKILL)
+            kill_succeeded = True
         except ProcessLookupError:
             pass
         except OSError as error:
             errors.append(_process_error("kill", child, error))
-            kill_succeeded = False
         try:
-            if kill_succeeded:
-                child.wait()
-            else:
-                child.wait(timeout=1)
+            child.wait(timeout=1)
         except (OSError, subprocess.SubprocessError) as error:
             errors.append(_process_error("finally reap", child, error))
+        if kill_succeeded:
+            group_deadline = time.monotonic() + 1
+            try:
+                while _process_group_exists(child.pid) and time.monotonic() < group_deadline:
+                    time.sleep(0.02)
+                if _process_group_exists(child.pid):
+                    errors.append(
+                        f"process group {child.pid} still exists after SIGKILL"
+                    )
+            except OSError as error:
+                errors.append(_process_error("inspect after SIGKILL", child, error))
     return errors
 
 
@@ -113,6 +139,34 @@ def child_exit_code(
     return 1
 
 
+def _final_exit_code(
+    children: list[subprocess.Popen[bytes]],
+    pre_cleanup_returncodes: list[int | None],
+    shutdown_requested: Event,
+    cleanup_errors: list[str],
+    startup_exit_code: int | None,
+) -> int:
+    if cleanup_errors:
+        return 1
+    if startup_exit_code is not None:
+        return startup_exit_code
+    if shutdown_requested.is_set():
+        return 0
+
+    cleanup_signals = {-signal.SIGTERM, -signal.SIGKILL}
+    for child, before_cleanup in zip(children, pre_cleanup_returncodes, strict=True):
+        final_returncode = child.poll()
+        if before_cleanup not in (None, 0):
+            return before_cleanup
+        if (
+            before_cleanup is None
+            and final_returncode not in (None, 0)
+            and final_returncode not in cleanup_signals
+        ):
+            return final_returncode
+    return 1
+
+
 def run_commands(
     commands: list[list[str]],
     environment: dict[str, str],
@@ -120,7 +174,8 @@ def run_commands(
     shutdown_errors: list[str],
 ) -> int:
     children: list[subprocess.Popen[bytes]] = []
-    exit_code: int | None = None
+    startup_exit_code: int | None = None
+    pre_cleanup_returncodes: list[int | None] = []
     try:
         for command in commands:
             if shutdown_requested.is_set():
@@ -131,27 +186,32 @@ def run_commands(
                 )
             except OSError as error:
                 print(f"could not start {command[0]}: {error}", file=sys.stderr)
-                exit_code = 0 if shutdown_requested.is_set() else 1
+                startup_exit_code = 0 if shutdown_requested.is_set() else 1
                 break
             children.append(child)
             if shutdown_requested.is_set():
                 shutdown_errors.extend(signal_process_groups([child], signal.SIGTERM))
 
-        if exit_code is None:
+        if startup_exit_code is None:
             while (
                 not shutdown_requested.is_set()
                 and children
                 and all(child.poll() is None for child in children)
             ):
                 time.sleep(0.2)
-            exit_code = child_exit_code(children, shutdown_requested)
+        pre_cleanup_returncodes = [child.poll() for child in children]
     finally:
         shutdown_errors.extend(terminate_process_groups(children))
         for error in shutdown_errors:
             print(f"development launcher cleanup: {error}", file=sys.stderr)
 
-    assert exit_code is not None
-    return exit_code
+    return _final_exit_code(
+        children,
+        pre_cleanup_returncodes,
+        shutdown_requested,
+        shutdown_errors,
+        startup_exit_code,
+    )
 
 
 def main() -> int:
