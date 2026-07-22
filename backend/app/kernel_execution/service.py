@@ -13,7 +13,7 @@ from ..session_events.service import SessionEventService
 from .kernel_session import KernelSession
 from .models import (
     CellExecutionAttempt, ExecutionDecisionConflict, ExecutionNotFound,
-    ExecutionOperation, KernelSessionConflict, StaleExecutionResult,
+    ExecutionOperation, KernelCellTimeout, KernelSessionConflict, StaleExecutionResult,
     TERMINAL_EXECUTION_STATES,
 )
 from .risky_cell_classifier import RiskyCellClassifier
@@ -79,6 +79,18 @@ class KernelExecutionService:
         self, *, parent_turn_id: str, session_id: str, expected_revision: int,
         changed_cell_ids: set[str], lease: MutationLease, cancel_event,
     ) -> ExecutionOperation:
+        operation = self.create_downstream(
+            parent_turn_id=parent_turn_id, session_id=session_id,
+            expected_revision=expected_revision, cancel_event=cancel_event,
+        )
+        return self.run_downstream(
+            operation.operation_id, changed_cell_ids=changed_cell_ids, lease=lease,
+        )
+
+    def create_downstream(
+        self, *, parent_turn_id: str, session_id: str,
+        expected_revision: int, cancel_event,
+    ) -> ExecutionOperation:
         operation = ExecutionOperation(
             uuid4().hex, session_id, expected_revision, "agent_downstream",
             parent_turn_id=parent_turn_id, current_revision=expected_revision,
@@ -87,6 +99,16 @@ class KernelExecutionService:
         with self._lock:
             self._operations[operation.operation_id] = operation
         self._publish(operation)
+        return self.get(operation.operation_id)
+
+    def run_downstream(
+        self, operation_id: str, *, changed_cell_ids: set[str],
+        lease: MutationLease,
+    ) -> ExecutionOperation:
+        with self._lock:
+            operation = self._operations.get(operation_id)
+            if operation is None:
+                raise ExecutionNotFound(operation_id)
         snapshot = self.documents.get_snapshot()
         indexes_by_id = {cell["id"]: index for index, cell in enumerate(snapshot.notebook["cells"])}
         start = min(indexes_by_id[cell_id] for cell_id in changed_cell_ids)
@@ -129,37 +151,63 @@ class KernelExecutionService:
                         return
                 if attempt.decision == "skip":
                     attempt.state = "skipped"
+                    attempt.active = False
                     self._finish(operation, "validation_incomplete")
                     return
                 if attempt.decision == "cancel":
                     attempt.state = "cancelled"
+                    attempt.active = False
                     self._finish(operation, "cancelled")
                     return
             self._set_operation_state(operation, "running")
             attempt.state = "running"
             self._publish(operation)
-            result = self.kernel.execute(source, attempt.attempt_id)
+            try:
+                result = self.kernel.execute(source, attempt.attempt_id)
+            except KernelCellTimeout as error:
+                with self._lock:
+                    attempt.active = False
+                    attempt.state = "timed_out"
+                    attempt.error = {
+                        "code": "cell_timed_out",
+                        "message": "Cell execution timed out",
+                        "details": {"kernelRecovered": error.recovered},
+                    }
+                    operation.error = copy.deepcopy(attempt.error)
+                self._finish(operation, "timed_out")
+                return
             if operation.cancel_event.is_set():
                 attempt.state = "cancelled"
+                attempt.active = False
                 self._finish(operation, "cancelled")
                 return
-            with self._lock:
-                if operation.current_attempt_id != attempt.attempt_id or attempt.state != "running":
-                    raise StaleExecutionResult()
             try:
-                updated = self.documents.apply_execution_result_under_lease(
-                    cell_id=attempt.cell_id, outputs=result.outputs,
-                    execution_count=result.execution_count,
-                    expected_revision=attempt.starting_revision,
-                    expected_source_hash=attempt.source_hash,
-                    owner=operation.parent_turn_id or operation.operation_id, lease=lease,
-                )
+                # Shared cancellation/commit gate: cancellation makes the
+                # attempt inactive under this same lock, so an accepted cancel
+                # can never be followed by an output commit.
+                with self._lock:
+                    if (
+                        operation.current_attempt_id != attempt.attempt_id
+                        or attempt.state != "running"
+                        or not attempt.active
+                        or operation.cancel_event.is_set()
+                    ):
+                        raise StaleExecutionResult()
+                    updated = self.documents.apply_execution_result_under_lease(
+                        cell_id=attempt.cell_id, outputs=result.outputs,
+                        execution_count=result.execution_count,
+                        expected_revision=attempt.starting_revision,
+                        expected_source_hash=attempt.source_hash,
+                        owner=operation.parent_turn_id or operation.operation_id,
+                        lease=lease,
+                    )
+                    attempt.active = False
+                    attempt.outputs = result.outputs
+                    attempt.execution_count = result.execution_count
+                    attempt.state = "failed" if result.error else "completed"
+                    operation.current_revision = updated.revision
             except NotebookDomainError as error:
                 raise StaleExecutionResult() from error
-            attempt.outputs = result.outputs
-            attempt.execution_count = result.execution_count
-            attempt.state = "failed" if result.error else "completed"
-            operation.current_revision = updated.revision
             self.events.publish("notebook.updated", {"sessionId": operation.session_id, "revision": updated.revision, "ownerId": operation.parent_turn_id or operation.operation_id, "executionAttemptId": attempt.attempt_id})
             self._publish(operation)
             if result.error:
@@ -168,20 +216,19 @@ class KernelExecutionService:
 
     def decide(
         self, attempt_id: str, decision: str, *, session_id: str,
-        expected_revision: int, turn_id: str | None = None,
-        cell_id: str | None = None,
+        expected_revision: int, turn_id: str, cell_id: str,
     ) -> ExecutionOperation:
         with self._lock:
             pair = self._attempts.get(attempt_id)
             if pair is None:
-                raise ExecutionNotFound(attempt_id)
+                raise ExecutionDecisionConflict()
             operation, attempt = pair
             if (
                 operation.session_id != session_id
                 or operation.current_revision != expected_revision
                 or operation.current_attempt_id != attempt_id
-                or (turn_id is not None and operation.parent_turn_id != turn_id)
-                or (cell_id is not None and attempt.cell_id != cell_id)
+                or operation.parent_turn_id != turn_id
+                or attempt.cell_id != cell_id
             ):
                 raise ExecutionDecisionConflict()
             if attempt.decision is not None:
@@ -193,6 +240,7 @@ class KernelExecutionService:
             attempt.decision = decision
             if decision == "cancel":
                 operation.cancel_event.set()
+                attempt.active = False
             attempt.decision_event.set()
         self._publish(operation)
         return self.get(operation.operation_id)
@@ -211,14 +259,14 @@ class KernelExecutionService:
         with self._lock:
             pair = self._attempts.get(attempt_id)
             if pair is None:
-                raise ExecutionNotFound(attempt_id)
+                raise ExecutionDecisionConflict()
             operation, attempt = pair
             if (
                 operation.session_id != session_id
                 or operation.current_revision != expected_revision
                 or operation.current_attempt_id != attempt_id
-                or (turn_id is not None and operation.parent_turn_id != turn_id)
-                or (cell_id is not None and attempt.cell_id != cell_id)
+                or operation.parent_turn_id != turn_id
+                or attempt.cell_id != cell_id
             ):
                 raise ExecutionDecisionConflict()
             if operation.cancel_event.is_set():
@@ -226,6 +274,7 @@ class KernelExecutionService:
             if operation.state in TERMINAL_EXECUTION_STATES or attempt.state in {"completed", "failed", "skipped"}:
                 raise ExecutionDecisionConflict()
             operation.cancel_event.set()
+            attempt.active = False
             if attempt.state == "awaiting_approval" and attempt.decision is None:
                 attempt.decision = "cancel"
             attempt.decision_event.set()
@@ -241,6 +290,7 @@ class KernelExecutionService:
                 if operation.current_attempt_id:
                     pair = self._attempts.get(operation.current_attempt_id)
                     if pair:
+                        pair[1].active = False
                         pair[1].decision_event.set()
         if operations:
             self.kernel.interrupt()
@@ -258,30 +308,31 @@ class KernelExecutionService:
         return {"kernelSessionId": self.kernel.kernel_session_id, "state": self.kernel.status, "executionAttemptId": self.kernel.busy_attempt_id}
 
     def interrupt(self, kernel_session_id: str, *, execution_attempt_id: str | None = None) -> dict[str, Any]:
-        self._check_kernel_correlation(kernel_session_id, execution_attempt_id)
-        self.kernel.interrupt()
+        if not self.kernel.interrupt_correlated(
+            kernel_session_id, execution_attempt_id,
+        ):
+            raise KernelSessionConflict()
         return self.kernel_status()
 
     def restart(self, kernel_session_id: str, *, execution_attempt_id: str | None = None) -> dict[str, Any]:
-        self._check_kernel_correlation(kernel_session_id, execution_attempt_id)
-        self.kernel.restart()
+        if not self.kernel.restart_correlated(
+            kernel_session_id, execution_attempt_id,
+        ):
+            raise KernelSessionConflict()
         return self.kernel_status()
 
     def shutdown(self) -> None:
         self.kernel.shutdown()
 
-    def _check_kernel_correlation(self, kernel_session_id: str, execution_attempt_id: str | None) -> None:
-        if kernel_session_id != self.kernel.kernel_session_id:
-            raise KernelSessionConflict()
-        busy = self.kernel.busy_attempt_id
-        if busy is not None and execution_attempt_id != busy:
-            raise KernelSessionConflict()
-
     def _ensure_kernel_session(self, notebook_session_id: str) -> None:
         with self._lock:
             if self._kernel_notebook_session_id not in {None, notebook_session_id}:
                 self.kernel.shutdown()
-                self.kernel = KernelSession(startup_timeout=self.kernel.startup_timeout, cell_timeout=self.kernel.cell_timeout)
+                self.kernel = KernelSession(
+                    startup_timeout=self.kernel.startup_timeout,
+                    cell_timeout=self.kernel.cell_timeout,
+                    recovery_timeout=self.kernel.recovery_timeout,
+                )
             self._kernel_notebook_session_id = notebook_session_id
 
     def _on_session_replaced(self, session_id: str, _revision: int) -> None:
@@ -290,7 +341,11 @@ class KernelExecutionService:
             self._kernel_notebook_session_id = session_id
         if old is not None and old != session_id:
             self.kernel.shutdown()
-            self.kernel = KernelSession(startup_timeout=self.kernel.startup_timeout, cell_timeout=self.kernel.cell_timeout)
+            self.kernel = KernelSession(
+                startup_timeout=self.kernel.startup_timeout,
+                cell_timeout=self.kernel.cell_timeout,
+                recovery_timeout=self.kernel.recovery_timeout,
+            )
 
     def _set_operation_state(self, operation: ExecutionOperation, state: str) -> None:
         with self._lock:

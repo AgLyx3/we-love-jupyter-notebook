@@ -32,6 +32,7 @@ class RiskyCellClassifier:
         "shutil.move": ("file_write", "Moves a file"),
         "Path.write_text": ("file_write", "Writes a file"),
         "Path.write_bytes": ("file_write", "Writes a file"),
+        "pathlib.Path.unlink": ("file_delete", "Deletes a file"),
         "requests.get": ("network_client", "Makes a network request"),
         "requests.post": ("network_client", "Makes a network request"),
         "httpx.get": ("network_client", "Makes a network request"),
@@ -43,6 +44,11 @@ class RiskyCellClassifier:
         "httpx.Client": ("network_client", "Creates a network client"),
         "httpx.AsyncClient": ("network_client", "Creates a network client"),
     }
+    for _client in ("requests", "httpx"):
+        for _method in ("get", "post", "put", "patch", "delete", "head", "options", "request"):
+            _CALL_RULES[f"{_client}.{_method}"] = (
+                "network_client", "Makes a network request",
+            )
 
     def classify(self, source: str) -> RiskClassification:
         matches: list[tuple[str, str]] = []
@@ -54,24 +60,33 @@ class RiskyCellClassifier:
         except SyntaxError:
             self._fallback(source, matches)
         else:
+            aliases = self._import_aliases(tree)
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call):
-                    name = self._name(node.func)
+                    name = self._name(node.func, aliases)
                     rule = self._CALL_RULES.get(name)
                     if rule:
                         matches.append(rule)
                     if name == "open" and self._open_writes(node):
                         matches.append(("file_write", "Writes a file"))
-                    if name.endswith((".write_text", ".write_bytes")):
+                    if name.endswith((".write_text", ".write_bytes", ".mkdir", ".touch", ".rename", ".replace")):
                         matches.append(("file_write", "Writes a file"))
+                    if name.endswith((".unlink", ".rmdir")):
+                        matches.append(("file_delete", "Deletes a file"))
                     if name.startswith("os.exec"):
                         matches.append(("process_execution", "Replaces or starts a process"))
                     if name in {"asyncio.create_subprocess_exec", "asyncio.create_subprocess_shell"}:
                         matches.append(("process_execution", "Starts another process"))
+                    if (
+                        name.startswith(("requests.", "httpx.", "urllib.", "aiohttp."))
+                        and name.rsplit(".", 1)[-1]
+                        in {"get", "post", "put", "patch", "delete", "head", "options", "request", "urlopen"}
+                    ):
+                        matches.append(("network_client", "Makes a network request"))
                     if self._looks_like_cloud_client(name):
                         matches.append(("cloud_client", "Creates a cloud or network client"))
                 elif isinstance(node, ast.Attribute):
-                    name = self._name(node)
+                    name = self._name(node, aliases)
                     if name.startswith("os.environ") or name in {"os.getenv", "os.putenv"}:
                         matches.append(("environment_secret", "Reads environment variables that may contain secrets"))
         unique = list(dict.fromkeys(matches))
@@ -82,13 +97,29 @@ class RiskyCellClassifier:
         )
 
     @staticmethod
-    def _name(node: ast.AST) -> str:
+    def _name(node: ast.AST, aliases: dict[str, str] | None = None) -> str:
         if isinstance(node, ast.Name):
-            return node.id
+            return (aliases or {}).get(node.id, node.id)
         if isinstance(node, ast.Attribute):
-            left = RiskyCellClassifier._name(node.value)
+            left = RiskyCellClassifier._name(node.value, aliases)
             return f"{left}.{node.attr}" if left else node.attr
+        if isinstance(node, ast.Call):
+            return RiskyCellClassifier._name(node.func, aliases)
         return ""
+
+    @staticmethod
+    def _import_aliases(tree: ast.Module) -> dict[str, str]:
+        aliases: dict[str, str] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for item in node.names:
+                    bound = item.asname or item.name.split(".", 1)[0]
+                    aliases[bound] = item.name if item.asname else bound
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                for item in node.names:
+                    if item.name != "*":
+                        aliases[item.asname or item.name] = f"{node.module}.{item.name}"
+        return aliases
 
     @staticmethod
     def _open_writes(node: ast.Call) -> bool:

@@ -34,3 +34,19 @@ def test_invalid_python_falls_back_to_text_patterns():
     result = RiskyCellClassifier().classify("if broken:\n  requests.get('https://x')\n  ???")
     assert result.level == "confirm"
     assert "network_client" in result.matched_patterns
+
+
+@pytest.mark.parametrize("source,pattern", [
+    ("import requests as rq\nrq.delete('https://example.com')", "network_client"),
+    ("from httpx import patch as send\nsend('https://example.com')", "network_client"),
+    ("from subprocess import run as launch\nlaunch(['echo'])", "process_execution"),
+    ("from subprocess import Popen\nPopen(['echo'])", "process_execution"),
+    ("import os as operating\noperating.system('echo x')", "process_execution"),
+    ("from os import unlink as discard\ndiscard('x')", "file_delete"),
+    ("from pathlib import Path as P\nP('x').unlink()", "file_delete"),
+    ("import pathlib as paths\npaths.Path('x').rename('y')", "file_write"),
+])
+def test_import_aliases_and_direct_side_effect_calls(source, pattern):
+    result = RiskyCellClassifier().classify(source)
+    assert result.level == "confirm"
+    assert pattern in result.matched_patterns

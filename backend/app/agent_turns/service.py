@@ -22,6 +22,7 @@ from ..notebook_document.service import NotebookDocumentService
 from ..turn_scope.models import FrozenTurnScope
 from ..turn_scope.service import TurnScopeService
 from ..kernel_execution.service import KernelExecutionService
+from ..kernel_execution.models import ExecutionTimedOut
 from ..session_events.service import SessionEventService
 
 
@@ -273,15 +274,20 @@ class AgentTurnService:
         if self.events is not None:
             self.events.publish("notebook.updated", {"sessionId": turn.session_id, "revision": updated.revision, "ownerId": turn.turn_id})
         if self.executions is not None:
-            self._set_state(turn, "executing")
-            execution = self.executions.execute_downstream(
+            execution = self.executions.create_downstream(
                 parent_turn_id=turn.turn_id, session_id=turn.session_id,
                 expected_revision=updated.revision,
-                changed_cell_ids={change.cell_id for change in changes},
-                lease=lease, cancel_event=turn.cancel_event,
+                cancel_event=turn.cancel_event,
             )
             with self._lock:
                 turn.execution_operation_id = execution.operation_id
+            self._set_state(turn, "executing")
+            execution = self.executions.run_downstream(
+                execution.operation_id,
+                changed_cell_ids={change.cell_id for change in changes},
+                lease=lease,
+            )
+            with self._lock:
                 turn.applied_revision = execution.current_revision
             if execution.state == "validation_incomplete":
                 return "validation_incomplete", None
@@ -289,6 +295,9 @@ class AgentTurnService:
                 return "cancelled", AgentCancelled()
             if execution.state == "failed":
                 return "failed", RuntimeError((execution.error or {}).get("message", "Downstream execution failed"))
+            if execution.state == "timed_out":
+                recovered = bool((execution.error or {}).get("details", {}).get("kernelRecovered"))
+                return "failed", ExecutionTimedOut(recovered=recovered)
         return "completed", None
 
     def undo(self, turn_id: str, *, session_id: str, expected_revision: int):
@@ -364,7 +373,12 @@ class AgentTurnService:
                 return
             turn.state = state
         if self.events is not None:
-            self.events.publish("turn.updated", {"turnId": turn.turn_id, "sessionId": turn.session_id, "state": state, "revision": turn.applied_revision or turn.base_revision})
+            self.events.publish("turn.updated", {
+                "turnId": turn.turn_id, "sessionId": turn.session_id,
+                "state": state,
+                "revision": turn.applied_revision or turn.base_revision,
+                "executionOperationId": turn.execution_operation_id,
+            })
 
     def _begin_commit(self, turn: AgentTurn) -> None:
         """Linearize cancellation against the transition into source apply."""
@@ -396,4 +410,10 @@ class AgentTurnService:
                     "details": {},
                 }
         if self.events is not None:
-            self.events.publish("turn.updated", {"turnId": turn.turn_id, "sessionId": turn.session_id, "state": state, "revision": turn.applied_revision or turn.base_revision, "error": copy.deepcopy(turn.error)})
+            self.events.publish("turn.updated", {
+                "turnId": turn.turn_id, "sessionId": turn.session_id,
+                "state": state,
+                "revision": turn.applied_revision or turn.base_revision,
+                "executionOperationId": turn.execution_operation_id,
+                "error": copy.deepcopy(turn.error),
+            })

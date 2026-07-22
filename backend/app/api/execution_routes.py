@@ -16,8 +16,8 @@ class ExecutionRequest(BaseModel):
 
 
 class DecisionRequest(ExecutionRequest):
-    turn_id: str | None = Field(default=None, alias="turnId")
-    cell_id: str | None = Field(default=None, alias="cellId")
+    turn_id: str = Field(alias="turnId")
+    cell_id: str = Field(alias="cellId")
 
 
 class KernelControlRequest(BaseModel):

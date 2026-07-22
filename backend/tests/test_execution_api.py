@@ -1,4 +1,7 @@
 import time
+import threading
+
+import pytest
 
 from backend.app.kernel_execution.kernel_session import KernelResult
 
@@ -9,12 +12,20 @@ class ApiKernel:
     busy_attempt_id = None
     startup_timeout = 1
     cell_timeout = 1
+    recovery_timeout = 1
 
     def execute(self, source, attempt_id):
         return KernelResult([{"output_type": "stream", "name": "stdout", "text": "ok\n"}], 1, False)
     def interrupt(self): pass
     def restart(self): self.kernel_session_id = "api-kernel-2"; return self.kernel_session_id
     def shutdown(self): pass
+    def interrupt_correlated(self, kernel_session_id, attempt_id):
+        return kernel_session_id == self.kernel_session_id and attempt_id == self.busy_attempt_id
+    def restart_correlated(self, kernel_session_id, attempt_id):
+        if kernel_session_id != self.kernel_session_id or attempt_id != self.busy_attempt_id:
+            return False
+        self.restart()
+        return True
 
 
 def test_manual_execution_api_returns_pollable_operation(client, notebook_payload):
@@ -65,3 +76,82 @@ def test_session_event_journal_publishes_notebook_and_execution_state(client, no
     event_types = [event.event_type for event in client.app.state.session_event_service.list()]
     assert "execution.updated" in event_types
     assert event_types.count("notebook.updated") >= 2
+
+
+def pending_risky_execution(client, uploaded):
+    updated = client.post("/cells/editable/source", json={
+        "sessionId": uploaded["sessionId"],
+        "expectedDocumentRevision": uploaded["revision"],
+        "source": "!echo guarded",
+    }).json()
+    service = client.app.state.kernel_execution_service
+    lease = client.app.state.notebook_service.coordinator.acquire(
+        operation_type="agent_turn", operation_id="turn-api",
+    )
+    operation = service.create_downstream(
+        parent_turn_id="turn-api", session_id=uploaded["sessionId"],
+        expected_revision=updated["revision"], cancel_event=threading.Event(),
+    )
+    worker = threading.Thread(target=lambda: service.run_downstream(
+        operation.operation_id, changed_cell_ids={"editable"}, lease=lease,
+    ))
+    worker.start()
+    for _ in range(100):
+        pending = service.get(operation.operation_id)
+        if pending.state == "awaiting_approval":
+            break
+        time.sleep(.01)
+    assert pending.state == "awaiting_approval"
+    return service, lease, worker, pending, updated["revision"]
+
+
+@pytest.mark.parametrize("decision", ["approve", "skip", "cancel"])
+@pytest.mark.parametrize(
+    "missing_field",
+    ["sessionId", "expectedDocumentRevision", "turnId", "cellId"],
+)
+def test_risky_decision_requires_complete_correlation(
+    client, notebook_payload, decision, missing_field,
+):
+    uploaded = client.post("/notebooks/upload", files={"file": ("example.ipynb", notebook_payload(), "application/json")}).json()
+    service, lease, worker, pending, revision = pending_risky_execution(client, uploaded)
+    attempt = pending.attempts[0]
+    body = {
+        "sessionId": uploaded["sessionId"], "expectedDocumentRevision": revision,
+        "turnId": "turn-api", "cellId": "editable",
+    }
+    body.pop(missing_field)
+    response = client.post(f"/execution/{attempt.attempt_id}/{decision}", json=body)
+    assert response.status_code == 422
+    service.skip(attempt.attempt_id, session_id=uploaded["sessionId"], expected_revision=revision, turn_id="turn-api", cell_id="editable")
+    worker.join(2)
+    client.app.state.notebook_service.coordinator.release(lease)
+
+
+@pytest.mark.parametrize("decision", ["approve", "skip", "cancel"])
+@pytest.mark.parametrize(
+    "mismatch",
+    ["sessionId", "expectedDocumentRevision", "turnId", "cellId", "attemptId"],
+)
+def test_risky_decision_rejects_mismatched_correlation(
+    client, notebook_payload, decision, mismatch,
+):
+    uploaded = client.post("/notebooks/upload", files={"file": ("example.ipynb", notebook_payload(), "application/json")}).json()
+    service, lease, worker, pending, revision = pending_risky_execution(client, uploaded)
+    attempt = pending.attempts[0]
+    body = {
+        "sessionId": uploaded["sessionId"], "expectedDocumentRevision": revision,
+        "turnId": "turn-api", "cellId": "editable",
+    }
+    path_attempt_id = attempt.attempt_id
+    if mismatch == "expectedDocumentRevision":
+        body[mismatch] = revision + 100
+    elif mismatch == "attemptId":
+        path_attempt_id = "wrong"
+    else:
+        body[mismatch] = "wrong"
+    response = client.post(f"/execution/{path_attempt_id}/{decision}", json=body)
+    assert response.status_code == 409
+    service.skip(attempt.attempt_id, session_id=uploaded["sessionId"], expected_revision=revision, turn_id="turn-api", cell_id="editable")
+    worker.join(2)
+    client.app.state.notebook_service.coordinator.release(lease)

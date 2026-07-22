@@ -35,6 +35,21 @@ class KernelSessionConflict(NotebookDomainError):
     status_code = 409
 
 
+class KernelCellTimeout(TimeoutError):
+    def __init__(self, *, recovered: bool) -> None:
+        super().__init__("Cell execution timed out")
+        self.recovered = recovered
+
+
+class ExecutionTimedOut(NotebookDomainError):
+    code = "cell_timed_out"
+    message = "Cell execution timed out"
+    status_code = 408
+
+    def __init__(self, *, recovered: bool) -> None:
+        super().__init__(kernelRecovered=recovered)
+
+
 @dataclass(frozen=True)
 class RiskClassification:
     level: str
@@ -56,6 +71,7 @@ class CellExecutionAttempt:
     outputs: list[dict[str, Any]] = field(default_factory=list)
     execution_count: int | None = None
     error: dict[str, Any] | None = None
+    active: bool = True
     decision_event: Event = field(default_factory=Event, repr=False)
 
 
@@ -76,4 +92,6 @@ class ExecutionOperation:
     cancel_event: Event = field(default_factory=Event, repr=False)
 
 
-TERMINAL_EXECUTION_STATES = {"completed", "failed", "cancelled", "validation_incomplete"}
+TERMINAL_EXECUTION_STATES = {
+    "completed", "failed", "cancelled", "validation_incomplete", "timed_out",
+}

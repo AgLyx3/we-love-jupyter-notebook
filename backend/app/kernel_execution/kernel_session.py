@@ -7,6 +7,8 @@ from typing import Any
 from uuid import uuid4
 from time import monotonic
 
+from .models import KernelCellTimeout
+
 
 @dataclass(frozen=True)
 class KernelResult:
@@ -18,14 +20,19 @@ class KernelResult:
 class KernelSession:
     """One persistent local Jupyter kernel, serialized by the execution service."""
 
-    def __init__(self, *, startup_timeout: float = 30, cell_timeout: float = 300) -> None:
+    def __init__(
+        self, *, startup_timeout: float = 30, cell_timeout: float = 300,
+        recovery_timeout: float = 5,
+    ) -> None:
         self.startup_timeout = startup_timeout
         self.cell_timeout = cell_timeout
+        self.recovery_timeout = recovery_timeout
         self.kernel_session_id = uuid4().hex
         self._manager = None
         self._client = None
         self._lock = RLock()
         self._busy_attempt_id: str | None = None
+        self._restart_required = False
 
     @property
     def busy_attempt_id(self) -> str | None:
@@ -37,6 +44,8 @@ class KernelSession:
         with self._lock:
             if self._manager is None:
                 return "not_started"
+            if self._restart_required:
+                return "restart_required"
             return "busy" if self._busy_attempt_id else "idle"
 
     def execute(self, source: str, attempt_id: str) -> KernelResult:
@@ -57,8 +66,10 @@ class KernelSession:
                         raise Empty()
                     message = client.get_iopub_msg(timeout=remaining)
                 except Empty as error:
-                    self.interrupt()
-                    raise TimeoutError("Cell execution timed out") from error
+                    recovered = self._interrupt_and_wait_idle(client)
+                    with self._lock:
+                        self._restart_required = not recovered
+                    raise KernelCellTimeout(recovered=recovered) from error
                 if message.get("parent_header", {}).get("msg_id") != message_id:
                     continue
                 msg_type = message["header"]["msg_type"]
@@ -89,22 +100,55 @@ class KernelSession:
             if self._manager is not None:
                 self._manager.interrupt_kernel()
 
+    def interrupt_correlated(
+        self, kernel_session_id: str, execution_attempt_id: str | None,
+    ) -> bool:
+        with self._lock:
+            if (
+                kernel_session_id != self.kernel_session_id
+                or execution_attempt_id != self._busy_attempt_id
+            ):
+                return False
+            if self._manager is not None:
+                self._manager.interrupt_kernel()
+            return True
+
     def restart(self) -> str:
         with self._lock:
             if self._manager is None:
                 self.kernel_session_id = uuid4().hex
+                self._restart_required = False
                 return self.kernel_session_id
             self._manager.restart_kernel(now=True)
             self._client.wait_for_ready(timeout=self.startup_timeout)
             self.kernel_session_id = uuid4().hex
             self._busy_attempt_id = None
+            self._restart_required = False
             return self.kernel_session_id
+
+    def restart_correlated(
+        self, kernel_session_id: str, execution_attempt_id: str | None,
+    ) -> bool:
+        with self._lock:
+            if (
+                kernel_session_id != self.kernel_session_id
+                or execution_attempt_id != self._busy_attempt_id
+            ):
+                return False
+            if self._manager is not None:
+                self._manager.restart_kernel(now=True)
+                self._client.wait_for_ready(timeout=self.startup_timeout)
+            self.kernel_session_id = uuid4().hex
+            self._busy_attempt_id = None
+            self._restart_required = False
+            return True
 
     def shutdown(self) -> None:
         with self._lock:
             manager, client = self._manager, self._client
             self._manager = self._client = None
             self._busy_attempt_id = None
+            self._restart_required = False
         if client is not None:
             client.stop_channels()
         if manager is not None:
@@ -127,3 +171,22 @@ class KernelSession:
             raise
         self._manager = manager
         self._client = client
+
+    def _interrupt_and_wait_idle(self, client) -> bool:
+        with self._lock:
+            manager = self._manager
+            if manager is None:
+                return False
+            manager.interrupt_kernel()
+        deadline = monotonic() + self.recovery_timeout
+        while monotonic() < deadline:
+            try:
+                message = client.get_iopub_msg(timeout=max(0.01, deadline - monotonic()))
+            except Empty:
+                return False
+            if (
+                message.get("header", {}).get("msg_type") == "status"
+                and message.get("content", {}).get("execution_state") == "idle"
+            ):
+                return True
+        return False
