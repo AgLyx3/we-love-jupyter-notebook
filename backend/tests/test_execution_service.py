@@ -1250,6 +1250,45 @@ def test_agent_turn_commits_downstream_output_before_terminal_release():
     assert documents.coordinator.active_lease is None
 
 
+def _markdown_then_code_notebook():
+    return json.dumps({
+        "cells": [
+            {"cell_type": "markdown", "id": "title", "metadata": {}, "source": ["# Old title\n"]},
+            {"cell_type": "code", "id": "cell-0", "metadata": {}, "source": ["value = 1\n"], "execution_count": None, "outputs": []},
+        ],
+        "metadata": {}, "nbformat": 4, "nbformat_minor": 5,
+    }).encode()
+
+
+def test_markdown_only_agent_edit_runs_no_downstream_execution():
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(_markdown_then_code_notebook())
+    scopes = TurnScopeService(documents)
+    scopes.add("title", editable=True)
+    kernel = FakeKernel()
+    executions = KernelExecutionService(documents=documents, kernel=kernel)
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes,
+        adapter=FakeAgentAdapter([FakeAttempt(edits={
+            "editable/cell_title.md": "# New title\n",
+        })]), executions=executions,
+    )
+    turn = turns.start(
+        prompt="rename the title", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    current = documents.get_snapshot()
+    assert turn.state == "completed"
+    # The Markdown edit applied, but no downstream code ran and no execution
+    # operation was created, so the code cell keeps its untouched state.
+    assert turn.execution_operation_id is None
+    assert kernel.sources == []
+    assert "".join(current.notebook["cells"][0]["source"]) == "# New title\n"
+    assert current.notebook["cells"][1]["execution_count"] is None
+    assert current.notebook["cells"][1]["outputs"] == []
+    assert documents.coordinator.active_lease is None
+
+
 def test_agent_cancel_retry_uses_accepted_child_output_lineage():
     second_entered = threading.Event()
     release_second = threading.Event()

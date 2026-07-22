@@ -366,7 +366,16 @@ class AgentTurnService:
                 return "cancelled", AgentCancelled()
         if self.events is not None:
             self.events.publish("notebook.updated", {"sessionId": turn.session_id, "revision": updated.revision, "ownerId": turn.turn_id})
-        if self.executions is not None:
+        # Downstream execution is triggered by, and starts from, the earliest
+        # edited code cell. A turn that changes only Markdown (or other
+        # non-code) cells performs no execution and completes: there is no code
+        # to re-validate, so a title/prose edit must not run the notebook.
+        cell_types = {cell["id"]: cell.get("cell_type") for cell in updated.notebook["cells"]}
+        changed_code_cell_ids = {
+            change.cell_id for change in changes
+            if cell_types.get(change.cell_id) == "code"
+        }
+        if self.executions is not None and changed_code_cell_ids:
             execution = self.executions.create_downstream(
                 parent_turn_id=turn.turn_id, session_id=turn.session_id,
                 expected_revision=updated.revision,
@@ -377,7 +386,7 @@ class AgentTurnService:
             self._set_state(turn, "executing")
             execution = self.executions.run_downstream(
                 execution.operation_id,
-                changed_cell_ids={change.cell_id for change in changes},
+                changed_cell_ids=changed_code_cell_ids,
                 lease=lease,
             )
             with self._lock:
