@@ -3,6 +3,7 @@ import path from "node:path";
 
 const sample = path.resolve("examples/sample.ipynb");
 const terminalTurn = /completed|validation incomplete/;
+const backendUrl = `http://127.0.0.1:${process.env.E2E_BACKEND_PORT ?? "8001"}`;
 
 async function replaceEditor(page: Page, label: string, source: string) {
   const editor = page.getByLabel(label).locator(".cm-content");
@@ -176,8 +177,8 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
 
   await replaceEditor(page, "Source for code cell 4", "average = total / len(values)\nprint('stale save')");
   await page.route("**/api/cells/downstream/source", async (route) => {
-    const snapshot = await page.request.get("http://127.0.0.1:8001/notebooks/current").then((response) => response.json());
-    const conflict = await page.request.post("http://127.0.0.1:8001/cells/safe-summary/source", { data: {
+    const snapshot = await page.request.get(`${backendUrl}/notebooks/current`).then((response) => response.json());
+    const conflict = await page.request.post(`${backendUrl}/cells/safe-summary/source`, { data: {
       sessionId: snapshot.sessionId,
       expectedDocumentRevision: snapshot.revision,
       source: "total = sum(values)\nprint(f'Total: {total}')\n# external revision\n",

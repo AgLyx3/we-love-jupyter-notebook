@@ -1,5 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const backendPort = process.env.E2E_BACKEND_PORT ?? "8001";
+const frontendPort = process.env.E2E_FRONTEND_PORT ?? "5174";
+
 export default defineConfig({
   testDir: "./e2e",
   timeout: 120_000,
@@ -9,7 +12,7 @@ export default defineConfig({
   reporter: [["list"], ["html", { outputFolder: "test-results/playwright-report", open: "never" }]],
   outputDir: "test-results/playwright-artifacts",
   use: {
-    baseURL: "http://127.0.0.1:5174",
+    baseURL: `http://127.0.0.1:${frontendPort}`,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
@@ -19,8 +22,8 @@ export default defineConfig({
     { name: "mobile", use: { ...devices["Pixel 5"], viewport: { width: 390, height: 844 } } },
   ],
   webServer: {
-    command: ".venv/bin/python scripts/dev.py --fake-agent --backend-port 8001 --frontend-port 5174",
-    url: "http://127.0.0.1:5174",
+    command: `.venv/bin/python scripts/dev.py --fake-agent --backend-port ${backendPort} --frontend-port ${frontendPort}`,
+    url: `http://127.0.0.1:${frontendPort}`,
     reuseExistingServer: false,
     timeout: 30_000,
   },

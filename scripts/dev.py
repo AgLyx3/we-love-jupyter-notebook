@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from threading import Event
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,8 +62,10 @@ def main() -> int:
         ["npm", "run", "dev", "--", "--host", "127.0.0.1", "--port", str(args.frontend_port), "--strictPort"],
     ]
     children: list[subprocess.Popen[bytes]] = []
+    shutdown_requested = Event()
 
     def stop(_signum: int | None = None, _frame: object | None = None) -> None:
+        shutdown_requested.set()
         signal_process_groups(children, signal.SIGTERM)
 
     signal.signal(signal.SIGINT, stop)
@@ -72,8 +75,10 @@ def main() -> int:
             children.append(subprocess.Popen(
                 command, cwd=ROOT, env=environment, start_new_session=True,
             ))
-        while all(child.poll() is None for child in children):
+        while not shutdown_requested.is_set() and all(child.poll() is None for child in children):
             time.sleep(0.2)
+        if shutdown_requested.is_set():
+            return 0
         return next((child.returncode or 0 for child in children if child.poll() is not None), 0)
     finally:
         terminate_process_groups(children)
