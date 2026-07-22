@@ -56,7 +56,7 @@ describe("Notebook editor", () => {
     };
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
       const path = String(input);
-      if (path.endsWith("/notebooks/current") && init?.method === "DELETE") return Promise.resolve(new Response(null, { status: 204 }));
+      if (path.endsWith("/notebooks/current") && init?.method === "DELETE") return response({ closedSessionId: notebook.sessionId, cleanupErrors: [] });
       if (path.endsWith("/notebooks/current")) return response(notebook);
       if (path.endsWith("/turn-scope")) return response({ editableCellIds: ["code-1"], contextCellIds: [], sessionId: notebook.sessionId, notebookRevision: notebook.revision });
       if (path.endsWith("/kernel/status")) return response({ state: "idle", kernelSessionId: "kernel-1", executionAttemptId: null });
@@ -75,6 +75,52 @@ describe("Notebook editor", () => {
     expect(await screen.findByText("Open a notebook to begin")).toBeInTheDocument();
     expect(screen.queryByText("Persisted turn")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Close notebook" })).not.toBeInTheDocument();
+  });
+
+  it("requires confirmation before discarding a dirty notebook", async () => {
+    const dirtyNotebook = { ...notebook, dirty: true };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current") && init?.method === "DELETE") return response({ closedSessionId: notebook.sessionId, cleanupErrors: [] });
+      if (path.endsWith("/notebooks/current")) return response(dirtyNotebook);
+      if (path.endsWith("/turn-scope")) return response({ editableCellIds: [], contextCellIds: [], sessionId: notebook.sessionId, notebookRevision: notebook.revision });
+      if (path.endsWith("/kernel/status")) return response({ state: "not_started", kernelSessionId: null, executionAttemptId: null });
+      if (path.endsWith("/session/status")) return response({ sessionId: notebook.sessionId, documentRevision: notebook.revision, activeTurn: null, activeExecution: null, turnHistory: [], turnHistoryTruncated: false });
+      return response({});
+    });
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Close notebook" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Discard unsaved notebook?" });
+    expect(dialog).toHaveTextContent("Changes that have not been downloaded will be lost.");
+    expect(screen.getByRole("button", { name: "Keep notebook" })).toHaveFocus();
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining("/notebooks/current"), expect.objectContaining({ method: "DELETE" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Keep notebook" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByText("sample.ipynb")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Close notebook" }));
+    await userEvent.click(screen.getByRole("button", { name: "Discard notebook" }));
+    expect(await screen.findByText("Open a notebook to begin")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/notebooks/current"), expect.objectContaining({ method: "DELETE" }));
+  });
+
+  it("warns after closing when backend cleanup is incomplete", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current") && init?.method === "DELETE") return response({ closedSessionId: notebook.sessionId, cleanupErrors: ["kernel shutdown failed"] });
+      if (path.endsWith("/notebooks/current")) return response(notebook);
+      if (path.endsWith("/turn-scope")) return response({ editableCellIds: [], contextCellIds: [], sessionId: notebook.sessionId, notebookRevision: notebook.revision });
+      if (path.endsWith("/kernel/status")) return response({ state: "idle", kernelSessionId: "kernel-1", executionAttemptId: null });
+      if (path.endsWith("/session/status")) return response({ sessionId: notebook.sessionId, documentRevision: notebook.revision, activeTurn: null, activeExecution: null, turnHistory: [], turnHistoryTruncated: false });
+      return response({});
+    });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Close notebook" }));
+
+    expect(await screen.findByText("Open a notebook to begin")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Notebook closed, but cleanup was incomplete: kernel shutdown failed");
   });
 
   it("keeps the notebook open and refreshes after a close conflict", async () => {

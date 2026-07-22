@@ -4,6 +4,7 @@ import { ApiError, api, connectEvents, type AgentTurn, type ExecutionAttempt, ty
 import AgentChatPanel from "./agentChat/AgentChatPanel";
 import type { TurnRecord } from "./agentChat/AgentChatPanel";
 import KernelControls from "./execution/KernelControls";
+import CloseNotebookDialog from "./fileOperations/CloseNotebookDialog";
 import FileToolbar from "./fileOperations/FileToolbar";
 import NotebookView from "./notebook/NotebookView";
 
@@ -26,6 +27,7 @@ export default function App() {
   const [notice, setNotice] = useState<{ tone: "error" | "warning"; text: string } | null>(null);
   const [dirtyCellIds, setDirtyCellIds] = useState<Set<string>>(() => new Set());
   const [polling, setPolling] = useState(false);
+  const [closeConfirmationOpen, setCloseConfirmationOpen] = useState(false);
   const snapshotRef = useRef(notebook);
   const scopeRef = useRef(scope);
   const eventCursorRef = useRef({ sessionId: "", sequence: 0 });
@@ -184,9 +186,10 @@ export default function App() {
     } catch (error) { showError(error); }
     finally { if (url) URL.revokeObjectURL(url); }
   };
-  const handleClose = () => {
+  const closeNotebook = () => {
     if (!notebook) return;
-    void mutate(() => api.close(notebook), { refreshAfter: false }, () => {
+    setCloseConfirmationOpen(false);
+    void mutate(() => api.close(notebook), { refreshAfter: false }, (result) => {
       setNotebook(null);
       setScope(emptyScope);
       setKernel(emptyKernel);
@@ -200,7 +203,13 @@ export default function App() {
       eventCursorRef.current = { sessionId: "", sequence: 0 };
       turnGenerationRef.current.clear();
       executionGenerationRef.current.clear();
+      if (result.cleanupErrors.length > 0) setNotice({ tone: "warning", text: `Notebook closed, but cleanup was incomplete: ${result.cleanupErrors.join("; ")}` });
     });
+  };
+  const handleClose = () => {
+    if (!notebook) return;
+    if (notebook.dirty) setCloseConfirmationOpen(true);
+    else closeNotebook();
   };
   const requestCellFocus = (cellId: string) => setFocusRequest((current) => ({ cellId, requestId: (current?.requestId ?? 0) + 1 }));
 
@@ -224,6 +233,7 @@ export default function App() {
       <div className="toolbar-actions"><KernelControls status={kernel} mutationDisabled={mutationsDisabled || busy || hasDirtyDrafts} onRunAll={() => void mutate(() => api.runAll(notebook), { refreshAfter: false }, setOperation)} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} /><FileToolbar notebook={notebook} uploadDisabled={mutationsDisabled || busy || hasDirtyDrafts} closeDisabled={mutationsDisabled || busy || hasDirtyDrafts} onUpload={handleUpload} onDownload={() => void handleDownload()} onClose={handleClose} /></div>
     </header>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
+    {closeConfirmationOpen && <CloseNotebookDialog busy={busy} onCancel={() => setCloseConfirmationOpen(false)} onConfirm={closeNotebook} />}
     <div className="editor-layout">
       <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} focusRequest={focusRequest}
         onDirtyChange={(cellId, dirty) => setDirtyCellIds((current) => {

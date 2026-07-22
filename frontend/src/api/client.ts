@@ -93,6 +93,11 @@ export interface SessionStatus {
   turnHistoryTruncated: boolean;
 }
 
+export interface NotebookCloseResult {
+  closedSessionId: string;
+  cleanupErrors: string[];
+}
+
 export interface ApiErrorBody { code: string; message: string; details: Record<string, unknown> }
 
 export class ApiError extends Error {
@@ -131,7 +136,7 @@ export const api = {
   kernel: () => request<KernelStatus>("/kernel/status"),
   status: () => request<SessionStatus>("/session/status"),
   download: () => blobRequest("/notebooks/download"),
-  close: (snapshot: NotebookSnapshot) => request<void>("/notebooks/current", { method: "DELETE", body: JSON.stringify(mutation(snapshot)) }),
+  close: (snapshot: NotebookSnapshot) => request<NotebookCloseResult>("/notebooks/current", { method: "DELETE", body: JSON.stringify(mutation(snapshot)) }),
   upload: (file: File, current?: NotebookSnapshot) => {
     const body = new FormData();
     body.append("file", file);
