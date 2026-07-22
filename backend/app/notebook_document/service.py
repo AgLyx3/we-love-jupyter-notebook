@@ -16,6 +16,7 @@ from .models import (
     CellNotFound,
     MutationConflict,
     MutationLease,
+    NotebookCloseResult,
     NotebookImportError,
     NotebookNotLoaded,
     NotebookSizeError,
@@ -58,11 +59,13 @@ class NotebookDocumentService:
         self._revision = 0
         self._dirty = False
         self._last_mutation_owner: str | None = None
-        self._session_replacement_listeners: list[Callable[[str, int], None]] = []
+        self._session_replacement_listeners: list[
+            Callable[[str | None, int], None]
+        ] = []
         self._last_session_replacement_errors: tuple[str, ...] = ()
 
     def register_session_replacement_listener(
-        self, listener: Callable[[str, int], None]
+        self, listener: Callable[[str | None, int], None]
     ) -> None:
         with self._lock:
             self._session_replacement_listeners.append(listener)
@@ -97,18 +100,37 @@ class NotebookDocumentService:
                 self._revision = 1 if normalized else 0
                 self._dirty = normalized
                 self._last_mutation_owner = "normalization" if normalized else None
-                listener_errors = []
-                for listener in tuple(self._session_replacement_listeners):
-                    try:
-                        listener(self._session_id, self._revision)
-                    except Exception as error:
-                        listener_errors.append(f"{type(error).__name__}: {error}")
-                        logger.exception(
-                            "Notebook session replacement listener failed for session %s",
-                            self._session_id,
-                        )
-                self._last_session_replacement_errors = tuple(listener_errors)
+                self._notify_session_replaced_unlocked(
+                    self._session_id, self._revision,
+                )
                 return self._snapshot_unlocked()
+        finally:
+            self.coordinator.release(lease)
+
+    def close_notebook(
+        self, *, expected_session_id: str, expected_revision: int,
+    ) -> NotebookCloseResult:
+        lease = self._acquire_lease(
+            operation_type="notebook_close", operation_id=uuid4().hex,
+        )
+        try:
+            with self._lock:
+                self._require_notebook()
+                self._check_preconditions(
+                    expected_session_id, expected_revision,
+                )
+                closed_session_id = self._session_id or ""
+                self._session_id = None
+                self._filename = "notebook.ipynb"
+                self._notebook = None
+                self._revision = 0
+                self._dirty = False
+                self._last_mutation_owner = None
+                self._notify_session_replaced_unlocked(None, 0)
+                return NotebookCloseResult(
+                    closed_session_id=closed_session_id,
+                    cleanup_errors=self._last_session_replacement_errors,
+                )
         finally:
             self.coordinator.release(lease)
 
@@ -329,6 +351,21 @@ class NotebookDocumentService:
             raise SessionConflict(self._session_id or "")
         if revision != self._revision:
             raise RevisionConflict(self._revision)
+
+    def _notify_session_replaced_unlocked(
+        self, session_id: str | None, revision: int,
+    ) -> None:
+        listener_errors = []
+        for listener in tuple(self._session_replacement_listeners):
+            try:
+                listener(session_id, revision)
+            except Exception as error:
+                listener_errors.append(f"{type(error).__name__}: {error}")
+                logger.exception(
+                    "Notebook session lifecycle listener failed for session %s",
+                    session_id,
+                )
+        self._last_session_replacement_errors = tuple(listener_errors)
 
     def _acquire_lease(
         self, *, operation_type: str, operation_id: str

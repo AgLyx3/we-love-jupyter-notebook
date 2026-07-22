@@ -109,3 +109,9 @@ class NotebookSnapshot:
     revision: int
     dirty: bool
     last_mutation_owner: str | None
+
+
+@dataclass(frozen=True)
+class NotebookCloseResult:
+    closed_session_id: str
+    cleanup_errors: tuple[str, ...] = ()

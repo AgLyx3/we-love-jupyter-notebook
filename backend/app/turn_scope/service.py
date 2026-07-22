@@ -138,7 +138,9 @@ class TurnScopeService:
             self._history.append(self._bound_record(record))
             self._prune_history_locked()
 
-    def _on_session_replaced(self, _session_id: str, _revision: int) -> None:
+    def _on_session_replaced(
+        self, _session_id: str | None, _revision: int,
+    ) -> None:
         with self._lock:
             self._editable.clear()
             self._context.clear()

@@ -122,6 +122,39 @@ def test_notebook_replacement_uses_fresh_kernel_even_when_old_shutdown_fails():
     )
 
 
+def test_notebook_close_shuts_down_and_resets_kernel_session():
+    class TrackingKernel(FakeKernel):
+        max_output_items = 1000
+        max_output_bytes = 5 * 1024 * 1024
+
+        def __init__(self):
+            super().__init__()
+            self.shutdown_called = False
+
+        def shutdown(self):
+            self.shutdown_called = True
+            raise RuntimeError("kernel close cleanup failed")
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook("x = 1"))
+    kernel = TrackingKernel()
+    service = KernelExecutionService(documents=documents, kernel=kernel)
+    service._kernel_notebook_session_id = snapshot.session_id
+
+    result = documents.close_notebook(
+        expected_session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
+
+    assert kernel.shutdown_called is True
+    assert service._kernel_notebook_session_id is None
+    assert isinstance(service.kernel, KernelSession)
+    assert service.kernel.status == "not_started"
+    assert result.cleanup_errors == (
+        "RuntimeError: kernel close cleanup failed",
+    )
+
+
 def test_kernel_session_shutdown_attempts_both_cleanup_steps_and_reports_all_errors():
     calls = []
 
@@ -1035,6 +1068,19 @@ def test_event_journal_enforces_count_bytes_and_active_session():
         with pytest.raises(StopAsyncIteration):
             await anext(stream)
     asyncio.run(replacement_closes_open_stream())
+
+    async def close_closes_open_stream():
+        events.activate_session("stream-open")
+        events.publish("test", {"sessionId": "stream-open", "index": 1})
+        stream = events.stream(
+            session_id="stream-open",
+            is_disconnected=lambda: asyncio.sleep(0, result=False),
+        )
+        assert (await anext(stream)).data["index"] == 1
+        events.activate_session(None)
+        with pytest.raises(StopAsyncIteration):
+            await anext(stream)
+    asyncio.run(close_closes_open_stream())
 
 
 def test_kernel_output_collection_is_bounded_before_commit():

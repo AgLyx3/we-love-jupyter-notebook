@@ -7,8 +7,10 @@ from backend.app.notebook_document import service as service_module
 from backend.app.notebook_document.models import (
     MutationConflict,
     NotebookImportError,
+    NotebookNotLoaded,
     NotebookSizeError,
     RevisionConflict,
+    SessionConflict,
 )
 from backend.app.notebook_document.mutation_coordinator import MutationCoordinator
 from backend.app.notebook_document.service import MAX_NOTEBOOK_BYTES, NotebookDocumentService
@@ -133,6 +135,52 @@ def test_replacement_listener_failure_does_not_report_a_failed_import_or_stop_fa
     assert observed == [(replaced.session_id, replaced.revision)]
     assert len(service.last_session_replacement_errors) == 1
     assert "kernel cleanup failed" in service.last_session_replacement_errors[0]
+
+
+def test_close_unloads_document_and_notifies_all_listeners_despite_cleanup_failure(
+    notebook_payload,
+):
+    service = NotebookDocumentService()
+    snapshot = service.import_notebook(notebook_payload())
+    observed = []
+
+    def broken_listener(_session_id, _revision):
+        raise RuntimeError("close cleanup failed")
+
+    service.register_session_replacement_listener(broken_listener)
+    service.register_session_replacement_listener(
+        lambda session_id, revision: observed.append((session_id, revision))
+    )
+
+    result = service.close_notebook(
+        expected_session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
+
+    assert result.closed_session_id == snapshot.session_id
+    assert result.cleanup_errors == ("RuntimeError: close cleanup failed",)
+    assert observed == [(None, 0)]
+    assert service.last_session_replacement_errors == result.cleanup_errors
+    with pytest.raises(NotebookNotLoaded):
+        service.get_snapshot()
+
+
+def test_close_rejects_stale_preconditions_without_unloading(notebook_payload):
+    service = NotebookDocumentService()
+    snapshot = service.import_notebook(notebook_payload())
+
+    with pytest.raises(SessionConflict):
+        service.close_notebook(
+            expected_session_id="stale-session",
+            expected_revision=snapshot.revision,
+        )
+    with pytest.raises(RevisionConflict):
+        service.close_notebook(
+            expected_session_id=snapshot.session_id,
+            expected_revision=snapshot.revision + 1,
+        )
+
+    assert service.get_snapshot() == snapshot
 
 
 def test_mutation_coordinator_rejects_competing_owner():

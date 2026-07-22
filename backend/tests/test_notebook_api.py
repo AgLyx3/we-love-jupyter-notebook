@@ -103,6 +103,92 @@ def test_api_reports_missing_notebook_and_invalid_upload(client):
     assert invalid.json()["error"]["code"] == "invalid_notebook"
 
 
+def test_close_notebook_checks_preconditions_and_allows_fresh_upload(
+    client, notebook_payload,
+):
+    created = upload(client, notebook_payload()).json()
+
+    wrong_session = client.request("DELETE", "/notebooks/current", json={
+        "sessionId": "stale-session",
+        "expectedDocumentRevision": created["revision"],
+    })
+    assert wrong_session.status_code == 409
+    assert wrong_session.json()["error"]["code"] == "session_conflict"
+
+    stale = client.request("DELETE", "/notebooks/current", json={
+        "sessionId": created["sessionId"],
+        "expectedDocumentRevision": created["revision"] + 1,
+    })
+    assert stale.status_code == 409
+    assert client.get("/notebooks/current").status_code == 200
+
+    closed = client.request("DELETE", "/notebooks/current", json={
+        "sessionId": created["sessionId"],
+        "expectedDocumentRevision": created["revision"],
+    })
+    assert closed.status_code == 200
+    assert closed.json() == {
+        "closedSessionId": created["sessionId"],
+        "cleanupErrors": [],
+    }
+    assert client.get("/notebooks/current").status_code == 404
+    assert not client.app.state.session_event_service.is_active(
+        created["sessionId"]
+    )
+
+    reopened = upload(client, notebook_payload(), filename="fresh.ipynb")
+    assert reopened.status_code == 201
+    assert reopened.json()["sessionId"] != created["sessionId"]
+
+
+def test_close_reports_cleanup_diagnostics_without_partial_failure(
+    client, notebook_payload,
+):
+    created = upload(client, notebook_payload()).json()
+
+    def fail_cleanup(_session_id, _revision):
+        raise RuntimeError("diagnostic cleanup failure")
+
+    client.app.state.notebook_service.register_session_replacement_listener(
+        fail_cleanup
+    )
+    response = client.request("DELETE", "/notebooks/current", json={
+        "sessionId": created["sessionId"],
+        "expectedDocumentRevision": created["revision"],
+    })
+
+    assert response.status_code == 200
+    assert response.json()["cleanupErrors"] == [
+        "RuntimeError: diagnostic cleanup failure",
+    ]
+    assert client.get("/notebooks/current").status_code == 404
+
+
+def test_close_rejects_active_mutation_before_preconditions(client, notebook_payload):
+    created = upload(client, notebook_payload()).json()
+    coordinator = client.app.state.notebook_service.coordinator
+    lease = coordinator.acquire(operation_type="agent_turn", operation_id="turn-1")
+    try:
+        response = client.request("DELETE", "/notebooks/current", json={
+            "sessionId": "stale-session",
+            "expectedDocumentRevision": 999,
+        })
+    finally:
+        coordinator.release(lease)
+
+    assert response.status_code == 409
+    assert response.json()["error"] == {
+        "code": "mutation_conflict",
+        "message": "Another notebook mutation is active",
+        "details": {
+            "activeOperationType": "agent_turn",
+            "activeOperationId": "turn-1",
+            "currentDocumentRevision": created["revision"],
+        },
+    }
+    assert client.get("/notebooks/current").status_code == 200
+
+
 def test_active_lease_precedes_stale_edit_and_invalid_replacement(
     client, notebook_payload
 ):

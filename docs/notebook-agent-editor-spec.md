@@ -118,6 +118,7 @@ Responsibilities:
   normalization, then run full nbformat validation afterward.
 - Normalize missing, invalid, and duplicate standard nbformat cell IDs.
 - Upload/import and download/export.
+- Close/unload the active notebook without terminating the application.
 - Track dirty state.
 - Maintain a monotonic document revision and mutation ownership metadata.
 - Store in-memory checkpoints.
@@ -138,6 +139,7 @@ Core use cases:
 - `ApplyValidatedCellSourceChanges`
 - `RestoreNotebookCheckpoint`
 - `ExportNotebook`
+- `CloseNotebook`
 
 Revision and mutation rules:
 
@@ -147,7 +149,7 @@ Revision and mutation rules:
   starting. Only the lease owner may commit mutations until it reaches a
   terminal state.
 - While a mutation lease is active, imports, source edits, turn-scope changes,
-  undo/revert, manual execution, and new agent turns fail with `409 Conflict`.
+  undo/revert, manual execution, close, and new agent turns fail with `409 Conflict`.
   Download may read a consistent snapshot.
 - Each mutation records its primary owner (`manual`, an agent `turnId`, or a
   manual execution `attemptId`). Agent-triggered execution results retain their
@@ -904,6 +906,7 @@ This is a conceptual API surface, not a final implementation contract.
 
 - `POST /notebooks/upload`
 - `GET /notebooks/current`
+- `DELETE /notebooks/current`
 - `GET /notebooks/download`
 - `POST /cells/{cellId}/source`
 - `POST /turn-scope/editable-cells`
@@ -934,6 +937,13 @@ replacing an active notebook requires both. Kernel interrupt/restart requests
 also include the active `executionAttemptId` when the kernel is busy and use the
 path's `kernelSessionId` as a compare-and-set precondition, preventing a stale
 browser command from affecting a newer kernel or execution.
+
+Closing the active notebook requires its `sessionId` and
+`expectedDocumentRevision`. A successful close atomically unloads the in-memory
+document, clears turn scope and the active event journal, closes old-session SSE
+streams, and replaces/shuts down kernel state. Listener cleanup failures do not
+roll back the committed close; the response includes cleanup diagnostics.
+The next upload is a new first upload and omits replacement preconditions.
 
 ## Stack
 
@@ -1242,6 +1252,14 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
 - Decision: Support one active notebook session in v1.
 - Alternatives: Multiple notebook tabs/sessions.
 - Rationale: Keeps session state, kernel lifecycle, checkpointing, and turn scope simpler.
+
+### Notebook Close
+
+- Decision: Allow the user to close the active notebook with session/revision
+  preconditions while keeping the local application running.
+- Alternatives: Require application restart; model close as an empty replacement notebook.
+- Rationale: Explicit unload semantics clear notebook-scoped state and kernel
+  resources without inventing a synthetic document or weakening stale-client checks.
 
 ### File Operations
 

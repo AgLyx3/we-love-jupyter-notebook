@@ -18,6 +18,11 @@ class CellSourceRequest(BaseModel):
     source: str
 
 
+class NotebookCloseRequest(BaseModel):
+    session_id: str = Field(alias="sessionId")
+    expected_revision: int = Field(alias="expectedDocumentRevision")
+
+
 def _service(request: Request) -> NotebookDocumentService:
     return request.app.state.notebook_service
 
@@ -79,6 +84,20 @@ async def upload_notebook(
 @router.get("/notebooks/current")
 def current_notebook(request: Request) -> dict[str, Any]:
     return serialize_snapshot(_service(request).get_snapshot())
+
+
+@router.delete("/notebooks/current")
+def close_notebook(
+    body: NotebookCloseRequest, request: Request,
+) -> dict[str, Any]:
+    result = _service(request).close_notebook(
+        expected_session_id=body.session_id,
+        expected_revision=body.expected_revision,
+    )
+    return {
+        "closedSessionId": result.closed_session_id,
+        "cleanupErrors": list(result.cleanup_errors),
+    }
 
 
 @router.get("/notebooks/download")

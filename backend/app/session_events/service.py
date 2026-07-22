@@ -38,7 +38,9 @@ class SessionEventService:
         self._total_bytes = 0
         self._active_session_id: str | None = None
 
-    def activate_session(self, session_id: str, _revision: int = 0) -> None:
+    def activate_session(
+        self, session_id: str | None, _revision: int = 0,
+    ) -> None:
         with self._lock:
             if session_id != self._active_session_id:
                 self._events.clear()

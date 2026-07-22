@@ -495,10 +495,12 @@ class KernelExecutionService:
         if old_kernel is not None:
             old_kernel.shutdown()
 
-    def _on_session_replaced(self, session_id: str, _revision: int) -> None:
+    def _on_session_replaced(
+        self, session_id: str | None, _revision: int,
+    ) -> None:
         with self._lock:
             old = self._kernel_notebook_session_id
-            if old is None or old == session_id:
+            if session_id is not None and (old is None or old == session_id):
                 self._kernel_notebook_session_id = session_id
                 return
             old_kernel = self.kernel

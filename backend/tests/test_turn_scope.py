@@ -109,6 +109,22 @@ def test_failed_replacement_preserves_current_scope(notebook_payload):
     assert scopes.current().editable_cell_ids == ("editable",)
 
 
+def test_close_clears_turn_scope(notebook_payload):
+    documents, snapshot = _loaded(notebook_payload)
+    scopes = TurnScopeService(documents)
+    scopes.add("editable", editable=True)
+
+    documents.close_notebook(
+        expected_session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
+
+    selection = scopes.current()
+    assert selection.editable_cell_ids == ()
+    assert selection.context_cell_ids == ()
+    assert selection.session_id is None
+
+
 def test_scope_is_bound_to_notebook_revision(notebook_payload):
     documents, snapshot = _loaded(notebook_payload)
     scopes = TurnScopeService(documents)
