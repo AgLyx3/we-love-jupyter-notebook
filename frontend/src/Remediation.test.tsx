@@ -5,7 +5,7 @@ import { useState } from "react";
 import App from "./App";
 import AgentChatPanel, { type TurnRecord } from "./agentChat/AgentChatPanel";
 import LineDiff from "./notebook/LineDiff";
-import { connectEvents, type AgentTurn, type ExecutionOperation, type NotebookSnapshot, type TurnScope } from "./api/client";
+import type { AgentTurn, ExecutionOperation, NotebookSnapshot, TurnScope } from "./api/client";
 import { EventSourceMock } from "./test/setup";
 
 vi.mock("@uiw/react-codemirror", () => ({
@@ -116,12 +116,6 @@ describe("remediation behaviors", () => {
     EventSourceMock.instances[0].onerror?.();
     EventSourceMock.instances[0].onopen?.();
     expect(EventSourceMock.instances).toHaveLength(1);
-  });
-
-  it("starts an explicit SSE reconnect after the preserved cursor", () => {
-    const close = connectEvents("session-1", 7, { notebook: vi.fn(), turn: vi.fn(), execution: vi.fn(), disconnected: vi.fn(), connected: vi.fn(), cursor: vi.fn() });
-    expect(EventSourceMock.instances[0].url).toContain("after=7");
-    close();
   });
 
   it("focuses and scrolls the same scoped cell for every click", async () => {

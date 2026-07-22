@@ -140,6 +140,68 @@ def test_session_event_journal_publishes_notebook_and_execution_state(client, no
     )
 
 
+def test_event_stream_native_reconnect_honors_last_event_id_header(
+    client, notebook_payload, monkeypatch,
+):
+    uploaded = client.post(
+        "/notebooks/upload",
+        files={"file": ("example.ipynb", notebook_payload(), "application/json")},
+    ).json()
+    service = client.app.state.session_event_service
+    for index in range(1, 9):
+        service.publish("test.updated", {
+            "sessionId": uploaded["sessionId"], "index": index,
+        })
+
+    captured = []
+
+    async def finite_stream(*, session_id, after, is_disconnected):
+        captured.append(after)
+        for event in service.list(after=after, session_id=session_id):
+            yield event
+        yield None
+
+    monkeypatch.setattr(service, "stream", finite_stream)
+    initial = client.get(
+        f"/events?sessionId={uploaded['sessionId']}&after=0",
+    )
+    assert initial.status_code == 200
+    assert "id: 7\n" in initial.text
+    response = client.get(
+        f"/events?sessionId={uploaded['sessionId']}&after=0",
+        headers={"Last-Event-ID": "7"},
+    )
+    assert response.status_code == 200
+    assert captured == [0, 7]
+    assert "id: 8\n" in response.text
+    assert "id: 7\n" not in response.text
+    assert ": keep-alive\n\n" in response.text
+
+
+def test_event_stream_ignores_malformed_last_event_id(
+    client, notebook_payload, monkeypatch,
+):
+    uploaded = client.post(
+        "/notebooks/upload",
+        files={"file": ("example.ipynb", notebook_payload(), "application/json")},
+    ).json()
+    service = client.app.state.session_event_service
+    captured = []
+
+    async def finite_stream(*, session_id, after, is_disconnected):
+        captured.append(after)
+        yield None
+
+    monkeypatch.setattr(service, "stream", finite_stream)
+    response = client.get(
+        f"/events?sessionId={uploaded['sessionId']}&after=5",
+        headers={"Last-Event-ID": "not-a-cursor"},
+    )
+    assert response.status_code == 200
+    assert captured == [5]
+    assert response.text == ": keep-alive\n\n"
+
+
 def pending_risky_execution(client, uploaded):
     updated = client.post("/cells/editable/source", json={
         "sessionId": uploaded["sessionId"],
