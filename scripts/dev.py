@@ -22,22 +22,35 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def signal_process_groups(children: list[subprocess.Popen[bytes]], sig: int) -> None:
+def _process_error(action: str, child: subprocess.Popen[bytes], error: BaseException) -> str:
+    return f"could not {action} process group {child.pid}: {error}"
+
+
+def signal_process_groups(
+    children: list[subprocess.Popen[bytes]], sig: int,
+) -> list[str]:
+    errors: list[str] = []
     for child in children:
-        if child.poll() is None:
-            try:
-                os.killpg(child.pid, sig)
-            except ProcessLookupError:
-                pass
+        try:
+            os.killpg(child.pid, sig)
+        except ProcessLookupError:
+            pass
+        except OSError as error:
+            errors.append(_process_error(f"send signal {sig} to", child, error))
+    return errors
 
 
 def terminate_process_groups(
     children: list[subprocess.Popen[bytes]], *, grace_period: float = 5,
-) -> None:
-    signal_process_groups(children, signal.SIGTERM)
+) -> list[str]:
+    errors = signal_process_groups(children, signal.SIGTERM)
     deadline = time.monotonic() + grace_period
     for child in children:
-        if child.poll() is not None:
+        try:
+            if child.poll() is not None:
+                continue
+        except OSError as error:
+            errors.append(_process_error("poll", child, error))
             continue
         try:
             child.wait(timeout=max(0, deadline - time.monotonic()))
@@ -46,7 +59,27 @@ def terminate_process_groups(
                 os.killpg(child.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            child.wait()
+            except OSError as error:
+                errors.append(_process_error("kill", child, error))
+            try:
+                child.wait()
+            except (OSError, subprocess.SubprocessError) as error:
+                errors.append(_process_error("wait for", child, error))
+        except (OSError, subprocess.SubprocessError) as error:
+            errors.append(_process_error("wait for", child, error))
+    return errors
+
+
+def child_exit_code(
+    children: list[subprocess.Popen[bytes]], shutdown_requested: Event,
+) -> int:
+    if shutdown_requested.is_set():
+        return 0
+    for child in children:
+        returncode = child.poll()
+        if returncode is not None:
+            return returncode if returncode != 0 else 1
+    return 1
 
 
 def main() -> int:
@@ -63,25 +96,46 @@ def main() -> int:
     ]
     children: list[subprocess.Popen[bytes]] = []
     shutdown_requested = Event()
+    shutdown_errors: list[str] = []
 
     def stop(_signum: int | None = None, _frame: object | None = None) -> None:
         shutdown_requested.set()
-        signal_process_groups(children, signal.SIGTERM)
+        shutdown_errors.extend(signal_process_groups(children, signal.SIGTERM))
 
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
+    exit_code: int | None = None
     try:
         for command in commands:
-            children.append(subprocess.Popen(
-                command, cwd=ROOT, env=environment, start_new_session=True,
-            ))
-        while not shutdown_requested.is_set() and all(child.poll() is None for child in children):
-            time.sleep(0.2)
-        if shutdown_requested.is_set():
-            return 0
-        return next((child.returncode or 0 for child in children if child.poll() is not None), 0)
+            if shutdown_requested.is_set():
+                break
+            try:
+                child = subprocess.Popen(
+                    command, cwd=ROOT, env=environment, start_new_session=True,
+                )
+            except OSError as error:
+                print(f"could not start {command[0]}: {error}", file=sys.stderr)
+                exit_code = 1
+                break
+            children.append(child)
+            if shutdown_requested.is_set():
+                shutdown_errors.extend(signal_process_groups([child], signal.SIGTERM))
+
+        if exit_code is None:
+            while (
+                not shutdown_requested.is_set()
+                and children
+                and all(child.poll() is None for child in children)
+            ):
+                time.sleep(0.2)
+            exit_code = child_exit_code(children, shutdown_requested)
     finally:
-        terminate_process_groups(children)
+        shutdown_errors.extend(terminate_process_groups(children))
+        for error in shutdown_errors:
+            print(f"development launcher cleanup: {error}", file=sys.stderr)
+
+    assert exit_code is not None
+    return exit_code
 
 
 if __name__ == "__main__":
