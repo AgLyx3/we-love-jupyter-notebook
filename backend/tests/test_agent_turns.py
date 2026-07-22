@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.agent_turns.service import (
-    AgentTurn, AgentTurnService, AgentTurnServiceShuttingDown,
+    AgentTurn, AgentTurnNotFound, AgentTurnService, AgentTurnServiceShuttingDown,
     MAX_TURN_HISTORY_BYTES, RevertConflict, UndoConflict,
 )
 from backend.app.api.agent_turn_routes import (
@@ -65,6 +65,31 @@ def test_noop_turn_does_not_increment_revision(notebook_payload):
     assert turn.state == "completed"
     assert turn.changes == ()
     assert documents.get_snapshot().revision == snapshot.revision
+
+
+def test_close_purges_turn_changes_checkpoint_and_lookup(notebook_payload):
+    documents, _scopes, turns, snapshot = _services(
+        notebook_payload,
+        [FakeAttempt(edits={"editable/cell_editable.py": "value = 2\n"})],
+    )
+    turn = turns.start(
+        prompt="change", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    assert turn.changes
+    assert turn.checkpoint is not None
+
+    current = documents.get_snapshot()
+    documents.close_notebook(
+        expected_session_id=current.session_id,
+        expected_revision=current.revision,
+    )
+
+    with pytest.raises(AgentTurnNotFound):
+        turns.get(turn.turn_id)
+    assert turns.history_for_session(snapshot.session_id) == []
+    assert turns._turns == {}
+    assert turns._latest_applied_turn_id is None
 
 
 def test_session_status_persists_bounded_turn_history_with_frozen_scope(

@@ -147,6 +147,8 @@ class TurnScopeService:
             self._frozen = None
             self._selection_session_id = None
             self._selection_revision = None
+            if _session_id is None:
+                self._history.clear()
 
     def update_terminal_outcome(self, turn_id: str, outcome: str) -> None:
         with self._lock:

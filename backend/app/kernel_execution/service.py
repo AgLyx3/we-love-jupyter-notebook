@@ -503,6 +503,9 @@ class KernelExecutionService:
             if session_id is not None and (old is None or old == session_id):
                 self._kernel_notebook_session_id = session_id
                 return
+            if session_id is None:
+                self._operations.clear()
+                self._attempts.clear()
             old_kernel = self.kernel
             replacement = KernelSession(
                 startup_timeout=old_kernel.startup_timeout,

@@ -941,8 +941,11 @@ browser command from affecting a newer kernel or execution.
 Closing the active notebook requires its `sessionId` and
 `expectedDocumentRevision`. A successful close atomically unloads the in-memory
 document, clears turn scope and the active event journal, closes old-session SSE
-streams, and replaces/shuts down kernel state. Listener cleanup failures do not
-roll back the committed close; the response includes cleanup diagnostics.
+streams, and replaces/shuts down kernel state. It also purges retained agent
+turns (including source changes and undo checkpoints), execution operations and
+attempts, and terminal turn-scope history so old resource IDs become
+inaccessible. Listener cleanup failures do not roll back the committed close;
+the response includes cleanup diagnostics.
 The next upload is a new first upload and omits replacement preconditions.
 
 ## Stack

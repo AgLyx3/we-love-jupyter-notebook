@@ -125,6 +125,25 @@ def test_close_clears_turn_scope(notebook_payload):
     assert selection.session_id is None
 
 
+def test_close_purges_terminal_scope_history(notebook_payload):
+    documents, snapshot = _loaded(notebook_payload)
+    scopes = TurnScopeService(documents)
+    scopes.expire(FrozenTurnScope(
+        turn_id="old-turn", session_id=snapshot.session_id,
+        notebook_revision=snapshot.revision,
+        editable_cell_ids=("editable",), context_cell_ids=("intro",),
+        prompt="old scoped prompt", frozen_at=datetime.now(timezone.utc),
+    ), "completed")
+    assert scopes.history
+
+    documents.close_notebook(
+        expected_session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
+
+    assert scopes.history == ()
+
+
 def test_scope_is_bound_to_notebook_revision(notebook_payload):
     documents, snapshot = _loaded(notebook_payload)
     scopes = TurnScopeService(documents)

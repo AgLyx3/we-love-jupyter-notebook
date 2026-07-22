@@ -109,6 +109,9 @@ class AgentTurnService:
         self._latest_applied_turn_id: str | None = None
         self._workers: dict[Thread, str] = {}
         self._shutting_down = False
+        self.documents.register_session_replacement_listener(
+            self._on_session_replaced
+        )
 
     def start(
         self, *, prompt: str, session_id: str, expected_revision: int,
@@ -495,6 +498,16 @@ class AgentTurnService:
                             "message": "Agent worker did not stop before shutdown deadline",
                             "details": {},
                         }
+
+    def _on_session_replaced(
+        self, session_id: str | None, _revision: int,
+    ) -> None:
+        if session_id is not None:
+            return
+        with self._lock:
+            self._turns.clear()
+            self._latest_applied_turn_id = None
+            self._workers.clear()
 
     @staticmethod
     def _source_hash(source: str) -> str:
