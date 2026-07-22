@@ -1,6 +1,6 @@
 import { BookOpen, Check, Pencil, Play, RotateCcw, Save } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AgentChange, NotebookCellData } from "../api/client";
 import CellEditor from "./CellEditor";
 import LineDiff from "./LineDiff";
@@ -26,30 +26,35 @@ export function Outputs({ outputs }: { outputs: Record<string, unknown>[] }) {
   })}</div>;
 }
 
-export default function NotebookCell({ cell, draftResetGeneration, focused, editable, context, change, disabled, cellRef, onFocus, onSave, onRun, onAddEditable, onAddContext, onRevert }: {
+export default function NotebookCell({ cell, focused, editable, context, change, disabled, sourceActionsDisabled, cellRef, onFocus, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert }: {
   cell: NotebookCellData; focused: boolean; editable: boolean; context: boolean; change?: AgentChange;
-  draftResetGeneration: number;
-  disabled: boolean; cellRef: (node: HTMLElement | null) => void;
-  onFocus: () => void; onSave: (source: string) => void; onRun: () => void; onAddEditable: () => void; onAddContext: () => void; onRevert: () => void;
+  disabled: boolean; sourceActionsDisabled: boolean; cellRef: (node: HTMLElement | null) => void;
+  onFocus: () => void; onDirtyChange: (dirty: boolean) => void; onSave: (source: string) => void; onRun: () => void; onAddEditable: () => void; onAddContext: () => void; onRevert: () => void;
 }) {
   const [source, setSource] = useState(cell.source);
+  const previousServerSource = useRef(cell.source);
   const [editingMarkdown, setEditingMarkdown] = useState(false);
-  useEffect(() => setSource(cell.source), [cell.source, draftResetGeneration]);
   const dirty = source !== cell.source;
+  useEffect(() => {
+    setSource((current) => current === previousServerSource.current ? cell.source : current);
+    previousServerSource.current = cell.source;
+  }, [cell.source]);
+  useEffect(() => onDirtyChange(dirty), [cell.cellId, dirty]);
   const description = `${cell.cellType} cell ${cell.index + 1}`;
-  return <article ref={cellRef} draggable={!disabled} onDragStart={(event) => { event.dataTransfer.setData("application/x-notebook-cell", cell.cellId); event.dataTransfer.effectAllowed = "copy"; }} className={`notebook-cell ${focused ? "is-focused" : ""}`} tabIndex={0} onFocus={onFocus} aria-label={description}>
-    <div className="cell-gutter"><span className="execution-count">{cell.cellType === "code" ? `[${cell.executionCount ?? " "}]` : "MD"}</span><div className="gutter-actions">
-      <button disabled={disabled} className={editable ? "selected" : ""} title="Allow agent edit" aria-label={`Allow agent edit ${description}`} onClick={onAddEditable}>{editable ? <Check /> : <Pencil />}</button>
-      <button disabled={disabled} className={context ? "selected context" : ""} title="Add as context" aria-label={`Add ${description} as context`} onClick={onAddContext}>{context ? <Check /> : <BookOpen />}</button>
+  const dependentDisabled = disabled || sourceActionsDisabled;
+  return <article ref={cellRef} draggable={!dependentDisabled} onDragStart={(event) => { event.dataTransfer.setData("application/x-notebook-cell", cell.cellId); event.dataTransfer.effectAllowed = "copy"; }} className={`notebook-cell ${focused ? "is-focused" : ""}`} tabIndex={0} onFocus={onFocus} aria-label={description}>
+    <div className="cell-gutter"><span className="execution-count">{cell.cellType === "code" ? `[${cell.executionCount ?? " "}]` : cell.cellType === "raw" ? "RAW" : "MD"}</span><div className="gutter-actions">
+      <button disabled={dependentDisabled || cell.cellType === "raw"} className={editable ? "selected" : ""} title="Allow agent edit" aria-label={`Allow agent edit ${description}`} onClick={onAddEditable}>{editable ? <Check /> : <Pencil />}</button>
+      <button disabled={dependentDisabled} className={context ? "selected context" : ""} title="Add as context" aria-label={`Add ${description} as context`} onClick={onAddContext}>{context ? <Check /> : <BookOpen />}</button>
     </div></div>
     <div className="cell-main">
       <div className="cell-actions">
-        {cell.cellType === "code" && <button disabled={disabled} title="Run cell" aria-label={`Run ${description}`} onClick={onRun}><Play /></button>}
+        {cell.cellType === "code" && <button disabled={dependentDisabled} title="Run cell" aria-label={`Run ${description}`} onClick={onRun}><Play /></button>}
         {cell.cellType === "markdown" && <button disabled={disabled} title={editingMarkdown ? "Preview Markdown" : "Edit Markdown"} aria-label={`${editingMarkdown ? "Preview" : "Edit"} ${description}`} onClick={() => setEditingMarkdown(!editingMarkdown)}><Pencil /></button>}
         {dirty && <button disabled={disabled} title="Save source" aria-label={`Save ${description}`} onClick={() => onSave(source)}><Save /></button>}
-        {change && <button disabled={disabled} title="Revert this agent change" aria-label={`Revert agent change to ${description}`} onClick={onRevert}><RotateCcw /></button>}
+        {change && <button disabled={dependentDisabled} title="Revert this agent change" aria-label={`Revert agent change to ${description}`} onClick={onRevert}><RotateCcw /></button>}
       </div>
-      {cell.cellType === "code" || editingMarkdown ? <CellEditor value={source} label={`Source for ${description}`} disabled={disabled} onChange={setSource} onSave={() => dirty && onSave(source)} /> : <div className="markdown-preview"><ReactMarkdown>{source}</ReactMarkdown></div>}
+      {cell.cellType === "code" || cell.cellType === "raw" || editingMarkdown ? <CellEditor value={source} label={`Source for ${description}`} disabled={disabled} language={cell.cellType} onChange={setSource} onSave={() => dirty && onSave(source)} /> : <div className="markdown-preview"><ReactMarkdown>{source}</ReactMarkdown></div>}
       <Outputs outputs={cell.outputs} />
       {change && <details className="cell-diff"><summary>Agent change</summary><LineDiff before={change.previousSource} after={change.nextSource} /></details>}
     </div>

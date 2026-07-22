@@ -66,7 +66,8 @@ describe("Notebook editor", () => {
     await userEvent.click(screen.getByLabelText("Save code cell 2"));
     expect(await screen.findByRole("alert")).toHaveTextContent("Notebook changed elsewhere");
     await waitFor(() => expect(screen.getByText("Revision 4")).toBeInTheDocument());
-    expect(editor).toHaveValue("print('ok')");
+    expect(editor).toHaveValue("print('ok') # changed");
+    expect(screen.getByLabelText("Save code cell 2")).toBeEnabled();
   });
 
   it("preserves an unrelated unsaved draft when another cell save advances the revision", async () => {
@@ -121,5 +122,53 @@ describe("Notebook editor", () => {
     expect(await screen.findByText("Execution needs approval")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Approve and run" }));
     expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringContaining("/execution/attempt-1/approve"), expect.objectContaining({ body: JSON.stringify({ sessionId: "session-1", expectedDocumentRevision: 3, turnId: "turn-1", cellId: "code-1" }) }));
+  });
+
+  it("blocks source-dependent actions while a cell has an unsaved draft", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current")) return response(notebook);
+      if (path.endsWith("/turn-scope")) return response({ editableCellIds: ["code-1"], contextCellIds: [], sessionId: "session-1", notebookRevision: 3 });
+      if (path.endsWith("/kernel/status")) return response({ state: "idle", kernelSessionId: "kernel-1", executionAttemptId: null });
+      if (path.endsWith("/session/status")) return response({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: null, turnHistory: [], turnHistoryTruncated: false });
+      return response({});
+    });
+    render(<App />);
+    const editor = await screen.findByLabelText("Source for code cell 2");
+    await userEvent.type(editor, " # unsaved");
+    await userEvent.type(screen.getByLabelText("Agent instruction"), "Use the visible source");
+
+    expect(screen.getByLabelText("Save code cell 2")).toBeEnabled();
+    expect(screen.getByLabelText("Run code cell 2")).toBeDisabled();
+    expect(screen.getByLabelText("Run all cells")).toBeDisabled();
+    expect(screen.getByLabelText("Allow agent edit code cell 2")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.getByLabelText("Upload notebook").querySelector("input")).toBeDisabled();
+    expect(screen.getByLabelText("Download notebook")).toBeEnabled();
+  });
+
+  it("renders raw cells literally with manual editing but no agent-edit permission", async () => {
+    const rawNotebook = {
+      ...notebook,
+      cells: [{ cellId: "raw-1", index: 0, cellType: "raw", source: "# literal raw\n<not markdown>", metadata: {}, outputs: [], executionCount: null }],
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current")) return response(rawNotebook);
+      if (path.endsWith("/turn-scope")) return response({ editableCellIds: [], contextCellIds: [], sessionId: null, notebookRevision: null });
+      if (path.endsWith("/kernel/status")) return response({ state: "not_started", kernelSessionId: null, executionAttemptId: null });
+      if (path.endsWith("/session/status")) return response({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: null, turnHistory: [], turnHistoryTruncated: false });
+      return response({});
+    });
+    render(<App />);
+
+    expect(await screen.findByLabelText("raw cell 1")).toHaveTextContent("RAW");
+    expect(screen.getByLabelText("Add raw cell 1 as context")).toBeEnabled();
+    const editor = await screen.findByLabelText("Source for raw cell 1");
+    expect(editor).toHaveValue("# literal raw\n<not markdown>");
+    await userEvent.type(editor, "\nchanged");
+    expect(screen.getByLabelText("Save raw cell 1")).toBeEnabled();
+    expect(screen.getByLabelText("Allow agent edit raw cell 1")).toBeDisabled();
+    expect(screen.getByLabelText("Add raw cell 1 as context")).toBeDisabled();
   });
 });

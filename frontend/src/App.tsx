@@ -24,7 +24,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ tone: "error" | "warning"; text: string } | null>(null);
-  const [draftResetRequest, setDraftResetRequest] = useState<{ cellId: string; generation: number } | null>(null);
+  const [dirtyCellIds, setDirtyCellIds] = useState<Set<string>>(() => new Set());
   const [polling, setPolling] = useState(false);
   const snapshotRef = useRef(notebook);
   const scopeRef = useRef(scope);
@@ -36,6 +36,7 @@ export default function App() {
   const mutationGenerationRef = useRef(0);
   useEffect(() => { snapshotRef.current = notebook; }, [notebook]);
   useEffect(() => { scopeRef.current = scope; }, [scope]);
+  useEffect(() => { setDirtyCellIds(new Set()); }, [notebook?.sessionId]);
 
   const refresh = useCallback(async () => {
     const epoch = ++resourceEpochRef.current;
@@ -51,9 +52,9 @@ export default function App() {
       setScope(nextScope);
       setKernel(nextKernel);
       const hydrated = (status.turnHistory ?? []).map(turnToRecord).slice(0, 50);
-      setHistory((items) => reconcileHistory(hydrated, items, nextNotebook));
+      setHistory((items) => reconcileHistory(hydrated, items, nextNotebook, status.turnHistoryTruncated ?? false));
       setTurn(status.activeTurn ? reconcileTurnChanges(status.activeTurn, nextNotebook) : hydrated[0]?.turn ?? null);
-      setSelectedTurnId((selected) => hydrated.some((item) => item.turn.turnId === selected) ? selected : hydrated[0]?.turn.turnId ?? null);
+      setSelectedTurnId((selected) => selected && (hydrated.some((item) => item.turn.turnId === selected) || status.turnHistoryTruncated) ? selected : hydrated[0]?.turn.turnId ?? null);
       setOperation(status.activeExecution);
       return nextNotebook;
     } catch (error) {
@@ -112,7 +113,11 @@ export default function App() {
       if (executionGenerationRef.current.get(id) !== generation || resourceEpochRef.current !== epoch) return;
       setOperation(next);
       if (terminalExecutions.has(next.state)) await refresh();
-      else setKernel(await api.kernel());
+      else {
+        const nextKernel = await api.kernel();
+        if (executionGenerationRef.current.get(id) !== generation || resourceEpochRef.current !== epoch) return;
+        setKernel(nextKernel);
+      }
     } catch (error) { showError(error); }
   }, [refresh]);
 
@@ -163,7 +168,10 @@ export default function App() {
 
   const handleUpload = async (file: File) => {
     const current = snapshotRef.current;
-    await mutate(async () => { const uploaded = await api.upload(file, current ?? undefined); return { uploaded, kernel: await api.kernel() }; }, { refreshAfter: false }, ({ uploaded, kernel }) => { setNotebook(uploaded); setScope(emptyScope); setTurn(null); setHistory([]); setSelectedTurnId(null); setOperation(null); setKernel(kernel); });
+    const uploaded = await mutate(() => api.upload(file, current ?? undefined), { refreshAfter: false }, (next) => {
+      setNotebook(next); setScope(emptyScope); setTurn(null); setHistory([]); setSelectedTurnId(null); setOperation(null); setKernel(emptyKernel); setDirtyCellIds(new Set());
+    });
+    if (uploaded) await mutate(() => api.kernel(), { refreshAfter: false }, setKernel);
   };
 
   const handleDownload = async () => {
@@ -189,21 +197,25 @@ export default function App() {
   const activeTurn = history.find((item) => !terminalTurns.has(item.turn.state))?.turn ?? (turn && !terminalTurns.has(turn.state) ? turn : null);
   const activeExecution = operation && !terminalExecutions.has(operation.state) ? operation : null;
   const mutationsDisabled = Boolean(activeTurn || activeExecution);
+  const hasDirtyDrafts = dirtyCellIds.size > 0;
   const selectedTurn = history.find((item) => item.turn.turnId === selectedTurnId)?.turn ?? turn;
 
   return <div className="app-shell">
     <header className="topbar">
       <div className="brand"><BookOpen /><strong>{notebook.filename}</strong><span className={notebook.dirty ? "dirty" : ""}>{notebook.dirty ? "Unsaved" : "Clean"}</span><span>Revision {notebook.revision}</span></div>
-      <div className="toolbar-actions"><KernelControls status={kernel} mutationDisabled={mutationsDisabled || busy} onRunAll={() => void mutate(() => api.runAll(notebook), { refreshAfter: false }, setOperation)} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} /><FileToolbar notebook={notebook} uploadDisabled={mutationsDisabled || busy} onUpload={handleUpload} onDownload={() => void handleDownload()} /></div>
+      <div className="toolbar-actions"><KernelControls status={kernel} mutationDisabled={mutationsDisabled || busy || hasDirtyDrafts} onRunAll={() => void mutate(() => api.runAll(notebook), { refreshAfter: false }, setOperation)} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} /><FileToolbar notebook={notebook} uploadDisabled={mutationsDisabled || busy || hasDirtyDrafts} onUpload={handleUpload} onDownload={() => void handleDownload()} /></div>
     </header>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
     <div className="editor-layout">
-      <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} disabled={mutationsDisabled || busy} focusRequest={focusRequest} draftResetRequest={draftResetRequest}
+      <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} focusRequest={focusRequest}
+        onDirtyChange={(cellId, dirty) => setDirtyCellIds((current) => {
+          if (current.has(cellId) === dirty) return current;
+          const next = new Set(current); if (dirty) next.add(cellId); else next.delete(cellId); return next;
+        })}
         onSave={(cellId, source) => void mutate(
           () => api.saveSource(notebook, cellId, source),
           {
-            conflictText: "Notebook changed elsewhere. Your unsaved edit was not applied; the latest revision has been loaded.",
-            onConflict: () => setDraftResetRequest((current) => ({ cellId, generation: (current?.generation ?? 0) + 1 })),
+            conflictText: "Notebook changed elsewhere. Your unsaved edit is still in the editor; review it against the latest revision before saving again.",
           },
           (saved) => setNotebook((current) => current && current.sessionId === saved.sessionId ? {
             ...current,
@@ -219,7 +231,7 @@ export default function App() {
           setHistory((items) => updateTurnRecord(items, turnId, (item) => ({ ...item, changes: item.changes.filter((change) => change.cellId !== cellId) })));
           setTurn((item) => item?.turnId === turnId ? { ...item, changes: item.changes.filter((change) => change.cellId !== cellId) } : item);
         })} />
-      <AgentChatPanel notebook={notebook} scope={scope} turn={selectedTurn} activeTurn={activeTurn} history={history} operation={operation} busy={busy} mutationsDisabled={mutationsDisabled}
+      <AgentChatPanel notebook={notebook} scope={scope} turn={selectedTurn} activeTurn={activeTurn} history={history} operation={operation} busy={busy} mutationsDisabled={mutationsDisabled || hasDirtyDrafts}
         onClearScope={() => void mutate(() => api.clearScope(notebook), { refreshAfter: false }, setScope)}
         onSubmit={(prompt) => { const frozen = { ...scope, editableCellIds: [...scope.editableCellIds], contextCellIds: [...scope.contextCellIds] }; void mutate(() => api.startTurn(notebook, prompt), { refreshAfter: false }, (result) => { setTurn(result); setSelectedTurnId(result.turnId); setHistory((items) => upsertRecord(items, result, frozen, prompt)); }); }}
         onCancel={() => activeTurn && void mutate(() => api.cancelTurn(notebook, activeTurn.turnId), { refreshAfter: false }, (result) => { setTurn(result); setHistory((items) => upsertRecord(items, result)); })}
@@ -249,8 +261,8 @@ function turnToRecord(turn: AgentTurn): TurnRecord {
   return { turn, editableCellIds: turn.editableCellIds, contextCellIds: turn.contextCellIds, prompt: turn.prompt };
 }
 
-function reconcileHistory(summaries: TurnRecord[], existing: TurnRecord[], notebook: NotebookSnapshot): TurnRecord[] {
-  return summaries.map((summary) => {
+function reconcileHistory(summaries: TurnRecord[], existing: TurnRecord[], notebook: NotebookSnapshot, truncated: boolean): TurnRecord[] {
+  const reconciled = summaries.map((summary) => {
     const detail = existing.find((item) => item.turn.turnId === summary.turn.turnId);
     const turn = summary.turn.historyTruncated && detail && !detail.turn.historyTruncated
       ? {
@@ -268,6 +280,12 @@ function reconcileHistory(summaries: TurnRecord[], existing: TurnRecord[], noteb
       prompt: detail && summary.turn.historyTruncated ? detail.prompt : summary.prompt,
     };
   });
+  if (!truncated) return reconciled;
+  const returnedIds = new Set(reconciled.map((item) => item.turn.turnId));
+  const cachedTail = existing
+    .filter((item) => item.turn.sessionId === notebook.sessionId && !returnedIds.has(item.turn.turnId))
+    .map((item) => ({ ...item, turn: reconcileTurnChanges(item.turn, notebook) }));
+  return [...reconciled, ...cachedTail].slice(0, 50);
 }
 
 function reconcileTurnChanges(turn: AgentTurn, notebook: NotebookSnapshot | null): AgentTurn {

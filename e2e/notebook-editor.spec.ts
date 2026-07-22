@@ -240,7 +240,10 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   await page.getByLabel("Save code cell 4").click();
   await expect(page.getByRole("alert")).toContainText("Notebook changed elsewhere");
   await assertOverlayLayout(page, ".notice", "button");
-  await expect(page.getByLabel("Source for code cell 4").locator(".cm-content")).not.toContainText("stale save");
+  await expect(page.getByLabel("Source for code cell 4").locator(".cm-content")).toContainText("stale save");
+  await expect(page.getByLabel("Save code cell 4")).toBeEnabled();
+  await expect(page.getByLabel("Run code cell 4")).toBeDisabled();
+  await expect(page.getByLabel("Run all cells")).toBeDisabled();
 
   const downloadPromise = page.waitForEvent("download");
   await page.getByLabel("Download notebook").click();

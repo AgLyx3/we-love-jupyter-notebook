@@ -89,6 +89,7 @@ export interface SessionStatus {
   activeTurn: AgentTurn | null;
   activeExecution: ExecutionOperation | null;
   turnHistory: AgentTurn[];
+  turnHistoryTruncated: boolean;
 }
 
 export interface ApiErrorBody { code: string; message: string; details: Record<string, unknown> }

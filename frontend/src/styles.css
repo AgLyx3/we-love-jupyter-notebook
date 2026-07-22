@@ -16,7 +16,7 @@ body { margin: 0; min-width: 320px; min-height: 100vh; }
 button, textarea, input { font: inherit; }
 button, .icon-button { border: 1px solid var(--border); background: #fff; color: #34404b; border-radius: 5px; min-width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; }
 button:hover:not(:disabled), .icon-button:hover:not(.disabled) { background: #eef5fa; border-color: #92aec2; }
-button:focus-visible, a:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline: 2px solid #2780bd; outline-offset: 2px; }
+button:focus-visible, a:focus-visible, textarea:focus-visible, [tabindex]:focus-visible, .icon-button:focus-within, .upload-button:focus-within { outline: 2px solid #2780bd; outline-offset: 2px; }
 button:disabled, .disabled { opacity: .42; cursor: not-allowed; }
 button svg, .icon-button svg { width: 17px; height: 17px; }
 button.primary, .primary { background: var(--blue); border-color: var(--blue); color: white; }

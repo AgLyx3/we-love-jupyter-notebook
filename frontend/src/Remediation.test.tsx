@@ -412,6 +412,81 @@ describe("remediation behaviors", () => {
     expect(screen.getByText("Execution: running")).toBeInTheDocument();
   });
 
+  it("does not let a delayed kernel status overwrite terminal execution state", async () => {
+    const running = { ...operation, state: "running" };
+    const completed = { ...operation, state: "completed", completedAt: "2026-07-22T00:00:00Z" };
+    let executionCalls = 0;
+    let kernelCalls = 0;
+    let resolveOldKernel!: (value: Response) => void;
+    const oldKernel = new Promise<Response>((resolve) => { resolveOldKernel = resolve; });
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/execution/op-kernel-race")) {
+        executionCalls += 1;
+        return json(executionCalls === 1 ? running : completed);
+      }
+      if (path.endsWith("/kernel/status")) {
+        kernelCalls += 1;
+        if (kernelCalls === 2) return oldKernel;
+        return json(kernelCalls >= 3 ? { state: "idle", kernelSessionId: "kernel-1", executionAttemptId: null } : { state: "busy", kernelSessionId: "kernel-1", executionAttemptId: "attempt-1" });
+      }
+      if (path.endsWith("/session/status")) return json({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: executionCalls >= 2 ? null : running, turnHistory: [], turnHistoryTruncated: false });
+      return baseFetch(input, init);
+    });
+    render(<App />);
+    expect(await screen.findByText("Kernel busy")).toBeInTheDocument();
+    const source = EventSourceMock.instances[0];
+    source.emit("execution.updated", { operationId: "op-kernel-race" }, 1);
+    await waitFor(() => expect(kernelCalls).toBe(2));
+    source.emit("execution.updated", { operationId: "op-kernel-race" }, 2);
+    expect(await screen.findByText("Kernel idle")).toBeInTheDocument();
+
+    resolveOldKernel(new Response(JSON.stringify({ state: "busy", kernelSessionId: "kernel-1", executionAttemptId: "attempt-1" }), { headers: { "Content-Type": "application/json" } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByText("Kernel idle")).toBeInTheDocument();
+  });
+
+  it("keeps the uploaded session when the following kernel read fails", async () => {
+    const uploaded = { ...notebook, sessionId: "session-2", filename: "replacement.ipynb", revision: 0 };
+    let uploadCommitted = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/upload") && init?.method === "POST") {
+        uploadCommitted = true;
+        return json(uploaded, 201);
+      }
+      if (path.endsWith("/kernel/status") && uploadCommitted) return json({ error: { code: "kernel_unavailable", message: "Kernel status unavailable", details: {} } }, 500);
+      if (path.endsWith("/session/status")) return json({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: null, turnHistory: [], turnHistoryTruncated: false });
+      return baseFetch(input, init);
+    });
+    render(<App />);
+    expect(await screen.findByText("sample.ipynb")).toBeInTheDocument();
+    const file = new File(["{}"], "replacement.ipynb", { type: "application/x-ipynb+json" });
+    await userEvent.upload(screen.getByLabelText("Upload notebook").querySelector("input")!, file);
+
+    expect(await screen.findByText("replacement.ipynb")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Kernel status unavailable");
+  });
+
+  it("retains cached history omitted from a truncated aggregate response", async () => {
+    const newest = { ...turn("newest"), prompt: "Newest turn" };
+    const older = { ...turn("older"), prompt: "Cached older turn" };
+    let statusCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/session/status")) {
+        statusCalls += 1;
+        return json({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: null, turnHistory: statusCalls === 1 ? [newest, older] : [newest], turnHistoryTruncated: statusCalls > 1 });
+      }
+      return baseFetch(input, init);
+    });
+    render(<App />);
+    expect(await screen.findByText("Cached older turn")).toBeInTheDocument();
+    EventSourceMock.instances[0].emit("notebook.updated", { revision: 3 }, 1);
+    await waitFor(() => expect(statusCalls).toBeGreaterThanOrEqual(2));
+    expect(screen.getByText("Cached older turn")).toBeInTheDocument();
+  });
+
   it("reconciles terminal turn detail after earlier notebook and execution refreshes", async () => {
     const previousSource = "a = 1\nprint(a)";
     const nextSource = "a = 2\nprint(a)";
