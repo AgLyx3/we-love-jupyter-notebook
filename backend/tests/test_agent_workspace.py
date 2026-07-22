@@ -224,6 +224,17 @@ def test_process_runner_decode_error_still_cleans_descendant(tmp_path):
     assert _wait_process_gone(int(pid_file.read_text()))
 
 
+def test_process_runner_shutdown_rejects_new_runs(tmp_path):
+    runner = ProcessRunner()
+    runner.shutdown(grace_period=0.01)
+
+    with pytest.raises(AgentAdapterError, match="shutting down"):
+        runner.run(
+            [sys.executable, "-c", "print('late')"], cwd=tmp_path,
+            timeout=1, cancel_event=Event(),
+        )
+
+
 def test_configured_adapter_defaults_to_claude(monkeypatch):
     monkeypatch.delenv("NOTEBOOK_AGENT_ADAPTER", raising=False)
     assert isinstance(configured_agent_adapter(), ClaudeAgentAdapter)

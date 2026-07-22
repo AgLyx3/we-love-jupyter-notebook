@@ -1,4 +1,7 @@
 import json
+import os
+from pathlib import Path
+import sys
 import time
 from threading import Event
 
@@ -6,14 +9,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.agent_turns.service import (
-    AgentTurn, AgentTurnService, MAX_TURN_HISTORY_BYTES, RevertConflict,
-    UndoConflict,
+    AgentTurn, AgentTurnService, AgentTurnServiceShuttingDown,
+    MAX_TURN_HISTORY_BYTES, RevertConflict, UndoConflict,
 )
 from backend.app.api.agent_turn_routes import (
     MAX_TURN_SUMMARY_BYTES, serialize_turn_summary,
 )
 from backend.app.boundary_validation.validator import CandidateCellSourceChange
 from backend.app.agent_workspace.adapters import FakeAgentAdapter, FakeAttempt
+from backend.app.agent_workspace.models import AdapterResult
+from backend.app.agent_workspace.runner import ProcessRunner
 from backend.app.notebook_document.models import MutationConflict, RevisionConflict
 from backend.app.notebook_document.service import NotebookDocumentService
 from backend.app.main import create_app
@@ -540,6 +545,246 @@ def test_per_cell_revert_requires_applied_source_hash(notebook_payload):
             turn.turn_id, "editable", session_id=snapshot.session_id,
             expected_revision=edited.revision,
         )
+
+
+def test_historical_cell_revert_survives_unrelated_manual_mutation(
+    notebook_payload,
+):
+    documents, _scopes, turns, snapshot = _services(
+        notebook_payload,
+        [FakeAttempt(edits={"editable/cell_editable.py": "value = 2\n"})],
+    )
+    turn = turns.start(
+        prompt="one", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    changed = documents.update_cell_source(
+        cell_id="intro", source="# manual context\n",
+        expected_revision=turn.applied_revision,
+        expected_session_id=snapshot.session_id, owner="manual",
+    )
+
+    assert not turns.is_undo_eligible(turn)
+    assert turns.get(turn.turn_id).checkpoint is None
+    reverted = turns.revert_cell(
+        turn.turn_id, "editable", session_id=snapshot.session_id,
+        expected_revision=changed.revision,
+    )
+
+    assert _source(reverted) == "value = 1\n"
+    with pytest.raises(UndoConflict):
+        turns.undo(
+            turn.turn_id, session_id=snapshot.session_id,
+            expected_revision=reverted.revision,
+        )
+
+
+def test_historical_cell_revert_survives_later_turn_on_another_cell(
+    notebook_payload,
+):
+    documents, scopes, turns, snapshot = _services(
+        notebook_payload,
+        [
+            FakeAttempt(edits={"editable/cell_editable.py": "value = 2\n"}),
+            FakeAttempt(edits={"editable/cell_intro.md": "# later\n"}),
+        ],
+    )
+    first = turns.start(
+        prompt="one", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    current = documents.get_snapshot()
+    scopes.add("intro", editable=True)
+    second = turns.start(
+        prompt="two", session_id=current.session_id,
+        expected_revision=current.revision, background=False,
+    )
+
+    reverted = turns.revert_cell(
+        first.turn_id, "editable", session_id=snapshot.session_id,
+        expected_revision=second.applied_revision,
+    )
+
+    assert _source(reverted) == "value = 1\n"
+
+
+def test_api_reverts_historical_cell_after_unrelated_manual_edit(
+    notebook_payload,
+):
+    app = create_app(agent_adapter=FakeAgentAdapter([
+        FakeAttempt(edits={"editable/cell_editable.py": "value = 2\n"}),
+    ]))
+    app.state.agent_turn_service.executions = None
+    with TestClient(app) as api:
+        uploaded = api.post(
+            "/notebooks/upload",
+            files={"file": ("sample.ipynb", notebook_payload(), "application/json")},
+        ).json()
+        preconditions = {
+            "sessionId": uploaded["sessionId"],
+            "expectedDocumentRevision": uploaded["revision"],
+        }
+        api.post(
+            "/turn-scope/editable-cells",
+            json={**preconditions, "cellId": "editable"},
+        )
+        created = api.post(
+            "/agent-turns", json={**preconditions, "prompt": "change"},
+        ).json()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            turn = api.get(f"/agent-turns/{created['turnId']}").json()
+            if turn["state"] in {"completed", "failed", "cancelled"}:
+                break
+            time.sleep(0.01)
+        assert turn["state"] == "completed"
+        manual = api.post(
+            "/cells/intro/source",
+            json={
+                "sessionId": uploaded["sessionId"],
+                "expectedDocumentRevision": turn["appliedRevision"],
+                "source": "# manual context\n",
+            },
+        ).json()
+        assert api.get(f"/agent-turns/{created['turnId']}").json()["undoEligible"] is False
+
+        reverted = api.post(
+            f"/agent-turns/{created['turnId']}/cells/editable/revert",
+            json={
+                "sessionId": uploaded["sessionId"],
+                "expectedDocumentRevision": manual["revision"],
+            },
+        )
+
+        assert reverted.status_code == 200
+        editable = next(
+            cell for cell in reverted.json()["cells"]
+            if cell["cellId"] == "editable"
+        )
+        assert editable["source"] == "value = 1\n"
+
+
+def test_app_lifespan_stops_agent_turns_before_kernel_execution():
+    app = create_app()
+    calls = []
+    app.state.agent_turn_service.shutdown = lambda: calls.append("turns")
+    app.state.kernel_execution_service.shutdown = lambda: calls.append("kernel")
+
+    with TestClient(app):
+        pass
+
+    assert calls == ["turns", "kernel"]
+
+
+def test_shutdown_terminates_agent_tree_cleans_workspace_and_rejects_start(
+    notebook_payload, tmp_path,
+):
+    pid_file = tmp_path / "descendant.pid"
+    workspace_paths: list[Path] = []
+
+    class SubprocessAdapter:
+        auxiliary_paths = frozenset()
+
+        def __init__(self):
+            self.runner = ProcessRunner()
+
+        def run(self, workspace, *, timeout, cancel_event):
+            workspace_paths.append(workspace.root)
+            descendant = (
+                "import pathlib,subprocess,sys,time;"
+                "p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)']);"
+                f"pathlib.Path({str(pid_file)!r}).write_text(str(p.pid));"
+                "time.sleep(30)"
+            )
+            self.runner.run(
+                [sys.executable, "-c", descendant], cwd=workspace.root,
+                timeout=timeout, cancel_event=cancel_event, grace_period=0.05,
+            )
+            return AdapterResult("")
+
+        def shutdown(self):
+            self.runner.shutdown(grace_period=0.05)
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    scopes.add("editable", editable=True)
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=SubprocessAdapter(),
+        timeout=30,
+    )
+    turn = turns.start(
+        prompt="slow", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
+    deadline = time.monotonic() + 3
+    while not pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert pid_file.exists()
+
+    started = time.monotonic()
+    turns.shutdown(timeout=2)
+
+    assert time.monotonic() - started < 2.5
+    finished = turns.get(turn.turn_id)
+    assert finished.state == "cancelled", finished.error
+    assert documents.coordinator.active_lease is None
+    assert workspace_paths and not workspace_paths[0].exists()
+    descendant_pid = int(pid_file.read_text())
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            os.kill(descendant_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail("agent descendant survived service shutdown")
+    with pytest.raises(AgentTurnServiceShuttingDown):
+        turns.start(
+            prompt="late", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision,
+        )
+
+
+def test_shutdown_deadline_records_worker_failure_until_cleanup(
+    notebook_payload,
+):
+    entered = Event()
+    release = Event()
+
+    class UncooperativeAdapter:
+        auxiliary_paths = frozenset()
+
+        def run(self, workspace, *, timeout, cancel_event):
+            entered.set()
+            assert release.wait(2)
+            return AdapterResult("")
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    scopes.add("editable", editable=True)
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=UncooperativeAdapter(),
+    )
+    turn = turns.start(
+        prompt="slow", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
+    assert entered.wait(1)
+
+    turns.shutdown(timeout=0.01)
+
+    timed_out = turns.get(turn.turn_id)
+    assert timed_out.error["code"] == "shutdown_timeout"
+    assert documents.coordinator.active_lease is not None
+    release.set()
+    deadline = time.monotonic() + 2
+    while documents.coordinator.active_lease is not None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert documents.coordinator.active_lease is None
+    assert turns.get(turn.turn_id).state == "cancelled"
 
 
 def test_agent_turn_api_exposes_status_and_terminal_scope(client, notebook_payload):

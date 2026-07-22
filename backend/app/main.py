@@ -38,7 +38,10 @@ def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
-        _app.state.kernel_execution_service.shutdown()
+        try:
+            _app.state.agent_turn_service.shutdown()
+        finally:
+            _app.state.kernel_execution_service.shutdown()
 
     app = FastAPI(title="Local Notebook Agent Editor", lifespan=lifespan)
     app.add_middleware(

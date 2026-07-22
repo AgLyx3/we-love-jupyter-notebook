@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from threading import Event, RLock, Thread
+from threading import Event, RLock, Thread, current_thread
 from typing import Any
 from uuid import uuid4
 
@@ -52,6 +53,12 @@ class RevertConflict(NotebookDomainError):
     status_code = 409
 
 
+class AgentTurnServiceShuttingDown(NotebookDomainError):
+    code = "agent_turn_service_shutting_down"
+    message = "Agent turn service is shutting down"
+    status_code = 503
+
+
 @dataclass
 class AgentTurn:
     turn_id: str
@@ -96,48 +103,54 @@ class AgentTurnService:
         self._lock = RLock()
         self._turns: dict[str, AgentTurn] = {}
         self._latest_applied_turn_id: str | None = None
+        self._workers: dict[Thread, str] = {}
+        self._shutting_down = False
 
     def start(
         self, *, prompt: str, session_id: str, expected_revision: int,
         background: bool = True,
     ) -> AgentTurn:
         turn_id = uuid4().hex
-        try:
-            lease = self.documents.coordinator.acquire(
-                operation_type="agent_turn", operation_id=turn_id
-            )
-        except MutationConflict as error:
-            error.details["currentDocumentRevision"] = self.documents.get_snapshot().revision
-            raise
-        scope: FrozenTurnScope | None = None
-        try:
-            scope = self.scopes.freeze(
-                turn_id=turn_id, session_id=session_id, revision=expected_revision,
-                prompt=prompt, lease=lease,
-            )
-            snapshot = self.documents.get_snapshot()
-            turn = AgentTurn(
-                turn_id=turn_id, session_id=session_id,
-                base_revision=expected_revision, prompt=prompt,
-                editable_cell_ids=scope.editable_cell_ids,
-                context_cell_ids=scope.context_cell_ids,
-                checkpoint=copy.deepcopy(snapshot.notebook),
-            )
-            with self._lock:
-                self._turns[turn_id] = turn
-        except Exception:
+        with self._lock:
+            if self._shutting_down:
+                raise AgentTurnServiceShuttingDown()
             try:
-                if scope is not None:
-                    self.scopes.expire(scope, "failed")
-            finally:
-                self.documents.coordinator.release(lease)
-            raise
-        if background:
-            Thread(
-                target=self._run_guarded, args=(turn, scope, lease, snapshot),
-                name=f"agent-turn-{turn_id[:8]}", daemon=True,
-            ).start()
-        else:
+                lease = self.documents.coordinator.acquire(
+                    operation_type="agent_turn", operation_id=turn_id
+                )
+            except MutationConflict as error:
+                error.details["currentDocumentRevision"] = self.documents.get_snapshot().revision
+                raise
+            scope: FrozenTurnScope | None = None
+            try:
+                scope = self.scopes.freeze(
+                    turn_id=turn_id, session_id=session_id, revision=expected_revision,
+                    prompt=prompt, lease=lease,
+                )
+                snapshot = self.documents.get_snapshot()
+                turn = AgentTurn(
+                    turn_id=turn_id, session_id=session_id,
+                    base_revision=expected_revision, prompt=prompt,
+                    editable_cell_ids=scope.editable_cell_ids,
+                    context_cell_ids=scope.context_cell_ids,
+                    checkpoint=copy.deepcopy(snapshot.notebook),
+                )
+                self._turns[turn_id] = turn
+            except Exception:
+                try:
+                    if scope is not None:
+                        self.scopes.expire(scope, "failed")
+                finally:
+                    self.documents.coordinator.release(lease)
+                raise
+            if background:
+                worker = Thread(
+                    target=self._run_guarded, args=(turn, scope, lease, snapshot),
+                    name=f"agent-turn-{turn_id[:8]}", daemon=True,
+                )
+                self._workers[worker] = turn_id
+                worker.start()
+        if not background:
             self._run_guarded(turn, scope, lease, snapshot)
         return self.get(turn_id)
 
@@ -268,6 +281,7 @@ class AgentTurnService:
                 finally:
                     self.documents.coordinator.release(lease)
                 self._finish_locked(turn, outcome, terminal_error)
+                self._workers.pop(current_thread(), None)
 
     def _run(self, turn: AgentTurn, scope: FrozenTurnScope, lease, frozen_snapshot):
         correction = None
@@ -354,7 +368,7 @@ class AgentTurnService:
         return "completed", None
 
     def undo(self, turn_id: str, *, session_id: str, expected_revision: int):
-        turn = self._require_applied(turn_id)
+        turn = self._require_undoable(turn_id)
         with self._lock:
             if self._latest_applied_turn_id != turn_id:
                 raise UndoConflict()
@@ -386,7 +400,7 @@ class AgentTurnService:
         self, turn_id: str, cell_id: str, *, session_id: str,
         expected_revision: int,
     ):
-        turn = self._require_applied(turn_id)
+        turn = self._require_revertible(turn_id)
         change = next((item for item in turn.changes if item.cell_id == cell_id), None)
         if change is None:
             raise CellNotFound(cell_id)
@@ -414,11 +428,50 @@ class AgentTurnService:
         finally:
             self.documents.coordinator.release(lease)
 
-    def _require_applied(self, turn_id: str) -> AgentTurn:
+    def _require_undoable(self, turn_id: str) -> AgentTurn:
         turn = self.get(turn_id)
         if turn.applied_revision is None or turn.checkpoint is None:
             raise UndoConflict()
         return turn
+
+    def _require_revertible(self, turn_id: str) -> AgentTurn:
+        turn = self.get(turn_id)
+        if turn.applied_revision is None or not turn.changes:
+            raise RevertConflict()
+        return turn
+
+    def shutdown(self, *, timeout: float = 5.0) -> None:
+        deadline = time.monotonic() + max(timeout, 0)
+        with self._lock:
+            self._shutting_down = True
+            active = tuple(
+                turn for turn in self._turns.values()
+                if turn.state not in TERMINAL_STATES
+            )
+            workers = tuple(self._workers.items())
+            for turn in active:
+                turn.cancel_event.set()
+        if self.executions is not None:
+            for turn in active:
+                self.executions.cancel_parent(turn.turn_id)
+        adapter_shutdown = getattr(self.adapter, "shutdown", None)
+        if callable(adapter_shutdown):
+            adapter_shutdown()
+        for worker, _turn_id in workers:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            worker.join(remaining)
+        with self._lock:
+            for worker, turn_id in workers:
+                if worker.is_alive():
+                    turn = self._turns.get(turn_id)
+                    if turn is not None:
+                        turn.error = {
+                            "code": "shutdown_timeout",
+                            "message": "Agent worker did not stop before shutdown deadline",
+                            "details": {},
+                        }
 
     @staticmethod
     def _source_hash(source: str) -> str:

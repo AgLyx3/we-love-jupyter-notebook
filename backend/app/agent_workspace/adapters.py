@@ -115,3 +115,6 @@ class ClaudeAgentAdapter:
             args, cwd=workspace.root, timeout=timeout, cancel_event=cancel_event
         )
         return AdapterResult(stdout.strip())
+
+    def shutdown(self) -> None:
+        self.runner.shutdown()

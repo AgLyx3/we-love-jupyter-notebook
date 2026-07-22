@@ -6,7 +6,7 @@ import signal
 import subprocess
 import time
 from pathlib import Path
-from threading import Event
+from threading import Event, RLock
 
 from .models import AgentAdapterError, AgentCancelled, AgentTimedOut
 
@@ -16,6 +16,10 @@ MAX_CAPTURE_BYTES = 1024 * 1024
 class ProcessRunner:
     def __init__(self, *, max_capture_bytes: int = MAX_CAPTURE_BYTES) -> None:
         self.max_capture_bytes = max_capture_bytes
+        self._lock = RLock()
+        self._cleanup_lock = RLock()
+        self._active: dict[int, subprocess.Popen] = {}
+        self._shutting_down = False
 
     def run(
         self, args: list[str], *, cwd: Path, timeout: float,
@@ -23,10 +27,17 @@ class ProcessRunner:
     ) -> tuple[str, str]:
         selector = selectors.DefaultSelector()
         try:
-            process = subprocess.Popen(
-                args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                start_new_session=True,
-            )
+            with self._lock:
+                if self._shutting_down:
+                    raise AgentAdapterError("Agent process runner is shutting down")
+                process = subprocess.Popen(
+                    args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    start_new_session=True,
+                )
+                self._active[process.pid] = process
+        except AgentAdapterError:
+            selector.close()
+            raise
         except (OSError, ValueError) as error:
             selector.close()
             raise AgentAdapterError("Agent process could not be started") from error
@@ -69,11 +80,15 @@ class ProcessRunner:
                     failure = AgentAdapterError("Agent process communication failed")
                     failure.__cause__ = error
             finally:
+                with self._lock:
+                    self._active.pop(process.pid, None)
                 selector.close()
                 for _name, stream in streams:
                     if stream is not None:
                         stream.close()
 
+        if failure is None and cancel_event.is_set():
+            failure = AgentCancelled()
         if failure is not None:
             raise failure
         try:
@@ -87,6 +102,14 @@ class ProcessRunner:
                 stderr=stderr, stdout=stdout,
             )
         return stdout, stderr
+
+    def shutdown(self, *, grace_period: float = 0.1) -> None:
+        """Reject new processes and idempotently terminate every active group."""
+        with self._lock:
+            self._shutting_down = True
+            active = tuple(self._active.values())
+        for process in active:
+            self._terminate_group(process, grace_period)
 
     def _read_ready(self, selector, output, timeout: float = 0.05) -> None:
         for key, _mask in selector.select(timeout):
@@ -104,8 +127,16 @@ class ProcessRunner:
         while selector.get_map() and time.monotonic() < deadline:
             self._read_ready(selector, output, timeout=0.01)
 
+    def _terminate_group(
+        self, process: subprocess.Popen, grace_period: float,
+    ) -> None:
+        with self._cleanup_lock:
+            self._terminate_group_unlocked(process, grace_period)
+
     @staticmethod
-    def _terminate_group(process: subprocess.Popen, grace_period: float) -> None:
+    def _terminate_group_unlocked(
+        process: subprocess.Popen, grace_period: float,
+    ) -> None:
         try:
             os.killpg(process.pid, signal.SIGTERM)
         except OSError:
