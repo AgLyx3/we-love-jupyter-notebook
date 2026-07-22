@@ -19,7 +19,7 @@ export default function App() {
   const [turn, setTurn] = useState<AgentTurn | null>(null);
   const [history, setHistory] = useState<TurnRecord[]>([]);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
-  const [focusCellId, setFocusCellId] = useState<string | null>(null);
+  const [focusRequest, setFocusRequest] = useState<{ cellId: string; requestId: number } | null>(null);
   const [operation, setOperation] = useState<ExecutionOperation | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -28,9 +28,12 @@ export default function App() {
   const snapshotRef = useRef(notebook);
   const turnRef = useRef(turn);
   const operationRef = useRef(operation);
+  const scopeRef = useRef(scope);
+  const eventCursorRef = useRef({ sessionId: "", sequence: 0 });
   useEffect(() => { snapshotRef.current = notebook; }, [notebook]);
   useEffect(() => { turnRef.current = turn; }, [turn]);
   useEffect(() => { operationRef.current = operation; }, [operation]);
+  useEffect(() => { scopeRef.current = scope; }, [scope]);
 
   const refresh = useCallback(async () => {
     try {
@@ -56,11 +59,11 @@ export default function App() {
   const fetchTurn = useCallback(async (id: string) => {
     try {
       const next = await api.turn(id); setTurn(next); setSelectedTurnId((selected) => selected ?? id);
-      setHistory((items) => upsertRecord(items, next, scope, items.find((item) => item.turn.turnId === id)?.prompt ?? "Agent turn"));
+      setHistory((items) => upsertRecord(items, next, scopeRef.current, items.find((item) => item.turn.turnId === id)?.prompt ?? "Agent turn"));
       if (next.executionOperationId) setOperation(await api.execution(next.executionOperationId));
       if (terminalTurns.has(next.state)) await refresh();
     } catch (error) { showError(error); }
-  }, [refresh, scope]);
+  }, [refresh]);
 
   const fetchExecution = useCallback(async (id: string) => {
     try {
@@ -72,9 +75,10 @@ export default function App() {
 
   useEffect(() => {
     if (!notebook) return;
+    if (eventCursorRef.current.sessionId !== notebook.sessionId) eventCursorRef.current = { sessionId: notebook.sessionId, sequence: 0 };
     setPolling(false);
-    return connectEvents(notebook.sessionId, {
-      notebook: () => void refresh(), turn: (id) => void fetchTurn(id), execution: (id) => void fetchExecution(id), disconnected: () => setPolling(true), connected: () => setPolling(false),
+    return connectEvents(notebook.sessionId, eventCursorRef.current.sequence, {
+      notebook: () => void refresh(), turn: (id) => void fetchTurn(id), execution: (id) => void fetchExecution(id), disconnected: () => setPolling(true), connected: () => setPolling(false), cursor: (sequence) => { eventCursorRef.current.sequence = Math.max(eventCursorRef.current.sequence, sequence); },
     });
   }, [notebook?.sessionId, refresh, fetchTurn, fetchExecution]);
 
@@ -126,6 +130,7 @@ export default function App() {
     } catch (error) { showError(error); }
     finally { if (url) URL.revokeObjectURL(url); }
   };
+  const requestCellFocus = (cellId: string) => setFocusRequest((current) => ({ cellId, requestId: (current?.requestId ?? 0) + 1 }));
 
   if (loading) return <div className="loading-screen"><span className="spinner" />Loading notebook…</div>;
 
@@ -147,7 +152,7 @@ export default function App() {
     </header>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
     <div className="editor-layout">
-      <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} disabled={mutationsDisabled || busy} focusCellId={focusCellId}
+      <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} disabled={mutationsDisabled || busy} focusRequest={focusRequest}
         onSave={(cellId, source) => void mutate(() => api.saveSource(notebook, cellId, source), { conflictText: "Notebook changed elsewhere. Your unsaved edit was not applied; the latest revision has been loaded." })}
         onRun={(cellId) => void mutate(async () => { const result = await api.runCell(notebook, cellId); setOperation(result); }, { refreshAfter: false })}
         onScope={(cellId, editable) => void mutate(async () => setScope(await api.addScope(notebook, cellId, editable)), { refreshAfter: false })}
@@ -158,7 +163,7 @@ export default function App() {
         onCancel={() => activeTurn && void mutate(async () => { const result = await api.cancelTurn(notebook, activeTurn.turnId); setTurn(result); setHistory((items) => upsertRecord(items, result)); }, { refreshAfter: false })}
         onUndo={() => selectedTurn && void mutate(async () => setNotebook(await api.undoTurn(notebook, selectedTurn.turnId)), { refreshAfter: false })}
         onDecision={(attempt: ExecutionAttempt, decision) => operation && void mutate(async () => setOperation(await api.decide(operation, attempt, decision)), { refreshAfter: false })}
-        onSelectTurn={setSelectedTurnId} onFocusCell={setFocusCellId} onDropCell={(cellId) => void mutate(async () => setScope(await api.addScope(notebook, cellId, true)), { refreshAfter: false })} />
+        onSelectTurn={setSelectedTurnId} onFocusCell={requestCellFocus} onDropCell={(cellId) => void mutate(async () => setScope(await api.addScope(notebook, cellId, true)), { refreshAfter: false })} />
     </div>
   </div>;
 }

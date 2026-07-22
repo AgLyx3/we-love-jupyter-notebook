@@ -149,10 +149,13 @@ export const api = {
   },
 };
 
-export function connectEvents(sessionId: string, handlers: { notebook: () => void; turn: (id: string) => void; execution: (id: string) => void; disconnected: () => void; connected: () => void }) {
-  const source = new EventSource(`${API}/events?sessionId=${encodeURIComponent(sessionId)}`);
+export function connectEvents(sessionId: string, after: number, handlers: { notebook: () => void; turn: (id: string) => void; execution: (id: string) => void; disconnected: () => void; connected: () => void; cursor: (sequence: number) => void }) {
+  const source = new EventSource(`${API}/events?sessionId=${encodeURIComponent(sessionId)}&after=${after}`);
   const listen = (name: string, callback: (data: Record<string, unknown>) => void) => source.addEventListener(name, (event) => {
-    const envelope = JSON.parse((event as MessageEvent).data) as { data: Record<string, unknown> };
+    const message = event as MessageEvent;
+    const sequence = Number(message.lastEventId);
+    if (Number.isFinite(sequence)) handlers.cursor(sequence);
+    const envelope = JSON.parse(message.data) as { data: Record<string, unknown> };
     callback(envelope.data);
   });
   listen("notebook.updated", () => handlers.notebook());

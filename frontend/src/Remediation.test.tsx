@@ -1,10 +1,12 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
 import App from "./App";
 import AgentChatPanel, { type TurnRecord } from "./agentChat/AgentChatPanel";
 import LineDiff from "./notebook/LineDiff";
-import type { AgentTurn, ExecutionOperation, NotebookSnapshot, TurnScope } from "./api/client";
+import { connectEvents, type AgentTurn, type ExecutionOperation, type NotebookSnapshot, type TurnScope } from "./api/client";
+import { EventSourceMock } from "./test/setup";
 
 vi.mock("@uiw/react-codemirror", () => ({
   default: ({ value, onChange, "aria-label": label, readOnly }: { value: string; onChange: (value: string) => void; "aria-label": string; readOnly: boolean }) =>
@@ -98,5 +100,64 @@ describe("remediation behaviors", () => {
     expect(screen.getByText("1 editable · 0 context · failed")).toBeInTheDocument();
     await userEvent.click(screen.getByText("First prompt"));
     expect(select).toHaveBeenCalledWith("one");
+  });
+
+  it("keeps one EventSource through refresh events and uses monotonic event IDs", async () => {
+    let currentCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => { if (String(input).endsWith("/notebooks/current")) currentCalls += 1; return baseFetch(input, init); });
+    render(<App />);
+    await screen.findByText("sample.ipynb");
+    expect(EventSourceMock.instances).toHaveLength(1);
+    expect(EventSourceMock.instances[0].url).toContain("after=0");
+    EventSourceMock.instances[0].emit("notebook.updated", { revision: 4 }, 4);
+    EventSourceMock.instances[0].emit("notebook.updated", { revision: 3 }, 3);
+    EventSourceMock.instances[0].emit("notebook.updated", { revision: 7 }, 7);
+    await waitFor(() => expect(currentCalls).toBeGreaterThanOrEqual(4));
+    EventSourceMock.instances[0].onerror?.();
+    EventSourceMock.instances[0].onopen?.();
+    expect(EventSourceMock.instances).toHaveLength(1);
+  });
+
+  it("starts an explicit SSE reconnect after the preserved cursor", () => {
+    const close = connectEvents("session-1", 7, { notebook: vi.fn(), turn: vi.fn(), execution: vi.fn(), disconnected: vi.fn(), connected: vi.fn(), cursor: vi.fn() });
+    expect(EventSourceMock.instances[0].url).toContain("after=7");
+    close();
+  });
+
+  it("focuses and scrolls the same scoped cell for every click", async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: () => undefined });
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => undefined);
+    vi.spyOn(globalThis, "fetch").mockImplementation(baseFetch);
+    render(<App />);
+    const item = await screen.findByTitle("Cell ID: code-1");
+    await userEvent.click(item);
+    await waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
+    await userEvent.click(item);
+    await waitFor(() => expect(scroll).toHaveBeenCalledTimes(2));
+    expect((focus.mock.contexts as HTMLElement[]).filter((node) => node.classList.contains("notebook-cell"))).toHaveLength(2);
+  });
+
+  it("renders historical frozen members with details and focuses them", async () => {
+    const history: TurnRecord[] = [
+      { turn: turn("new"), prompt: "Current prompt", editableCellIds: [], contextCellIds: [] },
+      { turn: turn("old"), prompt: "Historical prompt", editableCellIds: ["code-1"], contextCellIds: ["code-1"] },
+    ];
+    const onFocus = vi.fn();
+    function Harness() {
+      const [selected, setSelected] = useState("new");
+      return <AgentChatPanel notebook={notebook} scope={{ ...scope, editableCellIds: [], contextCellIds: [] }} turn={history.find((item) => item.turn.turnId === selected)!.turn} activeTurn={null} history={history} operation={null} busy={false} mutationsDisabled={false} onSubmit={vi.fn()} onCancel={vi.fn()} onUndo={vi.fn()} onClearScope={vi.fn()} onDecision={vi.fn()} onSelectTurn={setSelected} onFocusCell={onFocus} onDropCell={vi.fn()} />;
+    }
+    render(<Harness />);
+    await userEvent.click(screen.getByText("Historical prompt"));
+    const frozen = screen.getByLabelText("Frozen turn scope");
+    const rows = within(frozen).getAllByTitle("Cell ID: code-1");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveClass("editable");
+    expect(rows[1]).toHaveClass("context");
+    expect(frozen).toHaveTextContent("code");
+    expect(frozen).toHaveTextContent("a = 1");
+    await userEvent.click(rows[0]);
+    expect(onFocus).toHaveBeenCalledWith("code-1");
   });
 });

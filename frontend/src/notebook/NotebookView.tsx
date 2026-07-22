@@ -2,15 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import type { AgentTurn, NotebookSnapshot, TurnScope } from "../api/client";
 import NotebookCell from "./NotebookCell";
 
-export default function NotebookView({ notebook, scope, turn, disabled, focusCellId, onSave, onRun, onScope, onRevert }: {
+export default function NotebookView({ notebook, scope, turn, disabled, focusRequest, onSave, onRun, onScope, onRevert }: {
   notebook: NotebookSnapshot; scope: TurnScope; turn: AgentTurn | null;
-  disabled: boolean; focusCellId: string | null;
+  disabled: boolean; focusRequest: { cellId: string; requestId: number } | null;
   onSave: (cellId: string, source: string) => void; onRun: (cellId: string) => void; onScope: (cellId: string, editable: boolean) => void; onRevert: (turnId: string, cellId: string) => void;
 }) {
   const [focused, setFocused] = useState(notebook.cells[0]?.cellId ?? "");
   const refs = useRef(new Map<string, HTMLElement>());
   useEffect(() => { if (!notebook.cells.some((cell) => cell.cellId === focused)) setFocused(notebook.cells[0]?.cellId ?? ""); }, [notebook, focused]);
-  useEffect(() => { if (!focusCellId) return; const node = refs.current.get(focusCellId); node?.focus(); node?.scrollIntoView({ block: "center", behavior: "smooth" }); }, [focusCellId]);
+  useEffect(() => { if (!focusRequest) return; const node = refs.current.get(focusRequest.cellId); node?.focus(); node?.scrollIntoView({ block: "center", behavior: "smooth" }); }, [focusRequest]);
   return <main className="notebook-surface" aria-label="Notebook cells" onKeyDown={(event) => {
     if (!event.altKey || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
     event.preventDefault();

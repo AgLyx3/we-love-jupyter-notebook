@@ -2,7 +2,7 @@ import { RotateCcw, Send, Square } from "lucide-react";
 import { useState } from "react";
 import type { AgentTurn, ExecutionAttempt, ExecutionOperation, NotebookSnapshot, TurnScope } from "../api/client";
 import RiskyExecutionDialog from "../execution/RiskyExecutionDialog";
-import TurnScopePanel from "../turnScope/TurnScopePanel";
+import TurnScopePanel, { ScopeCellList } from "../turnScope/TurnScopePanel";
 
 const activeStates = new Set(["created", "agent_running", "validating", "applying", "executing", "cleaning_up"]);
 export interface TurnRecord { turn: AgentTurn; editableCellIds: string[]; contextCellIds: string[]; prompt: string }
@@ -16,6 +16,7 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
   const manualAttempt = operation?.attempts.find((item) => item.executionAttemptId === operation.currentExecutionAttemptId);
   const manualCorrelated = Boolean(operation?.operationId && operation.sessionId && operation.currentDocumentRevision != null && operation.parentTurnId === null && manualAttempt?.executionAttemptId && manualAttempt.cellId);
   const active = turn && activeStates.has(turn.state);
+  const selectedRecord = history.find((record) => record.turn.turnId === turn?.turnId);
   return <aside className="agent-panel" aria-label="Agent workspace" onDragOver={(event) => { if (!mutationsDisabled) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }} onDrop={(event) => { event.preventDefault(); const id = event.dataTransfer.getData("application/x-notebook-cell"); if (id && !mutationsDisabled) onDropCell(id); }}>
     <header><h1>Notebook Agent</h1><span>Scoped local edits</span></header>
     <TurnScopePanel notebook={notebook} scope={scope} disabled={mutationsDisabled} onClear={onClearScope} onFocusCell={onFocusCell} onDropCell={onDropCell} />
@@ -30,6 +31,7 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
         {turn.changes.length > 0 && <p>{turn.changes.length} cell{turn.changes.length === 1 ? "" : "s"} changed. Review the inline diff.</p>}
         <div className="turn-actions">{active && <button onClick={onCancel}><Square /> Cancel turn</button>}{turn.appliedRevision != null && !active && <button disabled={mutationsDisabled} onClick={onUndo}><RotateCcw /> Undo turn</button>}</div>
       </div>}
+      {selectedRecord && <section className="frozen-scope" aria-label="Frozen turn scope"><h3>Frozen scope</h3><ScopeCellList notebook={notebook} editableCellIds={selectedRecord.editableCellIds} contextCellIds={selectedRecord.contextCellIds} onFocusCell={onFocusCell} /></section>}
       {operation && <div className="execution-status">Execution: {operation.state.replaceAll("_", " ")}</div>}
       {operation && operation.kind === "manual" && !["completed", "failed", "cancelled", "validation_incomplete", "timed_out"].includes(operation.state) && manualAttempt && <button disabled={!manualCorrelated} className="manual-cancel" onClick={() => onDecision(manualAttempt, "cancel")}><Square /> Cancel run</button>}
       {operation && awaiting && <RiskyExecutionDialog operation={operation} attempt={awaiting} busy={busy} onDecision={(decision) => onDecision(awaiting, decision)} />}
