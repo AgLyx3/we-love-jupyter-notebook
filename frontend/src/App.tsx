@@ -27,7 +27,7 @@ export default function App() {
   const [notice, setNotice] = useState<{ tone: "error" | "warning"; text: string } | null>(null);
   const [dirtyCellIds, setDirtyCellIds] = useState<Set<string>>(() => new Set());
   const [polling, setPolling] = useState(false);
-  const [closeConfirmationOpen, setCloseConfirmationOpen] = useState(false);
+  const [closeTarget, setCloseTarget] = useState<{ sessionId: string; revision: number } | null>(null);
   const snapshotRef = useRef(notebook);
   const scopeRef = useRef(scope);
   const eventCursorRef = useRef({ sessionId: "", sequence: 0 });
@@ -39,6 +39,9 @@ export default function App() {
   useEffect(() => { snapshotRef.current = notebook; }, [notebook]);
   useEffect(() => { scopeRef.current = scope; }, [scope]);
   useEffect(() => { setDirtyCellIds(new Set()); }, [notebook?.sessionId]);
+  useEffect(() => {
+    setCloseTarget((target) => target && (target.sessionId !== notebook?.sessionId || target.revision !== notebook.revision) ? null : target);
+  }, [notebook?.sessionId, notebook?.revision]);
 
   const refresh = useCallback(async () => {
     const epoch = ++resourceEpochRef.current;
@@ -50,6 +53,7 @@ export default function App() {
       const existing = snapshotRef.current;
       if (existing && existing.sessionId === current.sessionId && existing.revision > current.revision) return existing;
       const nextNotebook = current;
+      snapshotRef.current = nextNotebook;
       setNotebook(nextNotebook);
       setScope(nextScope);
       setKernel(nextKernel);
@@ -186,10 +190,12 @@ export default function App() {
     } catch (error) { showError(error); }
     finally { if (url) URL.revokeObjectURL(url); }
   };
-  const closeNotebook = () => {
-    if (!notebook) return;
-    setCloseConfirmationOpen(false);
-    void mutate(() => api.close(notebook), { refreshAfter: false }, (result) => {
+  const closeNotebook = (target: { sessionId: string; revision: number }) => {
+    setCloseTarget(null);
+    void mutate(() => api.close(target), { refreshAfter: false }, (result) => {
+      const current = snapshotRef.current;
+      if (!current || current.sessionId !== target.sessionId || current.revision !== target.revision) return;
+      snapshotRef.current = null;
       setNotebook(null);
       setScope(emptyScope);
       setKernel(emptyKernel);
@@ -208,8 +214,16 @@ export default function App() {
   };
   const handleClose = () => {
     if (!notebook) return;
-    if (notebook.dirty) setCloseConfirmationOpen(true);
-    else closeNotebook();
+    const target = { sessionId: notebook.sessionId, revision: notebook.revision };
+    if (notebook.dirty) setCloseTarget(target);
+    else closeNotebook(target);
+  };
+  const confirmClose = () => {
+    if (!closeTarget || !notebook || closeTarget.sessionId !== notebook.sessionId || closeTarget.revision !== notebook.revision) {
+      setCloseTarget(null);
+      return;
+    }
+    closeNotebook(closeTarget);
   };
   const requestCellFocus = (cellId: string) => setFocusRequest((current) => ({ cellId, requestId: (current?.requestId ?? 0) + 1 }));
 
@@ -233,7 +247,7 @@ export default function App() {
       <div className="toolbar-actions"><KernelControls status={kernel} mutationDisabled={mutationsDisabled || busy || hasDirtyDrafts} onRunAll={() => void mutate(() => api.runAll(notebook), { refreshAfter: false }, setOperation)} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} /><FileToolbar notebook={notebook} uploadDisabled={mutationsDisabled || busy || hasDirtyDrafts} closeDisabled={mutationsDisabled || busy || hasDirtyDrafts} onUpload={handleUpload} onDownload={() => void handleDownload()} onClose={handleClose} /></div>
     </header>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
-    {closeConfirmationOpen && <CloseNotebookDialog busy={busy} onCancel={() => setCloseConfirmationOpen(false)} onConfirm={closeNotebook} />}
+    {closeTarget && <CloseNotebookDialog busy={busy} onCancel={() => setCloseTarget(null)} onConfirm={confirmClose} />}
     <div className="editor-layout">
       <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} focusRequest={focusRequest}
         onDirtyChange={(cellId, dirty) => setDirtyCellIds((current) => {

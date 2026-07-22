@@ -5,6 +5,7 @@ import App from "./App";
 import AgentChatPanel from "./agentChat/AgentChatPanel";
 import FileToolbar from "./fileOperations/FileToolbar";
 import type { NotebookSnapshot, TurnScope } from "./api/client";
+import { EventSourceMock } from "./test/setup";
 
 vi.mock("@uiw/react-codemirror", () => ({
   default: ({ value, onChange, "aria-label": label, onKeyDown }: { value: string; onChange: (value: string) => void; "aria-label": string; onKeyDown: (event: React.KeyboardEvent) => void }) =>
@@ -104,6 +105,30 @@ describe("Notebook editor", () => {
     await userEvent.click(screen.getByRole("button", { name: "Discard notebook" }));
     expect(await screen.findByText("Open a notebook to begin")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/notebooks/current"), expect.objectContaining({ method: "DELETE" }));
+  });
+
+  it("dismisses dirty close confirmation when the notebook is replaced", async () => {
+    let current = { ...notebook, dirty: true };
+    const replacement = { ...notebook, sessionId: "session-2", filename: "replacement.ipynb", revision: 0, dirty: false };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current") && init?.method === "DELETE") return response({ closedSessionId: current.sessionId, cleanupErrors: [] });
+      if (path.endsWith("/notebooks/current")) return response(current);
+      if (path.endsWith("/turn-scope")) return response({ editableCellIds: [], contextCellIds: [], sessionId: current.sessionId, notebookRevision: current.revision });
+      if (path.endsWith("/kernel/status")) return response({ state: "not_started", kernelSessionId: null, executionAttemptId: null });
+      if (path.endsWith("/session/status")) return response({ sessionId: current.sessionId, documentRevision: current.revision, activeTurn: null, activeExecution: null, turnHistory: [], turnHistoryTruncated: false });
+      return response({});
+    });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Close notebook" }));
+    expect(screen.getByRole("alertdialog", { name: "Discard unsaved notebook?" })).toBeInTheDocument();
+
+    current = replacement;
+    EventSourceMock.instances[0].emit("notebook.updated", { revision: replacement.revision }, 1);
+
+    expect(await screen.findByText("replacement.ipynb")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining("/notebooks/current"), expect.objectContaining({ method: "DELETE" }));
   });
 
   it("warns after closing when backend cleanup is incomplete", async () => {

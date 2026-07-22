@@ -128,7 +128,7 @@ async function blobRequest(path: string): Promise<Blob> {
   return response.blob();
 }
 
-const mutation = (snapshot: NotebookSnapshot) => ({ sessionId: snapshot.sessionId, expectedDocumentRevision: snapshot.revision });
+const mutation = (snapshot: Pick<NotebookSnapshot, "sessionId" | "revision">) => ({ sessionId: snapshot.sessionId, expectedDocumentRevision: snapshot.revision });
 
 export const api = {
   current: () => request<NotebookSnapshot>("/notebooks/current"),
@@ -136,7 +136,7 @@ export const api = {
   kernel: () => request<KernelStatus>("/kernel/status"),
   status: () => request<SessionStatus>("/session/status"),
   download: () => blobRequest("/notebooks/download"),
-  close: (snapshot: NotebookSnapshot) => request<NotebookCloseResult>("/notebooks/current", { method: "DELETE", body: JSON.stringify(mutation(snapshot)) }),
+  close: (snapshot: Pick<NotebookSnapshot, "sessionId" | "revision">) => request<NotebookCloseResult>("/notebooks/current", { method: "DELETE", body: JSON.stringify(mutation(snapshot)) }),
   upload: (file: File, current?: NotebookSnapshot) => {
     const body = new FormData();
     body.append("file", file);
