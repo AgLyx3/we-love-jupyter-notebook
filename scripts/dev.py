@@ -21,6 +21,33 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def signal_process_groups(children: list[subprocess.Popen[bytes]], sig: int) -> None:
+    for child in children:
+        if child.poll() is None:
+            try:
+                os.killpg(child.pid, sig)
+            except ProcessLookupError:
+                pass
+
+
+def terminate_process_groups(
+    children: list[subprocess.Popen[bytes]], *, grace_period: float = 5,
+) -> None:
+    signal_process_groups(children, signal.SIGTERM)
+    deadline = time.monotonic() + grace_period
+    for child in children:
+        if child.poll() is not None:
+            continue
+        try:
+            child.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.wait()
+
+
 def main() -> int:
     args = parse_args()
     environment = os.environ.copy()
@@ -36,26 +63,20 @@ def main() -> int:
     children: list[subprocess.Popen[bytes]] = []
 
     def stop(_signum: int | None = None, _frame: object | None = None) -> None:
-        for child in children:
-            if child.poll() is None:
-                child.terminate()
+        signal_process_groups(children, signal.SIGTERM)
 
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     try:
         for command in commands:
-            children.append(subprocess.Popen(command, cwd=ROOT, env=environment))
+            children.append(subprocess.Popen(
+                command, cwd=ROOT, env=environment, start_new_session=True,
+            ))
         while all(child.poll() is None for child in children):
             time.sleep(0.2)
         return next((child.returncode or 0 for child in children if child.poll() is not None), 0)
     finally:
-        stop()
-        for child in children:
-            try:
-                child.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                child.wait()
+        terminate_process_groups(children)
 
 
 if __name__ == "__main__":
