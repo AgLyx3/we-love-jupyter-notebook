@@ -127,8 +127,7 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   page.on("requestfailed", (request) => {
     const failure = request.failure()?.errorText ?? "unknown failure";
     const url = new URL(request.url());
-    const expectedEventTeardown = testInfo.project.name === "mobile"
-      && replacedSessionId !== null
+    const expectedEventTeardown = replacedSessionId !== null
       && url.origin === frontendUrl
       && url.pathname === "/api/events"
       && url.searchParams.get("sessionId") === replacedSessionId
@@ -144,8 +143,7 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   page.on("response", (response) => {
     if (response.status() < 400) return;
     const url = new URL(response.url());
-    const expectedInitial = testInfo.project.name === "desktop"
-      && phase === "initial"
+    const expectedInitial = phase === "initial"
       && response.status() === 404
       && response.request().method() === "GET"
       && url.origin === frontendUrl
@@ -271,11 +269,11 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
     const key = `${message.text}\n${message.url}`;
     observedConsoleCounts.set(key, (observedConsoleCounts.get(key) ?? 0) + 1);
   }
-  expect(initialNotFoundResponses).toBe(testInfo.project.name === "desktop" ? 1 : 0);
+  expect(initialNotFoundResponses).toBe(replacedSessionId === null ? 1 : 0);
   expect(intentionalConflictResponses).toBe(1);
   expect(observedConsoleCounts).toEqual(allowedConsoleCounts);
   expect(unexpectedResponses).toEqual([]);
   expect(unexpectedRequestFailures).toEqual([]);
-  expect(eventStreamTeardowns).toBe(testInfo.project.name === "mobile" ? 1 : 0);
+  expect(eventStreamTeardowns).toBe(replacedSessionId === null ? 0 : 1);
   expect(pageErrors).toEqual([]);
 });
