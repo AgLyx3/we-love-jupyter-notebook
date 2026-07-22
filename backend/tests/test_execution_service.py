@@ -181,6 +181,8 @@ def test_repeated_identical_approval_is_idempotent_after_attempt_advances():
     replayed = service.approve(attempt_id, **decision)
     assert replayed.state == "completed"
     with pytest.raises(ExecutionDecisionConflict):
+        service.approve(attempt_id, **{**decision, "expected_revision": snapshot.revision + 1})
+    with pytest.raises(ExecutionDecisionConflict):
         service.skip(attempt_id, **decision)
 
 

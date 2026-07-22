@@ -307,6 +307,7 @@ class KernelExecutionService:
                 operation.session_id != session_id
                 or operation.parent_turn_id != turn_id
                 or attempt.cell_id != cell_id
+                or attempt.starting_revision != expected_revision
             ):
                 raise ExecutionDecisionConflict()
             if attempt.decision is not None:
@@ -314,8 +315,7 @@ class KernelExecutionService:
                     raise ExecutionDecisionConflict()
                 return self._copy_operation(operation)
             if (
-                operation.current_revision != expected_revision
-                or operation.current_attempt_id != attempt_id
+                operation.current_attempt_id != attempt_id
             ):
                 raise ExecutionDecisionConflict()
             if attempt.state != "awaiting_approval":
