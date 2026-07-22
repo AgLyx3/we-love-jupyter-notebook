@@ -65,12 +65,13 @@ def test_sigterm_launcher_exits_and_releases_server_ports():
     frontend_port = _free_port()
     process = subprocess.Popen(
         [
+            "/bin/sh",
+            "-c",
+            "exec \"$1\" scripts/dev.py --fake-agent --backend-port \"$2\" "
+            "--frontend-port \"$3\"",
+            "playwright-webserver",
             sys.executable,
-            "scripts/dev.py",
-            "--fake-agent",
-            "--backend-port",
             str(backend_port),
-            "--frontend-port",
             str(frontend_port),
         ],
         cwd=ROOT,

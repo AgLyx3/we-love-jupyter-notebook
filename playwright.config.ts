@@ -22,7 +22,7 @@ export default defineConfig({
     { name: "mobile", use: { ...devices["Pixel 5"], viewport: { width: 390, height: 844 } } },
   ],
   webServer: {
-    command: `.venv/bin/python scripts/dev.py --fake-agent --backend-port ${backendPort} --frontend-port ${frontendPort}`,
+    command: `exec .venv/bin/python scripts/dev.py --fake-agent --backend-port ${backendPort} --frontend-port ${frontendPort}`,
     url: `http://127.0.0.1:${frontendPort}`,
     reuseExistingServer: false,
     timeout: 30_000,
