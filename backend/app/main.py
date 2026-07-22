@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from .api.notebook_routes import router as notebook_router
 from .api.agent_turn_routes import router as agent_turn_router
@@ -38,6 +39,13 @@ def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
         _app.state.kernel_execution_service.shutdown()
 
     app = FastAPI(title="Local Notebook Agent Editor", lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.state.notebook_service = notebook_service
     app.state.session_event_service = session_event_service
     app.state.kernel_execution_service = kernel_execution_service
