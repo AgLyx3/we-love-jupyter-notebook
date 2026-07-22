@@ -64,13 +64,25 @@ export default function App() {
 
   useEffect(() => { refresh().catch((error) => showError(error)).finally(() => setLoading(false)); }, [refresh]);
 
-  const fetchTurn = useCallback(async (id: string) => {
+  const fetchTurn = useCallback(async (id: string, refreshTerminal = true) => {
     const epoch = ++resourceEpochRef.current;
     const generation = (turnGenerationRef.current.get(id) ?? 0) + 1;
     turnGenerationRef.current.set(id, generation);
     try {
       const next = await api.turn(id);
       if (turnGenerationRef.current.get(id) !== generation || resourceEpochRef.current !== epoch) return;
+      if (terminalTurns.has(next.state) && refreshTerminal) {
+        const refreshedNotebook = await refresh();
+        const detailEpoch = resourceEpochRef.current;
+        const detailGeneration = (turnGenerationRef.current.get(id) ?? 0) + 1;
+        turnGenerationRef.current.set(id, detailGeneration);
+        const refreshed = await api.turn(id);
+        if (turnGenerationRef.current.get(id) !== detailGeneration || resourceEpochRef.current !== detailEpoch) return;
+        const detailed = reconcileTurnChanges(refreshed, refreshedNotebook);
+        setTurn(detailed); setSelectedTurnId((selected) => selected ?? id);
+        setHistory((items) => upsertRecord(items, detailed, scopeRef.current, items.find((item) => item.turn.turnId === id)?.prompt ?? "Agent turn"));
+        return;
+      }
       const detailed = reconcileTurnChanges(next, snapshotRef.current);
       setTurn(detailed); setSelectedTurnId((selected) => selected ?? id);
       setHistory((items) => upsertRecord(items, detailed, scopeRef.current, items.find((item) => item.turn.turnId === id)?.prompt ?? "Agent turn"));
@@ -87,7 +99,7 @@ export default function App() {
 
   useEffect(() => {
     const selected = history.find((item) => item.turn.turnId === selectedTurnId)?.turn;
-    if (selected?.historyTruncated) void fetchTurn(selected.turnId);
+    if (selected?.historyTruncated) void fetchTurn(selected.turnId, false);
   }, [fetchTurn, history, selectedTurnId]);
 
   const fetchExecution = useCallback(async (id: string) => {

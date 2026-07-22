@@ -412,6 +412,64 @@ describe("remediation behaviors", () => {
     expect(screen.getByText("Execution: running")).toBeInTheDocument();
   });
 
+  it("reconciles terminal turn detail after earlier notebook and execution refreshes", async () => {
+    const previousSource = "a = 1\nprint(a)";
+    const nextSource = "a = 2\nprint(a)";
+    const runningTurn = { ...turn("race", "agent_running"), undoEligible: false };
+    const terminalTurn = {
+      ...turn("race"),
+      changes: [{ cellId: "code-1", previousSource, nextSource }],
+      historyTruncated: false,
+    };
+    const authoritativeNotebook = { ...notebook, revision: 4, cells: [{ ...notebook.cells[0], source: nextSource }] };
+    let currentCalls = 0;
+    let statusCalls = 0;
+    let kernelCalls = 0;
+    let resolveOldNotebook!: (value: Response) => void;
+    let resolveOldExecution!: (value: Response) => void;
+    const oldNotebook = new Promise<Response>((resolve) => { resolveOldNotebook = resolve; });
+    const oldExecution = new Promise<Response>((resolve) => { resolveOldExecution = resolve; });
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current")) {
+        currentCalls += 1;
+        if (currentCalls === 2) return oldNotebook;
+        return json(currentCalls >= 3 ? authoritativeNotebook : notebook);
+      }
+      if (path.endsWith("/session/status")) {
+        statusCalls += 1;
+        const currentTurn = statusCalls >= 2 ? terminalTurn : runningTurn;
+        return json({ sessionId: "session-1", documentRevision: statusCalls >= 2 ? 4 : 3, activeTurn: statusCalls >= 2 ? null : runningTurn, activeExecution: statusCalls >= 2 ? null : operation, turnHistory: [currentTurn] });
+      }
+      if (path.endsWith("/kernel/status")) {
+        kernelCalls += 1;
+        return json(kernelCalls >= 2 ? { state: "idle", kernelSessionId: "kernel-1", executionAttemptId: null } : { state: "busy", kernelSessionId: "kernel-1", executionAttemptId: "attempt-1" });
+      }
+      if (path.endsWith("/agent-turns/race")) return json(terminalTurn);
+      if (path.endsWith("/execution/op-race")) return oldExecution;
+      return baseFetch(input, init);
+    });
+    render(<App />);
+    expect(await screen.findByText("Revision 3")).toBeInTheDocument();
+    const source = EventSourceMock.instances[0];
+    source.emit("notebook.updated", { revision: 4 }, 1);
+    source.emit("execution.updated", { operationId: "op-race" }, 2);
+    source.emit("turn.updated", { turnId: "race" }, 3);
+    await waitFor(() => expect(screen.getByText("Revision 4")).toBeInTheDocument());
+    expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(nextSource);
+    expect(await screen.findByLabelText("Revert agent change to code cell 1")).toBeEnabled();
+    expect(await screen.findByText("Agent change")).toBeInTheDocument();
+    expect(screen.getByText("Kernel idle")).toBeInTheDocument();
+    expect(screen.queryByText("Execution: running")).not.toBeInTheDocument();
+
+    resolveOldNotebook(new Response(JSON.stringify({ ...notebook, revision: 99 }), { headers: { "Content-Type": "application/json" } }));
+    resolveOldExecution(new Response(JSON.stringify(operation), { headers: { "Content-Type": "application/json" } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByText("Revision 4")).toBeInTheDocument();
+    expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(nextSource);
+    expect(screen.queryByText("Execution: running")).not.toBeInTheDocument();
+  });
+
   it("renders raster and SVG notebook outputs as images", () => {
     render(<Outputs outputs={[
       { output_type: "display_data", data: { "image/png": "aGVsbG8=" } },
