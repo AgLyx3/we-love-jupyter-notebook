@@ -456,7 +456,7 @@ describe("remediation behaviors", () => {
     source.emit("execution.updated", { operationId: "op-race" }, 2);
     source.emit("turn.updated", { turnId: "race" }, 3);
     await waitFor(() => expect(screen.getByText("Revision 4")).toBeInTheDocument());
-    expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(nextSource);
+    await waitFor(() => expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(nextSource));
     expect(await screen.findByLabelText("Revert agent change to code cell 1")).toBeEnabled();
     expect(await screen.findByText("Agent change")).toBeInTheDocument();
     expect(screen.getByText("Kernel idle")).toBeInTheDocument();
@@ -468,6 +468,69 @@ describe("remediation behaviors", () => {
     expect(screen.getByText("Revision 4")).toBeInTheDocument();
     expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(nextSource);
     expect(screen.queryByText("Execution: running")).not.toBeInTheDocument();
+  });
+
+  it("does not let an older terminal event reclaim the turn generation", async () => {
+    const previousSource = "a = 1\nprint(a)";
+    const olderSource = "a = 2\nprint('older')";
+    const newerSource = "a = 3\nprint('newest change')";
+    const runningTurn = { ...turn("ordered", "agent_running"), undoEligible: false };
+    const olderTurn = {
+      ...turn("ordered"),
+      finalOutput: "older terminal outcome",
+      changes: [{ cellId: "code-1", previousSource, nextSource: olderSource }],
+      historyTruncated: false,
+    };
+    const newerTurn = {
+      ...turn("ordered"),
+      finalOutput: "newest terminal outcome",
+      changes: [{ cellId: "code-1", previousSource, nextSource: newerSource }],
+      historyTruncated: false,
+    };
+    const authoritativeNotebook = { ...notebook, revision: 5, cells: [{ ...notebook.cells[0], source: newerSource }] };
+    let currentCalls = 0;
+    let turnCalls = 0;
+    let statusCalls = 0;
+    let resolveOlderRefresh!: (value: Response) => void;
+    const olderRefresh = new Promise<Response>((resolve) => { resolveOlderRefresh = resolve; });
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current")) {
+        currentCalls += 1;
+        if (currentCalls === 2) return olderRefresh;
+        return json(currentCalls >= 3 ? authoritativeNotebook : notebook);
+      }
+      if (path.endsWith("/session/status")) {
+        statusCalls += 1;
+        const currentTurn = statusCalls >= 2 ? newerTurn : runningTurn;
+        return json({ sessionId: "session-1", documentRevision: statusCalls >= 2 ? 5 : 3, activeTurn: statusCalls >= 2 ? null : runningTurn, activeExecution: null, turnHistory: [currentTurn] });
+      }
+      if (path.endsWith("/kernel/status")) return json({ state: "idle", kernelSessionId: "kernel-1", executionAttemptId: null });
+      if (path.endsWith("/agent-turns/ordered")) {
+        turnCalls += 1;
+        return json(turnCalls === 1 || turnCalls >= 4 ? olderTurn : newerTurn);
+      }
+      return baseFetch(input, init);
+    });
+    render(<App />);
+    expect(await screen.findByText("Revision 3")).toBeInTheDocument();
+    const source = EventSourceMock.instances[0];
+    source.emit("turn.updated", { turnId: "ordered" }, 1);
+    await waitFor(() => expect(currentCalls).toBe(2));
+    source.emit("turn.updated", { turnId: "ordered" }, 2);
+
+    expect(await screen.findByText("Revision 5")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(newerSource));
+    expect(await screen.findByText("newest terminal outcome")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Revert agent change to code cell 1")).toBeEnabled();
+
+    resolveOlderRefresh(new Response(JSON.stringify({ ...notebook, revision: 4, cells: [{ ...notebook.cells[0], source: olderSource }] }), { headers: { "Content-Type": "application/json" } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByText("newest terminal outcome")).toBeInTheDocument();
+    expect(screen.queryByText("older terminal outcome")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Revert agent change to code cell 1")).toBeEnabled();
+    expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(newerSource);
+    expect(turnCalls).toBe(3);
   });
 
   it("renders raster and SVG notebook outputs as images", () => {

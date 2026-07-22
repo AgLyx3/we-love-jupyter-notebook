@@ -73,6 +73,7 @@ export default function App() {
       if (turnGenerationRef.current.get(id) !== generation || resourceEpochRef.current !== epoch) return;
       if (terminalTurns.has(next.state) && refreshTerminal) {
         const refreshedNotebook = await refresh();
+        if (turnGenerationRef.current.get(id) !== generation) return;
         const detailEpoch = resourceEpochRef.current;
         const detailGeneration = (turnGenerationRef.current.get(id) ?? 0) + 1;
         turnGenerationRef.current.set(id, detailGeneration);
