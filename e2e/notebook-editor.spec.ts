@@ -23,6 +23,14 @@ async function waitForTurn(page: Page, expected: RegExp = terminalTurn) {
   await expect(page.locator(".turn-state")).toHaveText(expected, { timeout: 45_000 });
 }
 
+async function uploadSample(page: Page) {
+  await page.goto("/");
+  const uploadFinished = page.waitForResponse((response) => response.url().includes("/api/notebooks/upload") && response.request().method() === "POST");
+  await page.locator('input[type="file"]').first().setInputFiles(sample);
+  expect((await uploadFinished).ok()).toBeTruthy();
+  await expect(page.getByText("sample.ipynb", { exact: true })).toBeVisible();
+}
+
 type Rect = { left: number; right: number; top: number; bottom: number; width: number; height: number };
 
 function intersectionArea(first: Rect, second: Rect) {
@@ -279,4 +287,50 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   expect(unexpectedRequestFailures).toEqual([]);
   expect(eventStreamTeardowns).toBe(replacedSessionId === null ? 0 : 1);
   expect(pageErrors).toEqual([]);
+});
+
+test("handles risky decisions and manual kernel controls", async ({ page }) => {
+  await uploadSample(page);
+
+  await page.getByLabel("Allow agent edit code cell 2").click();
+  await page.getByLabel("Agent instruction").fill("[risk] Exercise the skip path");
+  await page.getByRole("button", { name: "Send" }).click();
+  let dialog = page.getByRole("alertdialog", { name: "Execution needs approval" });
+  await expect(dialog).toBeVisible({ timeout: 45_000 });
+  await dialog.getByRole("button", { name: "Skip cell" }).click();
+  await waitForTurn(page, /validation incomplete/);
+  await page.getByLabel("Revert agent change to code cell 2").click();
+  await expect(page.getByLabel("Source for code cell 2")).toContainText("values = [2, 4, 6]");
+
+  await page.getByLabel("Allow agent edit code cell 2").click();
+  await page.getByLabel("Agent instruction").fill("[risk] Exercise the cancel path");
+  await page.getByRole("button", { name: "Send" }).click();
+  dialog = page.getByRole("alertdialog", { name: "Execution needs approval" });
+  await expect(dialog).toBeVisible({ timeout: 45_000 });
+  await dialog.getByRole("button", { name: "Cancel run" }).click();
+  await waitForTurn(page, /cancelled/);
+
+  await replaceEditor(page, "Source for code cell 2", "import time\ntime.sleep(30)\nprint('finished')");
+  await page.getByLabel("Save code cell 2").click();
+  await expect(page.getByText(/Revision \d+/)).toBeVisible();
+  const beforeRestart = await page.request.get(`${backendUrl}/kernel/status`).then((response) => response.json());
+  await page.getByLabel("Run code cell 2").click();
+  await expect(page.locator(".kernel-state")).toContainText("Kernel busy", { timeout: 15_000 });
+  const manualOperationId = await page.request.get(`${backendUrl}/session/status`).then(async (response) => {
+    const status = await response.json();
+    return status.activeExecution.operationId as string;
+  });
+  await page.getByLabel("Interrupt kernel").click();
+  await expect.poll(async () => {
+    const operation = await page.request.get(`${backendUrl}/execution/${manualOperationId}`).then((response) => response.json());
+    return operation.state;
+  }, { timeout: 15_000 }).toMatch(/failed|cancelled/);
+  await expect(page.locator(".kernel-state")).toContainText("Kernel idle", { timeout: 15_000 });
+
+  await page.getByLabel("Restart kernel").click();
+  await expect.poll(async () => {
+    const status = await page.request.get(`${backendUrl}/kernel/status`).then((response) => response.json());
+    return status.kernelSessionId;
+  }).not.toBe(beforeRestart.kernelSessionId);
+  await expect(page.locator(".kernel-state")).toContainText("Kernel idle");
 });
