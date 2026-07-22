@@ -291,6 +291,56 @@ def test_claude_adapter_is_version_gated_and_effectively_whitelists_tools(
         builder.destroy(workspace)
 
 
+def _read_only_workspace(notebook_payload):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scope = FrozenTurnScope.create(
+        turn_id="turn", session_id=snapshot.session_id,
+        notebook_revision=snapshot.revision,
+        selection=ScopeSelection((), ("intro",)), prompt="explain the notebook",
+    )
+    builder = AgentWorkspaceBuilder()
+    return builder, builder.build(snapshot, scope)
+
+
+def test_editable_turn_instructions_frame_editing_as_optional(notebook_payload):
+    builder, workspace = _workspace(notebook_payload)
+    try:
+        instructions = (workspace.root / "INSTRUCTIONS.md").read_text().lower()
+        assert "optional" in instructions
+        assert "answer the" in instructions
+        assert "editable/cell_editable.py" in instructions
+    finally:
+        builder.destroy(workspace)
+
+
+def test_read_only_turn_uses_read_only_tools_and_writes_no_editable_files(notebook_payload, monkeypatch):
+    builder, workspace = _read_only_workspace(notebook_payload)
+    captured = {}
+
+    class StubRunner:
+        def run(self, args, **kwargs):
+            captured["args"] = args
+            return "explanation", ""
+
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="2.1.203", stderr=""),
+    )
+    try:
+        assert workspace.manifest.editable_cells == ()
+        assert list((workspace.root / "editable").iterdir()) == []
+        assert "read-only turn" in (workspace.root / "INSTRUCTIONS.md").read_text().lower()
+        result = ClaudeAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event()
+        )
+        assert result.final_output == "explanation"
+        tools = captured["args"][captured["args"].index("--tools") + 1].split(",")
+        assert tools == ["Read"]
+    finally:
+        builder.destroy(workspace)
+
+
 def _wait_process_gone(pid: int) -> bool:
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:

@@ -74,10 +74,21 @@ class AgentWorkspaceBuilder:
                 ],
             }
             (root / "AGENT_CELL_MANIFEST.json").write_text(json.dumps(manifest_copy, indent=2) + "\n", encoding="utf-8")
-            instructions = [scope.prompt, "", "Only edit the listed files under editable/.",
-                            "Do not change notebook structure, metadata, outputs, or cell types.",
-                            "Do not run shell commands.", ""]
-            instructions.extend(f"- {item.relative_path}" for item in manifest.editable_cells)
+            if manifest.editable_cells:
+                instructions = [scope.prompt, "",
+                                "You have permission to edit the files listed below, but editing is",
+                                "optional — permission is a grant, not a requirement. First answer the",
+                                "request directly in your final message. Only change a listed file when the",
+                                "request calls for a concrete edit, and explain any edit you make.",
+                                "Do not modify files that are not listed.",
+                                "Do not change notebook structure, metadata, outputs, or cell types.",
+                                "Do not run shell commands.", "", "Editable files:"]
+                instructions.extend(f"- {item.relative_path}" for item in manifest.editable_cells)
+            else:
+                instructions = [scope.prompt, "",
+                                "This is a read-only turn. Do not modify any file.",
+                                "Answer in your final message.",
+                                "Do not run shell commands.", ""]
             if context:
                 instructions.extend(["", "Explicit context cells:"])
                 instructions.extend(

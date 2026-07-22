@@ -105,11 +105,14 @@ class ClaudeAgentAdapter:
     def run(self, workspace: AgentWorkspace, *, timeout: float, cancel_event: Event) -> AdapterResult:
         self.verify_supported()
         prompt = (workspace.root / "INSTRUCTIONS.md").read_text(encoding="utf-8")
+        # A read-only turn (no editable cells) gets no edit/write tools, so the
+        # boundary is enforced at the tool level as well as by the workspace audit.
+        tools = "Read,Edit,Write" if workspace.manifest.editable_cells else "Read"
         args = [
             self.executable, "-p", prompt, "--no-session-persistence",
             "--safe-mode", "--disable-slash-commands", "--no-chrome",
             "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
-            "--tools", "Read,Edit,Write", "--permission-mode", "acceptEdits",
+            "--tools", tools, "--permission-mode", "acceptEdits",
         ]
         stdout, _stderr = self.runner.run(
             args, cwd=workspace.root, timeout=timeout, cancel_event=cancel_event

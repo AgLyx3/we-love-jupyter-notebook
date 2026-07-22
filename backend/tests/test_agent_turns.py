@@ -67,6 +67,42 @@ def test_noop_turn_does_not_increment_revision(notebook_payload):
     assert documents.get_snapshot().revision == snapshot.revision
 
 
+def test_read_only_turn_with_no_scope_completes_with_agent_output(notebook_payload):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    # No editable or context cells selected: a pure read-only "explain" turn.
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes,
+        adapter=FakeAgentAdapter([FakeAttempt(final_output="This notebook loads and summarizes data.")]),
+        timeout=1,
+    )
+    turn = turns.start(prompt="what does this notebook do?", session_id=snapshot.session_id, expected_revision=snapshot.revision, background=False)
+    assert turn.state == "completed"
+    assert turn.final_output == "This notebook loads and summarizes data."
+    assert turn.changes == ()
+    assert turn.execution_operation_id is None
+    assert documents.get_snapshot().revision == snapshot.revision
+    assert documents.coordinator.active_lease is None
+
+
+def test_read_only_turn_with_context_only_completes_without_mutation(notebook_payload):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    scopes.add("intro", editable=False, session_id=snapshot.session_id, revision=snapshot.revision)
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes,
+        adapter=FakeAgentAdapter([FakeAttempt(final_output="The intro documents the workbook.")]),
+        timeout=1,
+    )
+    turn = turns.start(prompt="explain the context cell", session_id=snapshot.session_id, expected_revision=snapshot.revision, background=False)
+    assert turn.state == "completed"
+    assert turn.changes == ()
+    assert documents.get_snapshot().revision == snapshot.revision
+    assert scopes.current().editable_cell_ids == ()
+
+
 def test_close_purges_turn_changes_checkpoint_and_lookup(notebook_payload):
     documents, _scopes, turns, snapshot = _services(
         notebook_payload,

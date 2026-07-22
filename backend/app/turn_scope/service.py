@@ -7,8 +7,7 @@ from uuid import uuid4
 from ..notebook_document.models import CellNotFound, MutationLease
 from ..notebook_document.service import NotebookDocumentService
 from .models import (
-    EmptyEditableScope, FrozenTurnScope, ScopeSelection, StaleTurnScope,
-    TerminalScopeRecord,
+    FrozenTurnScope, ScopeSelection, StaleTurnScope, TerminalScopeRecord,
 )
 
 MAX_TERMINAL_SCOPE_RECORDS = 100
@@ -106,11 +105,14 @@ class TurnScopeService:
         self.documents.check_snapshot_preconditions(snapshot, session_id, revision)
         valid_ids = {cell["id"] for cell in snapshot.notebook["cells"]}
         with self._lock:
-            if not self._editable:
-                raise EmptyEditableScope()
-            if self._selection_session_id != session_id:
-                raise EmptyEditableScope()
-            if self._selection_revision != revision:
+            # The editable set may be empty: a turn with no editable cells is a
+            # valid read-only turn. A selection that was made (editable or
+            # context) must still match this session and revision; no selection
+            # at all is a valid empty read-only scope for the current snapshot.
+            if self._selection_session_id is not None and (
+                self._selection_session_id != session_id
+                or self._selection_revision != revision
+            ):
                 raise StaleTurnScope(
                     scope_revision=self._selection_revision or 0,
                     current_revision=revision,
