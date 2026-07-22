@@ -17,6 +17,13 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
   const manualCorrelated = Boolean(operation?.operationId && operation.sessionId && operation.currentDocumentRevision != null && operation.parentTurnId === null && manualAttempt?.executionAttemptId && manualAttempt.cellId);
   const active = turn && activeStates.has(turn.state);
   const selectedRecord = history.find((record) => record.turn.turnId === turn?.turnId);
+  const canSubmit = !busy && !mutationsDisabled && Boolean(prompt.trim()) && scope.editableCellIds.length > 0;
+  const submitPrompt = () => {
+    const value = prompt.trim();
+    if (!canSubmit || !value) return;
+    onSubmit(value);
+    setPrompt("");
+  };
   return <aside className="agent-panel" aria-label="Agent workspace" onDragOver={(event) => { if (!mutationsDisabled) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }} onDrop={(event) => { event.preventDefault(); const id = event.dataTransfer.getData("application/x-notebook-cell"); if (id && !mutationsDisabled) onDropCell(id); }}>
     <header><h1>Notebook Agent</h1><span>Scoped local edits</span></header>
     <TurnScopePanel notebook={notebook} scope={scope} disabled={mutationsDisabled} onClear={onClearScope} onFocusCell={onFocusCell} onDropCell={onDropCell} />
@@ -36,10 +43,14 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
       {operation && operation.kind === "manual" && !["completed", "failed", "cancelled", "validation_incomplete", "timed_out"].includes(operation.state) && manualAttempt && <button disabled={!manualCorrelated} className="manual-cancel" onClick={() => onDecision(manualAttempt, "cancel")}><Square /> Cancel run</button>}
       {operation && awaiting && <RiskyExecutionDialog operation={operation} attempt={awaiting} busy={busy} onDecision={(decision) => onDecision(awaiting, decision)} />}
     </section>
-    <form className="prompt-form" onSubmit={(event) => { event.preventDefault(); const value = prompt.trim(); if (!value) return; onSubmit(value); setPrompt(""); }}>
+    <form className="prompt-form" onSubmit={(event) => { event.preventDefault(); submitPrompt(); }}>
       <label htmlFor="agent-prompt">Agent instruction</label>
-      <textarea id="agent-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Change the selected cells…" rows={3} />
-      <button className="primary" disabled={busy || mutationsDisabled || !prompt.trim() || scope.editableCellIds.length === 0} type="submit"><Send /> Send</button>
+      <textarea id="agent-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => {
+        if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+        event.preventDefault();
+        submitPrompt();
+      }} placeholder="Change the selected cells…" rows={3} />
+      <button className="primary" disabled={!canSubmit} type="submit"><Send /> Send</button>
     </form>
   </aside>;
 }

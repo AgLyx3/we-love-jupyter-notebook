@@ -2,13 +2,15 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import AgentChatPanel from "./agentChat/AgentChatPanel";
+import type { NotebookSnapshot, TurnScope } from "./api/client";
 
 vi.mock("@uiw/react-codemirror", () => ({
   default: ({ value, onChange, "aria-label": label, onKeyDown }: { value: string; onChange: (value: string) => void; "aria-label": string; onKeyDown: (event: React.KeyboardEvent) => void }) =>
     <textarea aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} />,
 }));
 
-const notebook = {
+const notebook: NotebookSnapshot = {
   sessionId: "session-1", filename: "sample.ipynb", revision: 3, dirty: false,
   metadata: {}, nbformat: 4, nbformatMinor: 5,
   cells: [
@@ -171,4 +173,40 @@ describe("Notebook editor", () => {
     expect(screen.getByLabelText("Allow agent edit raw cell 1")).toBeDisabled();
     expect(screen.getByLabelText("Add raw cell 1 as context")).toBeDisabled();
   });
+
+  it("submits an agent instruction with Enter", async () => {
+    const onSubmit = vi.fn();
+    renderAgentPanel(onSubmit);
+    const prompt = screen.getByLabelText("Agent instruction");
+
+    await userEvent.type(prompt, "  Update the selected cell{Enter}");
+
+    expect(onSubmit).toHaveBeenCalledWith("Update the selected cell");
+    expect(prompt).toHaveValue("");
+  });
+
+  it("uses Shift+Enter for a newline without submitting", async () => {
+    const onSubmit = vi.fn();
+    renderAgentPanel(onSubmit);
+    const prompt = screen.getByLabelText("Agent instruction");
+
+    await userEvent.type(prompt, "first{Shift>}{Enter}{/Shift}second");
+
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(prompt).toHaveValue("first\nsecond");
+  });
 });
+
+function renderAgentPanel(onSubmit: (prompt: string) => void) {
+  const scope: TurnScope = {
+    editableCellIds: ["code-1"], contextCellIds: [],
+    sessionId: "session-1", notebookRevision: 3,
+  };
+  render(<AgentChatPanel
+    notebook={notebook} scope={scope} turn={null} activeTurn={null} history={[]}
+    operation={null} busy={false} mutationsDisabled={false} onSubmit={onSubmit}
+    onCancel={() => {}} onUndo={() => {}} onClearScope={() => {}}
+    onDecision={() => {}} onSelectTurn={() => {}} onFocusCell={() => {}}
+    onDropCell={() => {}}
+  />);
+}
