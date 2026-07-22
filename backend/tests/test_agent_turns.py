@@ -181,6 +181,19 @@ def test_turn_history_summary_has_hard_serialized_cap():
     assert summary["historyTruncated"] is True
 
 
+def test_turn_history_summary_marks_removed_error_details_as_truncated():
+    turn = AgentTurn(
+        turn_id="turn-error", session_id="session-error", base_revision=1,
+        prompt="short", state="failed",
+        error={"code": "failed", "message": "short", "details": {"stage": "execution"}},
+    )
+
+    summary = serialize_turn_summary(turn)
+
+    assert summary["error"]["details"] == {}
+    assert summary["historyTruncated"] is True
+
+
 def test_turn_rejects_stale_revision_and_releases_lease(notebook_payload):
     documents, _scopes, turns, snapshot = _services(notebook_payload, [FakeAttempt()])
     with pytest.raises(RevisionConflict):

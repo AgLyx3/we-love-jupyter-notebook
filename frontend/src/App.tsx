@@ -82,7 +82,6 @@ export default function App() {
         if (turnGenerationRef.current.get(id) !== generation || executionGenerationRef.current.get(operationId) !== operationGeneration || resourceEpochRef.current !== epoch) return;
         setOperation(nextOperation);
       }
-      if (terminalTurns.has(next.state)) await refresh();
     } catch (error) { showError(error); }
   }, [refresh]);
 
@@ -246,10 +245,7 @@ function reconcileHistory(summaries: TurnRecord[], existing: TurnRecord[], noteb
         prompt: detail.turn.prompt,
         editableCellIds: detail.turn.editableCellIds,
         contextCellIds: detail.turn.contextCellIds,
-        finalOutput: detail.turn.finalOutput,
         changes: detail.turn.changes,
-        error: detail.turn.error,
-        historyTruncated: false,
       }
       : summary.turn;
     return {

@@ -86,6 +86,14 @@ def serialize_turn_summary(
         or len(turn.context_cell_ids) > len(result["contextCellIds"])
         or result["prompt"] != turn.prompt
         or result["finalOutput"] != turn.final_output
+        or (
+            turn.error is not None
+            and (
+                result["error"]["code"] != str(turn.error.get("code", "turn_error"))
+                or result["error"]["message"] != str(turn.error.get("message", "Agent turn failed"))
+                or bool(turn.error.get("details"))
+            )
+        )
         or any(
             serialized["previousSource"] != original.previous_source
             or serialized["nextSource"] != original.next_source

@@ -210,6 +210,60 @@ describe("remediation behaviors", () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/agent-turns/large"), expect.anything());
   });
 
+  it("rehydrates authoritative outcome and error after a truncated status advances", async () => {
+    const prefix = Array.from({ length: 400 }, (_, index) => `shared line ${index}`).join("\n");
+    const previousSource = `${prefix}\nold ending`;
+    const nextSource = `${prefix}\nfull detail ending`;
+    const initialDetail = {
+      ...turn("advancing", "agent_running"),
+      finalOutput: "Still running",
+      changes: [{ cellId: "code-1", previousSource, nextSource }],
+      historyTruncated: false,
+    };
+    const fullOutcome = `${"completed output ".repeat(600)}full outcome tail`;
+    const fullError = `${"validation detail ".repeat(300)}full error tail`;
+    const completedDetail = {
+      ...initialDetail,
+      state: "failed",
+      finalOutput: fullOutcome,
+      error: { code: "validation_failed", message: fullError, details: { stage: "execution" } },
+      completedAt: "2026-07-22T00:00:00Z",
+    };
+    const completedSummary = {
+      ...completedDetail,
+      finalOutput: fullOutcome.slice(0, 8189) + "...",
+      error: { code: "validation_failed", message: fullError.slice(0, 4093) + "...", details: {} },
+      changes: [{ cellId: "code-1", previousSource: previousSource.slice(0, 2048) + "...", nextSource: nextSource.slice(0, 2048) + "..." }],
+      historyTruncated: true,
+    };
+    const current = { ...notebook, cells: [{ ...notebook.cells[0], source: nextSource }] };
+    let completed = false;
+    let detailCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current")) return json(current);
+      if (path.endsWith("/session/status")) {
+        const record = completed ? completedSummary : initialDetail;
+        return json({ sessionId: "session-1", documentRevision: 3, activeTurn: completed ? null : record, activeExecution: null, turnHistory: [record] });
+      }
+      if (path.endsWith("/agent-turns/advancing")) {
+        detailCalls += 1;
+        return json(completed ? completedDetail : initialDetail);
+      }
+      return baseFetch(input, init);
+    });
+    render(<App />);
+    expect(await screen.findByText("agent running")).toBeInTheDocument();
+    completed = true;
+    EventSourceMock.instances[0].emit("notebook.updated", { revision: 3 }, 1);
+    expect(await screen.findByText("failed")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText((_, element) => element?.tagName === "P" && element.textContent?.endsWith("full outcome tail") === true)).toBeInTheDocument());
+    expect(screen.getByText((_, element) => element?.classList.contains("error-text") === true && element.textContent?.endsWith("full error tail") === true)).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Agent change"));
+    expect(screen.getByText("full detail ending")).toBeInTheDocument();
+    expect(detailCalls).toBeGreaterThanOrEqual(1);
+  });
+
   it("refreshes turn eligibility and clears inline changes after undo", async () => {
     const applied = {
       ...turn("undoable"),
@@ -224,7 +278,7 @@ describe("remediation behaviors", () => {
       if (path.endsWith("/session/status")) return json({ sessionId: "session-1", documentRevision: current.revision, activeTurn: null, activeExecution: null, turnHistory: [{ ...applied, undoEligible: !undone }] });
       if (path.endsWith("/agent-turns/undoable/undo") && init?.method === "POST") {
         undone = true;
-        current = { ...notebook, revision: 4, cells: [{ ...notebook.cells[0], source: applied.changes[0].previousSource }] };
+        current = { ...notebook, revision: 4, cells: [{ ...notebook.cells[0], source: applied.changes[0].previousSource, executionCount: 7, outputs: [{ output_type: "stream", text: "restored output" }] }] };
         return json(current);
       }
       return baseFetch(input, init);
@@ -235,6 +289,9 @@ describe("remediation behaviors", () => {
     expect(screen.queryByLabelText("Revert agent change to code cell 1")).not.toBeInTheDocument();
     expect(screen.queryByText("Agent change")).not.toBeInTheDocument();
     expect(screen.getByText("Revision 4")).toBeInTheDocument();
+    expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(applied.changes[0].previousSource);
+    expect(screen.getByLabelText("Cell output")).toHaveTextContent("restored output");
+    expect(screen.getByLabelText("code cell 1")).toHaveTextContent("[7]");
   });
 
   it("removes a reverted cell change so it cannot be submitted twice", async () => {
@@ -261,6 +318,7 @@ describe("remediation behaviors", () => {
     await userEvent.click(await screen.findByLabelText("Revert agent change to code cell 1"));
     await waitFor(() => expect(screen.queryByLabelText("Revert agent change to code cell 1")).not.toBeInTheDocument());
     expect(screen.queryByText("Agent change")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(applied.changes[0].previousSource);
     expect(revertCalls).toBe(1);
   });
 
