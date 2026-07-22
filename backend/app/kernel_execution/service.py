@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 from datetime import datetime, timezone
 from threading import RLock, Thread
 from typing import Any
@@ -13,23 +14,35 @@ from ..session_events.service import SessionEventService
 from .kernel_session import KernelSession
 from .models import (
     CellExecutionAttempt, ExecutionDecisionConflict, ExecutionNotFound,
-    ExecutionOperation, KernelCellTimeout, KernelSessionConflict, StaleExecutionResult,
+    ExecutionOperation, KernelCellTimeout, KernelExecutionCancelled,
+    KernelSessionConflict, StaleExecutionResult,
     TERMINAL_EXECUTION_STATES,
 )
 from .risky_cell_classifier import RiskyCellClassifier
 
+DEFAULT_TERMINAL_OPERATION_LIMIT = 100
+DEFAULT_TERMINAL_RETENTION_SECONDS = 3600
+DEFAULT_OPERATION_HISTORY_BYTES = 16 * 1024 * 1024
+
 
 class KernelExecutionService:
+    """Executes cells and retains up to one hour/100 terminal operations for polling."""
     def __init__(
         self, *, documents: NotebookDocumentService,
         events: SessionEventService | None = None,
         classifier: RiskyCellClassifier | None = None,
         kernel: KernelSession | None = None,
+        max_terminal_operations: int = DEFAULT_TERMINAL_OPERATION_LIMIT,
+        terminal_retention_seconds: float = DEFAULT_TERMINAL_RETENTION_SECONDS,
+        max_history_bytes: int = DEFAULT_OPERATION_HISTORY_BYTES,
     ) -> None:
         self.documents = documents
         self.events = events or SessionEventService()
         self.classifier = classifier or RiskyCellClassifier()
         self.kernel = kernel or KernelSession()
+        self.max_terminal_operations = max_terminal_operations
+        self.terminal_retention_seconds = terminal_retention_seconds
+        self.max_history_bytes = max_history_bytes
         self._lock = RLock()
         self._operations: dict[str, ExecutionOperation] = {}
         self._attempts: dict[str, tuple[ExecutionOperation, CellExecutionAttempt]] = {}
@@ -51,6 +64,7 @@ class KernelExecutionService:
             operation = ExecutionOperation(operation_id, session_id, expected_revision, "manual", current_revision=expected_revision)
             with self._lock:
                 self._operations[operation_id] = operation
+                self._prune_history_locked()
             self._publish(operation)
         except Exception:
             self.documents.coordinator.release(lease)
@@ -98,6 +112,7 @@ class KernelExecutionService:
         )
         with self._lock:
             self._operations[operation.operation_id] = operation
+            self._prune_history_locked()
         self._publish(operation)
         return self.get(operation.operation_id)
 
@@ -147,8 +162,14 @@ class KernelExecutionService:
                 self._set_operation_state(operation, "awaiting_approval")
                 while not attempt.decision_event.wait(0.1):
                     if operation.cancel_event.is_set():
+                        attempt.active = False
+                        attempt.state = "cancelled"
                         self._finish(operation, "cancelled")
                         return
+                if operation.cancel_event.is_set() or not attempt.active:
+                    attempt.state = "cancelled"
+                    self._finish(operation, "cancelled")
+                    return
                 if attempt.decision == "skip":
                     attempt.state = "skipped"
                     attempt.active = False
@@ -160,7 +181,12 @@ class KernelExecutionService:
                     self._finish(operation, "cancelled")
                     return
             self._set_operation_state(operation, "running")
-            attempt.state = "running"
+            with self._lock:
+                if operation.cancel_event.is_set() or not attempt.active:
+                    attempt.state = "cancelled"
+                    self._finish(operation, "cancelled")
+                    return
+                attempt.state = "running"
             self._publish(operation)
             try:
                 result = self.kernel.execute(source, attempt.attempt_id)
@@ -176,6 +202,24 @@ class KernelExecutionService:
                     operation.error = copy.deepcopy(attempt.error)
                 self._finish(operation, "timed_out")
                 return
+            except KernelExecutionCancelled:
+                with self._lock:
+                    attempt.active = False
+                    if operation.state != "failed":
+                        attempt.state = "cancelled"
+                if operation.state not in TERMINAL_EXECUTION_STATES:
+                    self._finish(operation, "cancelled")
+                return
+            except Exception as error:
+                with self._lock:
+                    attempt.active = False
+                    attempt.state = "failed"
+                    attempt.error = {
+                        "code": "kernel_execution_failed",
+                        "message": str(error), "details": {},
+                    }
+                    operation.error = copy.deepcopy(attempt.error)
+                raise
             if operation.cancel_event.is_set():
                 attempt.state = "cancelled"
                 attempt.active = False
@@ -295,13 +339,18 @@ class KernelExecutionService:
                 if operation.current_attempt_id:
                     pair = self._attempts.get(operation.current_attempt_id)
                     if pair:
-                        pair[1].active = False
-                        pair[1].decision_event.set()
+                        attempt = pair[1]
+                        attempt.active = False
+                        attempt.state = "cancelled"
+                        if attempt.decision is None:
+                            attempt.decision = "cancel"
+                        attempt.decision_event.set()
         if operations:
             self.kernel.interrupt()
 
     def get(self, execution_id: str) -> ExecutionOperation:
         with self._lock:
+            self._prune_history_locked()
             operation = self._operations.get(execution_id)
             if operation is None and execution_id in self._attempts:
                 operation = self._attempts[execution_id][0]
@@ -320,10 +369,47 @@ class KernelExecutionService:
         return self.kernel_status()
 
     def restart(self, kernel_session_id: str, *, execution_attempt_id: str | None = None) -> dict[str, Any]:
-        if not self.kernel.restart_correlated(
-            kernel_session_id, execution_attempt_id,
-        ):
+        matched_operation = None
+
+        def invalidate() -> None:
+            nonlocal matched_operation
+            if execution_attempt_id is None:
+                return
+            with self._lock:
+                pair = self._attempts.get(execution_attempt_id)
+                if pair is None:
+                    return
+                operation, attempt = pair
+                attempt.active = False
+                attempt.state = "cancelled"
+                operation.cancel_event.set()
+                operation.state = "cancelled"
+                operation.completed_at = datetime.now(timezone.utc)
+                self._prune_history_locked()
+                matched_operation = operation
+
+        try:
+            matched = self.kernel.restart_correlated(
+                kernel_session_id, execution_attempt_id,
+                on_matched=invalidate,
+            )
+        except Exception as error:
+            if matched_operation is not None:
+                with self._lock:
+                    attempt = self._attempts[execution_attempt_id][1]
+                    attempt.state = "failed"
+                    attempt.error = {
+                        "code": "kernel_restart_failed",
+                        "message": str(error), "details": {},
+                    }
+                    matched_operation.state = "failed"
+                    matched_operation.error = copy.deepcopy(attempt.error)
+                self._publish(matched_operation)
+            raise
+        if not matched:
             raise KernelSessionConflict()
+        if matched_operation is not None:
+            self._publish(matched_operation)
         return self.kernel_status()
 
     def shutdown(self) -> None:
@@ -362,21 +448,62 @@ class KernelExecutionService:
         with self._lock:
             operation.state = state
             operation.completed_at = datetime.now(timezone.utc)
+            self._prune_history_locked()
         self._publish(operation)
 
     def _fail(self, operation: ExecutionOperation, error: Exception) -> None:
         with self._lock:
             operation.state = "failed"
             operation.completed_at = datetime.now(timezone.utc)
-            if isinstance(error, NotebookDomainError):
+            if operation.error is not None:
+                pass
+            elif isinstance(error, NotebookDomainError):
                 operation.error = {"code": error.code, "message": error.message, "details": error.details}
             else:
                 operation.error = {"code": "execution_failed", "message": str(error), "details": {}}
+            self._prune_history_locked()
         self._publish(operation)
 
     def _publish(self, operation: ExecutionOperation) -> None:
         snapshot = self._copy_operation(operation)
-        self.events.publish("execution.updated", serialize_operation(snapshot))
+        self.events.publish("execution.updated", serialize_operation_summary(snapshot))
+
+    def _prune_history_locked(self) -> None:
+        now = datetime.now(timezone.utc)
+        terminal = sorted(
+            (
+                item for item in self._operations.values()
+                if item.state in TERMINAL_EXECUTION_STATES
+                and item.completed_at is not None
+            ),
+            key=lambda item: item.completed_at or item.created_at,
+        )
+        expired = {
+            item.operation_id for item in terminal
+            if (now - (item.completed_at or item.created_at)).total_seconds()
+            > self.terminal_retention_seconds
+        }
+        total_bytes = sum(
+            len(json.dumps(serialize_operation(item), default=str).encode())
+            for item in terminal
+        )
+        while terminal and (
+            len(terminal) > self.max_terminal_operations
+            or expired
+            or (total_bytes > self.max_history_bytes and len(terminal) > 1)
+        ):
+            victim = next(
+                (item for item in terminal if item.operation_id in expired),
+                terminal[0],
+            )
+            terminal.remove(victim)
+            expired.discard(victim.operation_id)
+            total_bytes -= len(
+                json.dumps(serialize_operation(victim), default=str).encode()
+            )
+            self._operations.pop(victim.operation_id, None)
+            for attempt in victim.attempts:
+                self._attempts.pop(attempt.attempt_id, None)
 
     @staticmethod
     def _copy_operation(operation: ExecutionOperation) -> ExecutionOperation:
@@ -419,3 +546,10 @@ def serialize_operation(operation: ExecutionOperation) -> dict[str, Any]:
         "createdAt": operation.created_at.isoformat(),
         "completedAt": operation.completed_at.isoformat() if operation.completed_at else None,
     }
+
+
+def serialize_operation_summary(operation: ExecutionOperation) -> dict[str, Any]:
+    result = serialize_operation(operation)
+    for attempt in result["attempts"]:
+        attempt.pop("outputs", None)
+    return result

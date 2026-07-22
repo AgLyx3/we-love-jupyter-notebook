@@ -7,7 +7,7 @@ from typing import Any
 from uuid import uuid4
 from time import monotonic
 
-from .models import KernelCellTimeout
+from .models import KernelCellTimeout, KernelExecutionCancelled
 
 
 @dataclass(frozen=True)
@@ -54,9 +54,13 @@ class KernelSession:
             self._busy_attempt_id = attempt_id
             client = self._client
         try:
-            message_id = client.execute(source, stop_on_error=True)
+            message_id = client.execute(
+                source, stop_on_error=True, allow_stdin=False,
+            )
             deadline = monotonic() + self.cell_timeout
             outputs: list[dict[str, Any]] = []
+            display_indexes: dict[str, int] = {}
+            clear_pending = False
             execution_count = None
             saw_error = False
             while True:
@@ -64,8 +68,13 @@ class KernelSession:
                     remaining = deadline - monotonic()
                     if remaining <= 0:
                         raise Empty()
-                    message = client.get_iopub_msg(timeout=remaining)
+                    message = client.get_iopub_msg(timeout=min(remaining, 0.1))
                 except Empty as error:
+                    with self._lock:
+                        if self._busy_attempt_id != attempt_id:
+                            raise KernelExecutionCancelled() from error
+                    if monotonic() < deadline:
+                        continue
                     recovered = self._interrupt_and_wait_idle(client)
                     with self._lock:
                         self._restart_required = not recovered
@@ -74,6 +83,20 @@ class KernelSession:
                     continue
                 msg_type = message["header"]["msg_type"]
                 content = message["content"]
+                if msg_type == "clear_output":
+                    if content.get("wait", False):
+                        clear_pending = True
+                    else:
+                        outputs.clear()
+                        display_indexes.clear()
+                    continue
+                if msg_type in {
+                    "stream", "display_data", "update_display_data",
+                    "execute_result", "error",
+                } and clear_pending:
+                    outputs.clear()
+                    display_indexes.clear()
+                    clear_pending = False
                 if msg_type == "execute_input":
                     execution_count = content.get("execution_count")
                 elif msg_type == "stream":
@@ -84,6 +107,15 @@ class KernelSession:
                         output["execution_count"] = content.get("execution_count")
                         execution_count = content.get("execution_count")
                     outputs.append(output)
+                    display_id = content.get("transient", {}).get("display_id")
+                    if display_id:
+                        display_indexes[display_id] = len(outputs) - 1
+                elif msg_type == "update_display_data":
+                    display_id = content.get("transient", {}).get("display_id")
+                    if display_id in display_indexes:
+                        target = outputs[display_indexes[display_id]]
+                        target["data"] = content.get("data", {})
+                        target["metadata"] = content.get("metadata", {})
                 elif msg_type == "error":
                     saw_error = True
                     outputs.append({"output_type": "error", "ename": content.get("ename", "Error"), "evalue": content.get("evalue", ""), "traceback": content.get("traceback", [])})
@@ -128,6 +160,7 @@ class KernelSession:
 
     def restart_correlated(
         self, kernel_session_id: str, execution_attempt_id: str | None,
+        on_matched=None,
     ) -> bool:
         with self._lock:
             if (
@@ -135,11 +168,13 @@ class KernelSession:
                 or execution_attempt_id != self._busy_attempt_id
             ):
                 return False
+            if on_matched is not None:
+                on_matched()
+            self._busy_attempt_id = None
             if self._manager is not None:
                 self._manager.restart_kernel(now=True)
                 self._client.wait_for_ready(timeout=self.startup_timeout)
             self.kernel_session_id = uuid4().hex
-            self._busy_attempt_id = None
             self._restart_required = False
             return True
 

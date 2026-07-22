@@ -45,6 +45,8 @@ def test_invalid_python_falls_back_to_text_patterns():
     ("from os import unlink as discard\ndiscard('x')", "file_delete"),
     ("from pathlib import Path as P\nP('x').unlink()", "file_delete"),
     ("import pathlib as paths\npaths.Path('x').rename('y')", "file_write"),
+    ("import socket as s\ns.create_connection(('localhost', 80))", "network_client"),
+    ("from socket import create_connection as connect\nconnect(('localhost', 80))", "network_client"),
 ])
 def test_import_aliases_and_direct_side_effect_calls(source, pattern):
     result = RiskyCellClassifier().classify(source)

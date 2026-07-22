@@ -21,9 +21,11 @@ class ApiKernel:
     def shutdown(self): pass
     def interrupt_correlated(self, kernel_session_id, attempt_id):
         return kernel_session_id == self.kernel_session_id and attempt_id == self.busy_attempt_id
-    def restart_correlated(self, kernel_session_id, attempt_id):
+    def restart_correlated(self, kernel_session_id, attempt_id, on_matched=None):
         if kernel_session_id != self.kernel_session_id or attempt_id != self.busy_attempt_id:
             return False
+        if on_matched is not None:
+            on_matched()
         self.restart()
         return True
 
@@ -76,6 +78,14 @@ def test_session_event_journal_publishes_notebook_and_execution_state(client, no
     event_types = [event.event_type for event in client.app.state.session_event_service.list()]
     assert "execution.updated" in event_types
     assert event_types.count("notebook.updated") >= 2
+    execution_events = [
+        event for event in client.app.state.session_event_service.list()
+        if event.event_type == "execution.updated"
+    ]
+    assert all(
+        "outputs" not in attempt
+        for event in execution_events for attempt in event.data["attempts"]
+    )
 
 
 def pending_risky_execution(client, uploaded):

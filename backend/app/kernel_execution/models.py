@@ -41,6 +41,10 @@ class KernelCellTimeout(TimeoutError):
         self.recovered = recovered
 
 
+class KernelExecutionCancelled(Exception):
+    """The correlated attempt was invalidated while the kernel was running."""
+
+
 class ExecutionTimedOut(NotebookDomainError):
     code = "cell_timed_out"
     message = "Cell execution timed out"

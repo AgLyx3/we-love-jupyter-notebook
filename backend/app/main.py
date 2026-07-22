@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -21,14 +23,25 @@ from .session_events.service import SessionEventService
 
 
 def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
-    app = FastAPI(title="Local Notebook Agent Editor")
-    app.state.notebook_service = NotebookDocumentService()
-    app.state.session_event_service = SessionEventService()
-    app.state.kernel_execution_service = KernelExecutionService(
-        documents=app.state.notebook_service,
-        events=app.state.session_event_service,
+    notebook_service = NotebookDocumentService()
+    session_event_service = SessionEventService()
+    kernel_execution_service = KernelExecutionService(
+        documents=notebook_service, events=session_event_service,
     )
-    app.state.turn_scope_service = TurnScopeService(app.state.notebook_service)
+    notebook_service.register_session_replacement_listener(
+        session_event_service.activate_session,
+    )
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        _app.state.kernel_execution_service.shutdown()
+
+    app = FastAPI(title="Local Notebook Agent Editor", lifespan=lifespan)
+    app.state.notebook_service = notebook_service
+    app.state.session_event_service = session_event_service
+    app.state.kernel_execution_service = kernel_execution_service
+    app.state.turn_scope_service = TurnScopeService(notebook_service)
     app.state.agent_turn_service = AgentTurnService(
         documents=app.state.notebook_service,
         scopes=app.state.turn_scope_service,
@@ -41,10 +54,6 @@ def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
     app.include_router(agent_turn_router)
     app.include_router(execution_router)
     app.include_router(event_router)
-
-    @app.on_event("shutdown")
-    def shutdown_kernel() -> None:
-        app.state.kernel_execution_service.shutdown()
 
     @app.exception_handler(NotebookDomainError)
     async def notebook_error_handler(

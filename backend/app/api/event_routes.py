@@ -10,11 +10,21 @@ router = APIRouter()
 
 
 @router.get("/events")
-def events(request: Request, after: int = Query(default=0, ge=0)) -> StreamingResponse:
+async def events(
+    request: Request,
+    session_id: str | None = Query(default=None, alias="sessionId"),
+    after: int = Query(default=0, ge=0),
+) -> StreamingResponse:
     service = request.app.state.session_event_service
+    target_session_id = (
+        session_id or request.app.state.notebook_service.get_snapshot().session_id
+    )
 
-    def generate():
-        for event in service.stream(after):
+    async def generate():
+        async for event in service.stream(
+            session_id=target_session_id, after=after,
+            is_disconnected=request.is_disconnected,
+        ):
             if event is None:
                 yield ": keep-alive\n\n"
             else:

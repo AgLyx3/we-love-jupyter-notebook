@@ -40,6 +40,7 @@ class RiskyCellClassifier:
         "urllib.request.urlopen": ("network_client", "Makes a network request"),
         "aiohttp.ClientSession": ("network_client", "Creates a network client"),
         "socket.socket": ("network_client", "Creates a network connection"),
+        "socket.create_connection": ("network_client", "Creates a network connection"),
         "requests.Session": ("network_client", "Creates a network client"),
         "httpx.Client": ("network_client", "Creates a network client"),
         "httpx.AsyncClient": ("network_client", "Creates a network client"),
