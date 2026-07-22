@@ -1,3 +1,4 @@
+import json
 import time
 from threading import Event
 
@@ -5,8 +6,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.agent_turns.service import (
-    AgentTurnService, MAX_TURN_HISTORY_BYTES, RevertConflict, UndoConflict,
+    AgentTurn, AgentTurnService, MAX_TURN_HISTORY_BYTES, RevertConflict,
+    UndoConflict,
 )
+from backend.app.api.agent_turn_routes import (
+    MAX_TURN_SUMMARY_BYTES, serialize_turn_summary,
+)
+from backend.app.boundary_validation.validator import CandidateCellSourceChange
 from backend.app.agent_workspace.adapters import FakeAgentAdapter, FakeAttempt
 from backend.app.notebook_document.models import MutationConflict, RevisionConflict
 from backend.app.notebook_document.service import NotebookDocumentService
@@ -143,6 +149,30 @@ def test_large_turn_history_keeps_only_latest_undo_checkpoint(notebook_payload):
         expected_revision=latest.applied_revision,
     )
     assert _source(restored).startswith("value = 1\n")
+    assert turns.get(latest.turn_id).checkpoint is None
+    assert len(turns.history_for_session(snapshot.session_id, limit=100)) < 3
+
+
+def test_turn_history_summary_has_hard_serialized_cap():
+    turn = AgentTurn(
+        turn_id="turn-large", session_id="session-large", base_revision=1,
+        prompt="p" * 500_000, state="completed", final_output="o" * 500_000,
+        editable_cell_ids=tuple(f"cell-{index}" for index in range(500)),
+        changes=tuple(
+            CandidateCellSourceChange(
+                cell_id=f"cell-{index}", previous_source="a" * 20_000,
+                next_source="b" * 20_000,
+            )
+            for index in range(200)
+        ),
+    )
+    summary = serialize_turn_summary(turn, undo_eligible=True)
+    assert len(json.dumps(summary, separators=(",", ":")).encode()) <= MAX_TURN_SUMMARY_BYTES
+    assert summary["turnId"] == "turn-large"
+    assert summary["sessionId"] == "session-large"
+    assert summary["state"] == "completed"
+    assert summary["undoEligible"] is True
+    assert summary["historyTruncated"] is True
 
 
 def test_turn_rejects_stale_revision_and_releases_lease(notebook_payload):

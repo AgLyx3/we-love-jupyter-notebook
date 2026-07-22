@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -9,6 +10,7 @@ from ..agent_turns.service import AgentTurn
 from .notebook_routes import serialize_snapshot
 
 router = APIRouter(prefix="/agent-turns")
+MAX_TURN_SUMMARY_BYTES = 128 * 1024
 
 
 class StartTurnRequest(BaseModel):
@@ -44,6 +46,69 @@ def serialize_turn(turn: AgentTurn, *, undo_eligible: bool = False) -> dict[str,
         "createdAt": turn.created_at.isoformat(),
         "completedAt": turn.completed_at.isoformat() if turn.completed_at else None,
     }
+
+
+def _truncate(value: str, max_bytes: int) -> str:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max(0, max_bytes - 3)].decode("utf-8", errors="ignore") + "..."
+
+
+def serialize_turn_summary(
+    turn: AgentTurn, *, undo_eligible: bool = False,
+) -> dict[str, Any]:
+    change_count = len(turn.changes)
+    source_budget = min(2048, max(64, 80_000 // max(1, change_count * 2)))
+    result = serialize_turn(turn, undo_eligible=undo_eligible)
+    result["prompt"] = _truncate(turn.prompt, 8192)
+    result["finalOutput"] = _truncate(turn.final_output, 8192)
+    result["editableCellIds"] = [_truncate(value, 256) for value in turn.editable_cell_ids[:128]]
+    result["contextCellIds"] = [_truncate(value, 256) for value in turn.context_cell_ids[:128]]
+    result["changes"] = [
+        {
+            "cellId": _truncate(item.cell_id, 256),
+            "previousSource": _truncate(item.previous_source, source_budget),
+            "nextSource": _truncate(item.next_source, source_budget),
+        }
+        for item in turn.changes[:128]
+    ]
+    if turn.error is not None:
+        result["error"] = {
+            "code": _truncate(str(turn.error.get("code", "turn_error")), 256),
+            "message": _truncate(str(turn.error.get("message", "Agent turn failed")), 4096),
+            "details": {},
+        }
+    result["historyTruncated"] = (
+        change_count > len(result["changes"])
+        or len(turn.editable_cell_ids) > len(result["editableCellIds"])
+        or len(turn.context_cell_ids) > len(result["contextCellIds"])
+        or result["prompt"] != turn.prompt
+        or result["finalOutput"] != turn.final_output
+        or any(
+            serialized["previousSource"] != original.previous_source
+            or serialized["nextSource"] != original.next_source
+            for serialized, original in zip(result["changes"], turn.changes)
+        )
+    )
+    if len(json.dumps(result, separators=(",", ":")).encode()) <= MAX_TURN_SUMMARY_BYTES:
+        return result
+    result["changes"] = [
+        {"cellId": item["cellId"], "previousSource": "", "nextSource": ""}
+        for item in result["changes"][:64]
+    ]
+    result["editableCellIds"] = result["editableCellIds"][:64]
+    result["contextCellIds"] = result["contextCellIds"][:64]
+    result["prompt"] = _truncate(result["prompt"], 1024)
+    result["finalOutput"] = _truncate(result["finalOutput"], 1024)
+    result["historyTruncated"] = True
+    if len(json.dumps(result, separators=(",", ":")).encode()) <= MAX_TURN_SUMMARY_BYTES:
+        return result
+    result["changes"] = []
+    result["editableCellIds"] = []
+    result["contextCellIds"] = []
+    result["error"] = None
+    return result
 
 
 @router.post("", status_code=202)

@@ -7,8 +7,10 @@ from backend.app.notebook_document.models import (
     MutationConflict, NotebookImportError, RevisionConflict,
 )
 from backend.app.notebook_document.service import NotebookDocumentService
-from backend.app.turn_scope.service import TurnScopeService
 from backend.app.turn_scope.models import FrozenTurnScope, StaleTurnScope
+from backend.app.turn_scope.service import (
+    MAX_TERMINAL_SCOPE_RECORD_BYTES, TurnScopeService,
+)
 
 
 def _loaded(notebook_payload):
@@ -70,6 +72,17 @@ def test_terminal_scope_history_is_count_and_byte_bounded(notebook_payload):
         ), "completed")
     assert len(scopes.history) < 30
     assert scopes.history[-1].scope.turn_id == "turn-119"
+    newest = scopes.history[-1]
+    size = (
+        len(newest.scope.prompt.encode())
+        + sum(len(value.encode()) for value in newest.scope.editable_cell_ids)
+        + sum(len(value.encode()) for value in newest.scope.context_cell_ids)
+        + len(newest.scope.turn_id.encode())
+        + len(newest.scope.session_id.encode())
+        + len(newest.outcome.encode())
+        + 256
+    )
+    assert size <= MAX_TERMINAL_SCOPE_RECORD_BYTES
 
 
 def test_successful_replacement_clears_scope_even_with_colliding_ids(notebook_payload):

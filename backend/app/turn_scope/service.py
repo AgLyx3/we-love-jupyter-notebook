@@ -13,6 +13,7 @@ from .models import (
 
 MAX_TERMINAL_SCOPE_RECORDS = 100
 MAX_TERMINAL_SCOPE_BYTES = 512 * 1024
+MAX_TERMINAL_SCOPE_RECORD_BYTES = 64 * 1024
 
 
 class TurnScopeService:
@@ -131,9 +132,10 @@ class TurnScopeService:
             self._context.clear()
             self._selection_session_id = None
             self._selection_revision = None
-            self._history.append(TerminalScopeRecord(
+            record = TerminalScopeRecord(
                 scope=scope, outcome=outcome, completed_at=datetime.now(timezone.utc)
-            ))
+            )
+            self._history.append(self._bound_record(record))
             self._prune_history_locked()
 
     def _on_session_replaced(self, _session_id: str, _revision: int) -> None:
@@ -176,3 +178,39 @@ class TurnScopeService:
             retained.append(record)
             retained_bytes += size
         self._history = list(reversed(retained))
+
+    @staticmethod
+    def _bound_record(record: TerminalScopeRecord) -> TerminalScopeRecord:
+        def truncate(value: str, max_bytes: int) -> str:
+            encoded = value.encode("utf-8")
+            if len(encoded) <= max_bytes:
+                return value
+            return encoded[:max_bytes - 3].decode("utf-8", errors="ignore") + "..."
+
+        id_budget = 32 * 1024
+        editable: list[str] = []
+        context: list[str] = []
+        used = 0
+        for source, target in (
+            (record.scope.editable_cell_ids, editable),
+            (record.scope.context_cell_ids, context),
+        ):
+            for value in source:
+                bounded = truncate(value, 256)
+                size = len(bounded.encode("utf-8"))
+                if used + size > id_budget:
+                    break
+                target.append(bounded)
+                used += size
+        scope = FrozenTurnScope(
+            turn_id=truncate(record.scope.turn_id, 256),
+            session_id=truncate(record.scope.session_id, 256),
+            notebook_revision=record.scope.notebook_revision,
+            editable_cell_ids=tuple(editable), context_cell_ids=tuple(context),
+            prompt=truncate(record.scope.prompt, 24 * 1024),
+            frozen_at=record.scope.frozen_at,
+        )
+        return TerminalScopeRecord(
+            scope=scope, outcome=truncate(record.outcome, 256),
+            completed_at=record.completed_at,
+        )

@@ -372,6 +372,10 @@ class AgentTurnService:
             )
             with self._lock:
                 self._latest_applied_turn_id = None
+                stored = self._turns.get(turn_id)
+                if stored is not None:
+                    stored.checkpoint = None
+                self._prune_history_locked()
             if self.events is not None:
                 self.events.publish("notebook.updated", {"sessionId": restored.session_id, "revision": restored.revision, "ownerId": f"undo:{turn_id}"})
             return restored
@@ -470,6 +474,9 @@ class AgentTurnService:
                 "executionOperationId": turn.execution_operation_id,
                 "error": copy.deepcopy(turn.error),
             })
+        self._prune_history_locked()
+
+    def _prune_history_locked(self) -> None:
         terminal = sorted(
             (item for item in self._turns.values() if item.state in TERMINAL_STATES),
             key=lambda item: item.completed_at or item.created_at,
