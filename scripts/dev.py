@@ -146,6 +146,9 @@ def _final_exit_code(
     cleanup_errors: list[str],
     startup_exit_code: int | None,
 ) -> int:
+    for returncode in pre_cleanup_returncodes:
+        if returncode not in (None, 0):
+            return returncode
     if cleanup_errors:
         return 1
     if startup_exit_code is not None:
@@ -156,8 +159,6 @@ def _final_exit_code(
     cleanup_signals = {-signal.SIGTERM, -signal.SIGKILL}
     for child, before_cleanup in zip(children, pre_cleanup_returncodes, strict=True):
         final_returncode = child.poll()
-        if before_cleanup not in (None, 0):
-            return before_cleanup
         if (
             before_cleanup is None
             and final_returncode not in (None, 0)

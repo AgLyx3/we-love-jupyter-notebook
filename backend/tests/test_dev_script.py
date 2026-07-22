@@ -308,6 +308,18 @@ def test_run_commands_fails_when_cleanup_reports_error(monkeypatch):
     assert run_commands([["child"]], {}, shutdown, []) == 1
 
 
+def test_run_commands_preserves_child_failure_when_cleanup_also_fails(monkeypatch):
+    child = FakeProcess(101, exits_gracefully=True)
+    child.returncode = 7
+    monkeypatch.setattr("scripts.dev.subprocess.Popen", lambda *_args, **_kwargs: child)
+    monkeypatch.setattr(
+        "scripts.dev.terminate_process_groups",
+        lambda _children: ["injected cleanup failure"],
+    )
+
+    assert run_commands([["child"]], {}, Event(), []) == 7
+
+
 def test_run_commands_classifies_concurrent_failure_after_cleanup(monkeypatch):
     clean = FakeProcess(101, exits_gracefully=True)
     clean.returncode = 0
