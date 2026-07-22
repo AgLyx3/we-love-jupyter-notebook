@@ -209,7 +209,7 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   await expect(page.getByText("1 context")).toBeVisible();
 
   await page.getByLabel("Agent instruction").fill("[safe] Update the parameter values");
-  await page.getByRole("button", { name: "Send" }).click();
+  await page.getByLabel("Agent instruction").press("Enter");
   await waitForTurn(page, /completed/);
   const diff = page.locator(".cell-diff").first();
   await diff.locator("summary").click();
