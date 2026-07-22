@@ -234,7 +234,9 @@ Core use cases:
 
 Responsibilities:
 
-- Run notebook cells through a local Jupyter kernel.
+- Resolve and launch the notebook session's kernel through a `KernelProvider`
+  for the bound `EnvironmentSpec`, rather than hardcoding a single environment.
+- Run notebook cells through that kernel.
 - After valid edits, execute code cells from the first edited cell onward.
 - Skip Markdown cells.
 - Detect risky cells before execution.
@@ -246,6 +248,8 @@ Responsibilities:
 
 Core use cases:
 
+- `ListAvailableEnvironments`
+- `ResolveKernelEnvironment`
 - `StartKernelSession`
 - `ClassifyRiskyCell`
 - `ExecuteDownstreamCells`
@@ -255,6 +259,11 @@ Core use cases:
 - `ExecuteAllCells`
 - `InterruptKernel`
 - `RestartKernel`
+
+See `Kernel Environment` for the provider model. The current implementation
+resolves to a single `local-interpreter` provider bound to the backend's own
+Python environment; the abstraction exists so this becomes selectable and,
+later, non-local without changing the execution, lease, or approval logic.
 
 ### UI Session
 
@@ -273,6 +282,7 @@ Core use cases:
 - `RenderCurrentTurnScope`
 - `RenderAgentTurnHistory`
 - `RenderScopedDiffs`
+- `RenderInlineCellDiffDecorations`
 - `RequestAgentTurn`
 - `UndoAgentTurn`
 - `RevertCellChange`
@@ -378,8 +388,16 @@ NotebookSession
   revision
   dirty
   mutationLease?
+  environmentRef?
   checkpoints[]
   turnHistory[]
+
+EnvironmentSpec
+  environmentId
+  kind          # local-interpreter | container | remote-gateway
+  identifier    # interpreter path, kernelspec name, image ref, or gateway URL
+  displayName
+  capabilities  # interrupt, restart, provisioning, isolation
 
 NotebookCellRef
   cellId
@@ -720,9 +738,15 @@ Apply semantics:
 
 After valid edits:
 
-- Determine the earliest notebook index among edited cells.
+- Determine the earliest notebook index among edited **code** cells.
 - Execute code cells from that index onward.
 - Skip Markdown cells.
+- A turn that changes only Markdown (or other non-code) cells performs no
+  downstream execution and completes: there is no code to re-validate, so a
+  title or prose edit must not run the notebook. No execution operation is
+  created for such a turn. Edited Markdown cells also do not lower the start
+  index of a turn that does edit code; execution begins at the first edited
+  code cell.
 - Create a unique execution attempt for each cell and capture its starting
   document revision and source hash.
 - Store outputs and execution counts produced by the kernel.
@@ -819,6 +843,97 @@ Approval UI:
 This classifier is a guardrail, not a sandbox. It reduces accidental side
 effects during downstream validation, but it cannot prove a cell is safe.
 
+## Kernel Environment
+
+The environment that executes a notebook must be a first-class, per-notebook
+binding, not an accident of how the backend process was launched. Today the
+kernel is started with a hardcoded `KernelManager(kernel_name="python3")`, which
+resolves to the backend's own interpreter. That interpreter carries only the
+application's dependencies, so a notebook that imports libraries the app does not
+ship (for example `pandas`) fails with `ModuleNotFoundError` on any run — manual,
+run-all, or agent downstream. This is an environment gap, not an execution bug.
+
+### Provider Model
+
+Kernel Execution owns a `KernelProvider` abstraction that decouples *which
+environment runs the code* from *how execution is driven*. This mirrors the
+Agent Workspace CLI adapter registry: pluggable, capability-checked, fail-closed.
+
+- `KernelProvider.launch(EnvironmentSpec) -> KernelHandle`, where `KernelHandle`
+  exposes the same interface the current kernel session already provides
+  (`execute`, `interrupt`, `restart`, execution correlation, `shutdown`).
+- Because the rest of Kernel Execution already talks to a kernel through that
+  interface, provider selection changes only *where* the kernel process lives.
+  Execution attempts, source-hash checks, the single mutation lease, stale-result
+  rejection, and risky-cell approval are all unchanged.
+
+Provider kinds:
+
+- `local-interpreter`: launch ipykernel via a chosen interpreter path or a
+  registered Jupyter kernelspec (other venvs, conda environments). Local, but
+  selectable rather than fixed to the app's own environment.
+- `container`: launch the kernel inside a per-notebook container image. Gives
+  dependency isolation and OS-level execution isolation together.
+- `remote-gateway`: attach to a kernel through a Jupyter Kernel Gateway /
+  Enterprise Gateway over HTTP/WebSocket. A standard protocol for off-box
+  kernels, so the transport is not reinvented.
+
+The `container` and `remote-gateway` providers are the answer to "not just
+local." They are also where the sandboxing this spec otherwise defers naturally
+belongs.
+
+### Environment Resolution
+
+A resolved `EnvironmentSpec` is bound to the `NotebookSession` as
+`environmentRef`. Resolution order, validated and fail-closed:
+
+1. Explicit user selection (an environment picker in the UI).
+2. The notebook's own `metadata.kernelspec` as a default hint.
+3. A configured default environment.
+
+The selection is a hint that must be validated, exactly as cell-ID normalization
+and CLI adapter capability are validated. If the chosen environment cannot be
+launched or fails its health check, the session reports a clear error rather than
+silently falling back to a different environment.
+
+### Selection Versus Provisioning
+
+Two related but distinct features hide inside "per-notebook environment":
+
+- Selecting an existing environment that already contains the notebook's
+  dependencies. Minimal; the user manages dependencies.
+- Provisioning or building an environment from declared dependencies
+  (`requirements.txt`, `environment.yml`, inline `%pip`), cached per notebook.
+  More powerful, and much more complex (build time, caching, reproducibility).
+
+Selection is the foundation and ships first; provisioning is deferred.
+
+### Lifecycle And Correctness
+
+- Changing a session's environment is a kernel restart into the new environment.
+  It clears kernel memory like any restart, is lease-guarded, and is deliberate.
+- Launching a container or remote kernel can exceed the kernel-startup timeout.
+  Model a separate, longer, cancelable provisioning phase so a slow or failing
+  launch never hangs the sole session's mutation lease.
+- Providers must guarantee teardown (container stop/remove, remote disconnect) on
+  close, replacement, and shutdown, extending the existing `finally`-based
+  process-group cleanup. This is the riskiest surface for non-local providers.
+- The current local kernel uses unencrypted loopback TCP. A `remote-gateway`
+  provider requires the authentication and transport-security design this spec
+  currently defers before it binds beyond loopback.
+
+### Phased Path
+
+1. Extract `KernelProvider` / `EnvironmentSpec`; reimplement today's behavior as
+   `local-interpreter` bound to the backend interpreter, with a fail-closed
+   health check. No behavior change.
+2. Local environment selection: enumerate available interpreters/kernelspecs,
+   expose a picker, bind per session, default from `metadata.kernelspec`. This is
+   the step that resolves the missing-dependency failure.
+3. Container provider: per-notebook isolated image, provisioning phase, and
+   guaranteed teardown.
+4. Remote gateway provider, gated on the deferred transport auth/TLS design.
+
 ## Undo And Checkpoints
 
 Before every agent turn, store a full in-memory notebook document checkpoint.
@@ -891,6 +1006,11 @@ Diff display:
 
 - Apply valid changes immediately.
 - Show color-coded changed regions in each edited cell.
+- Show Cursor-style inline diff decorations inside the CodeMirror editor of each
+  changed cell (added lines highlighted, removed lines shown as inline markers),
+  in addition to the color-coded diff panel below the cell.
+- Keep the inline decorations and the diff panel complementary; the panel still
+  covers Markdown-preview cells and bounded rendering of very large diffs.
 - Provide per-cell revert controls.
 - Provide whole-turn undo in the chat turn.
 
@@ -924,7 +1044,14 @@ This is a conceptual API surface, not a final implementation contract.
 - `POST /kernel/{kernelSessionId}/interrupt`
 - `POST /kernel/{kernelSessionId}/restart`
 - `GET /kernel/status`
+- `GET /environments`
+- `POST /environments/select`
 - `GET /events`
+
+`GET /environments` lists the environments the resolved providers can launch.
+`POST /environments/select` binds an `environmentId` to the session and restarts
+the kernel into it under session/revision preconditions; an unlaunchable or
+failed environment returns a structured error and leaves the prior binding.
 
 All mutating requests include `sessionId` and `expectedDocumentRevision` either
 in the body or an `If-Match`-style header. Turn and execution responses expose
@@ -1196,9 +1323,16 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
 
 ### Execution
 
-- Decision: After valid edits, run code cells from first edited cell onward.
-- Alternatives: Run only changed cells; run all editable cells; run whole notebook.
-- Rationale: Downstream cells are most likely affected and provide useful validation without always running the entire notebook.
+- Decision: After valid edits, run code cells from the first edited **code**
+  cell onward. A turn that edits only Markdown/non-code cells runs no downstream
+  execution and completes.
+- Alternatives: Run only changed cells; run all editable cells; run whole
+  notebook; start downstream from the first edited cell of any type.
+- Rationale: Downstream code cells are most likely affected and provide useful
+  validation without always running the entire notebook. Markdown edits cannot
+  affect execution, so triggering a full downstream run from a title or prose
+  edit only surfaces unrelated runtime errors (for example a missing dependency)
+  as if the edit itself failed.
 
 ### Manual Execution
 
@@ -1259,6 +1393,24 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
 - Alternatives: Multiple notebook tabs/sessions.
 - Rationale: Keeps session state, kernel lifecycle, checkpointing, and turn scope simpler.
 
+### Kernel Environment
+
+- Decision: Make the execution environment a per-notebook binding resolved
+  through a pluggable, capability-checked `KernelProvider`, instead of hardcoding
+  the backend's own interpreter. Ship `local-interpreter` selection first;
+  design `container` and `remote-gateway` providers for non-local and isolated
+  execution; defer dependency provisioning.
+- Alternatives: Keep the single hardcoded local kernel and tell users to install
+  dependencies into the app's environment; build a bespoke remote execution
+  transport instead of reusing a kernel gateway; provision environments from
+  notebook dependencies before shipping selection.
+- Rationale: A notebook's environment should not be an accident of how the
+  backend was launched; that is what produces missing-dependency failures. A
+  provider abstraction isolates the change to *where* the kernel runs, preserving
+  the execution, lease, source-hash, and approval logic, and gives a clean path
+  to isolated and off-box execution — including the sandboxing and transport
+  security this spec otherwise defers.
+
 ### Notebook Close
 
 - Decision: Allow the user to close the active notebook with session/revision
@@ -1279,12 +1431,28 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
 - Alternatives: Stream all CLI progress and tool output live.
 - Rationale: Simpler UI and avoids overfitting to provider-specific streaming formats.
 
+### Inline Diff Decoration
+
+- Decision: Show Cursor-style inline added/removed decorations inside the
+  CodeMirror editor, complementing (not replacing) the separate color-coded diff
+  panel below each changed cell.
+- Alternatives: Only the separate diff panel; replace the panel entirely with
+  inline decorations; a full side-by-side two-pane diff.
+- Rationale: Inline decorations put the change where the user reads/edits the
+  code (Cursor-style), while the separate panel still serves Markdown-preview
+  cells and bounded rendering of very large diffs; keeping both avoids losing the
+  panel's coverage.
+
 ## Open Follow-Up Decisions
 
 - Whether to add a readable Markdown-like notebook export alongside raw `.ipynb` context if agents struggle with notebook JSON.
 - Whether to add durable turn history or sidecar audit logs after v1.
-- Whether to add stronger process sandboxing after v1.
 - Whether to support multiple notebook tabs after v1.
+- How far to take per-notebook environments beyond local selection: the
+  `container` and `remote-gateway` providers in `Kernel Environment` are the
+  chosen direction for isolation, non-local execution, and the deferred process
+  sandboxing, but their rollout order and the dependency-provisioning feature are
+  still open.
 
 Concrete CLI command templates and supported version ranges are adapter
 implementation data, not an open product decision. An adapter must ship with
