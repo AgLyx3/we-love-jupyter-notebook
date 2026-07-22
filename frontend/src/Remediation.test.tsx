@@ -5,6 +5,7 @@ import { useState } from "react";
 import App from "./App";
 import AgentChatPanel, { type TurnRecord } from "./agentChat/AgentChatPanel";
 import LineDiff from "./notebook/LineDiff";
+import NotebookView from "./notebook/NotebookView";
 import { Outputs } from "./notebook/NotebookCell";
 import RiskyExecutionDialog from "./execution/RiskyExecutionDialog";
 import type { AgentTurn, ExecutionOperation, NotebookSnapshot, TurnScope } from "./api/client";
@@ -205,8 +206,8 @@ describe("remediation behaviors", () => {
       return baseFetch(input, init);
     });
     render(<App />);
-    expect(await screen.findByText("Agent change")).toBeInTheDocument();
-    expect(await screen.findByText("full detail ending")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Revert agent change to code cell 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(nextSource);
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/agent-turns/large"), expect.anything());
   });
 
@@ -259,8 +260,8 @@ describe("remediation behaviors", () => {
     expect(await screen.findByText("failed")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText((_, element) => element?.tagName === "P" && element.textContent?.endsWith("full outcome tail") === true)).toBeInTheDocument());
     expect(screen.getByText((_, element) => element?.classList.contains("error-text") === true && element.textContent?.endsWith("full error tail") === true)).toBeInTheDocument();
-    expect(await screen.findByText("Agent change")).toBeInTheDocument();
-    expect(await screen.findByText("full detail ending")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Revert agent change to code cell 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(nextSource);
     expect(detailCalls).toBeGreaterThanOrEqual(1);
   });
 
@@ -287,7 +288,6 @@ describe("remediation behaviors", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Undo turn" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Undo turn" })).not.toBeInTheDocument());
     expect(screen.queryByLabelText("Revert agent change to code cell 1")).not.toBeInTheDocument();
-    expect(screen.queryByText("Agent change")).not.toBeInTheDocument();
     expect(screen.getByText("Revision 4")).toBeInTheDocument();
     expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(applied.changes[0].previousSource);
     expect(screen.getByLabelText("Cell output")).toHaveTextContent("restored output");
@@ -317,7 +317,6 @@ describe("remediation behaviors", () => {
     render(<App />);
     await userEvent.click(await screen.findByLabelText("Revert agent change to code cell 1"));
     await waitFor(() => expect(screen.queryByLabelText("Revert agent change to code cell 1")).not.toBeInTheDocument());
-    expect(screen.queryByText("Agent change")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(applied.changes[0].previousSource);
     expect(revertCalls).toBe(1);
   });
@@ -541,7 +540,6 @@ describe("remediation behaviors", () => {
     await waitFor(() => expect(screen.getByText("Revision 4")).toBeInTheDocument());
     await waitFor(() => expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(nextSource));
     expect(await screen.findByLabelText("Revert agent change to code cell 1")).toBeEnabled();
-    expect(await screen.findByText("Agent change")).toBeInTheDocument();
     expect(screen.getByText("Kernel idle")).toBeInTheDocument();
     expect(screen.queryByText("Execution: running")).not.toBeInTheDocument();
 
@@ -614,6 +612,30 @@ describe("remediation behaviors", () => {
     expect(screen.getByLabelText("Revert agent change to code cell 1")).toBeEnabled();
     expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(newerSource);
     expect(turnCalls).toBe(3);
+  });
+
+  it("allows a read-only turn with no editable cells", async () => {
+    const submit = vi.fn();
+    render(<AgentChatPanel notebook={notebook} scope={{ ...scope, editableCellIds: [] }} turn={null} activeTurn={null} history={[]} operation={null} busy={false} mutationsDisabled={false} onSubmit={submit} onCancel={vi.fn()} onUndo={vi.fn()} onClearScope={vi.fn()} onDecision={vi.fn()} onSelectTurn={vi.fn()} onFocusCell={vi.fn()} onDropCell={vi.fn()} />);
+    expect(screen.getByText("Read-only turn — the agent can answer but not write.")).toBeInTheDocument();
+    const ask = screen.getByRole("button", { name: "Ask" });
+    expect(ask).toBeDisabled();
+    await userEvent.type(screen.getByLabelText("Agent instruction"), "explain these cells");
+    expect(ask).toBeEnabled();
+    await userEvent.click(ask);
+    expect(submit).toHaveBeenCalledWith("explain these cells");
+  });
+
+  it("shift-selects a range of cells and scopes them all via the context menu", async () => {
+    const cells = [0, 1, 2].map((index) => ({ cellId: `c-${index}`, index, cellType: "code" as const, source: `x = ${index}`, metadata: {}, outputs: [], executionCount: null }));
+    const scopeMany = vi.fn();
+    render(<NotebookView notebook={{ ...notebook, cells }} scope={{ editableCellIds: [], contextCellIds: [], sessionId: "session-1", notebookRevision: 3 }} turn={null} disabled={false} sourceActionsDisabled={false} focusRequest={null} onDirtyChange={vi.fn()} onSave={vi.fn()} onRun={vi.fn()} onScope={vi.fn()} onScopeMany={scopeMany} onRevert={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText("Select code cell 1"));
+    fireEvent.click(screen.getByLabelText("Select code cell 3"), { shiftKey: true });
+    fireEvent.contextMenu(screen.getByLabelText("code cell 3"));
+    expect(screen.getByText("3 cells selected")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Add 3 to edit" }));
+    expect(scopeMany).toHaveBeenCalledWith(["c-0", "c-1", "c-2"], true);
   });
 
   it("renders raster and SVG notebook outputs as images", () => {

@@ -1,9 +1,8 @@
 import { BookOpen, Check, Pencil, Play, RotateCcw, Save } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import type { AgentChange, NotebookCellData } from "../api/client";
 import CellEditor from "./CellEditor";
-import LineDiff from "./LineDiff";
 
 function text(value: unknown): string {
   if (Array.isArray(value)) return value.join("");
@@ -26,10 +25,10 @@ export function Outputs({ outputs }: { outputs: Record<string, unknown>[] }) {
   })}</div>;
 }
 
-export default function NotebookCell({ cell, focused, editable, context, change, disabled, sourceActionsDisabled, cellRef, onFocus, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert }: {
-  cell: NotebookCellData; focused: boolean; editable: boolean; context: boolean; change?: AgentChange;
+export default function NotebookCell({ cell, focused, selected, editable, context, change, disabled, sourceActionsDisabled, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert }: {
+  cell: NotebookCellData; focused: boolean; selected: boolean; editable: boolean; context: boolean; change?: AgentChange;
   disabled: boolean; sourceActionsDisabled: boolean; cellRef: (node: HTMLElement | null) => void;
-  onFocus: () => void; onDirtyChange: (dirty: boolean) => void; onSave: (source: string) => void; onRun: () => void; onAddEditable: () => void; onAddContext: () => void; onRevert: () => void;
+  onFocus: () => void; onSelect: (event: MouseEvent) => void; onContextMenu: (event: MouseEvent) => void; onDirtyChange: (dirty: boolean) => void; onSave: (source: string) => void; onRun: () => void; onAddEditable: () => void; onAddContext: () => void; onRevert: () => void;
 }) {
   const [source, setSource] = useState(cell.source);
   const previousServerSource = useRef(cell.source);
@@ -42,10 +41,10 @@ export default function NotebookCell({ cell, focused, editable, context, change,
   useEffect(() => onDirtyChange(dirty), [cell.cellId, dirty]);
   const description = `${cell.cellType} cell ${cell.index + 1}`;
   const dependentDisabled = disabled || sourceActionsDisabled;
-  return <article ref={cellRef} draggable={!dependentDisabled} onDragStart={(event) => { event.dataTransfer.setData("application/x-notebook-cell", cell.cellId); event.dataTransfer.effectAllowed = "copy"; }} className={`notebook-cell ${focused ? "is-focused" : ""}`} tabIndex={0} onFocus={onFocus} aria-label={description}>
-    <div className="cell-gutter"><span className="execution-count">{cell.cellType === "code" ? `[${cell.executionCount ?? " "}]` : cell.cellType === "raw" ? "RAW" : "MD"}</span><div className="gutter-actions">
-      <button disabled={dependentDisabled || cell.cellType === "raw"} className={editable ? "selected" : ""} title="Allow agent edit" aria-label={`Allow agent edit ${description}`} onClick={onAddEditable}>{editable ? <Check /> : <Pencil />}</button>
-      <button disabled={dependentDisabled} className={context ? "selected context" : ""} title="Add as context" aria-label={`Add ${description} as context`} onClick={onAddContext}>{context ? <Check /> : <BookOpen />}</button>
+  return <article ref={cellRef} draggable={!dependentDisabled} onDragStart={(event) => { event.dataTransfer.setData("application/x-notebook-cell", cell.cellId); event.dataTransfer.effectAllowed = "copy"; }} className={`notebook-cell ${focused ? "is-focused" : ""} ${selected ? "is-selected" : ""}`} tabIndex={0} onFocus={onFocus} onContextMenu={onContextMenu} aria-label={description}>
+    <div className="cell-gutter" aria-label={`Select ${description}`} title="Click to select · Shift-click for a range · right-click for scope actions" onClick={onSelect}><span className="execution-count">{cell.cellType === "code" ? `[${cell.executionCount ?? " "}]` : cell.cellType === "raw" ? "RAW" : "MD"}</span><div className="gutter-actions">
+      <button disabled={dependentDisabled || cell.cellType === "raw"} className={editable ? "selected" : ""} title="Allow agent edit" aria-label={`Allow agent edit ${description}`} onClick={(event) => { event.stopPropagation(); onAddEditable(); }}>{editable ? <Check /> : <Pencil />}</button>
+      <button disabled={dependentDisabled} className={context ? "selected context" : ""} title="Add as context" aria-label={`Add ${description} as context`} onClick={(event) => { event.stopPropagation(); onAddContext(); }}>{context ? <Check /> : <BookOpen />}</button>
     </div></div>
     <div className="cell-main">
       <div className="cell-actions">
@@ -56,7 +55,6 @@ export default function NotebookCell({ cell, focused, editable, context, change,
       </div>
       {cell.cellType === "code" || cell.cellType === "raw" || editingMarkdown ? <CellEditor value={source} label={`Source for ${description}`} disabled={disabled} language={cell.cellType} change={change} onChange={setSource} onSave={() => dirty && onSave(source)} /> : <div className="markdown-preview"><ReactMarkdown>{source}</ReactMarkdown></div>}
       <Outputs outputs={cell.outputs} />
-      {change && <div className="cell-diff" aria-label="Agent change"><p className="cell-diff-label">Agent change</p><LineDiff before={change.previousSource} after={change.nextSource} /></div>}
     </div>
   </article>;
 }

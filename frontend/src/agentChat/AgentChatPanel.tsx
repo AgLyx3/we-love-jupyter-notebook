@@ -1,4 +1,5 @@
 import { RotateCcw, Send, Square } from "lucide-react";
+import ReactMarkdown from "react-markdown";
 import { useState } from "react";
 import type { AgentTurn, ExecutionAttempt, ExecutionOperation, NotebookSnapshot, TurnScope } from "../api/client";
 import RiskyExecutionDialog from "../execution/RiskyExecutionDialog";
@@ -17,7 +18,8 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
   const manualCorrelated = Boolean(operation?.operationId && operation.sessionId && operation.currentDocumentRevision != null && operation.parentTurnId === null && manualAttempt?.executionAttemptId && manualAttempt.cellId);
   const active = turn && activeStates.has(turn.state);
   const selectedRecord = history.find((record) => record.turn.turnId === turn?.turnId);
-  const canSubmit = !busy && !mutationsDisabled && Boolean(prompt.trim()) && scope.editableCellIds.length > 0;
+  const readOnly = scope.editableCellIds.length === 0;
+  const canSubmit = !busy && !mutationsDisabled && Boolean(prompt.trim());
   const submitPrompt = () => {
     const value = prompt.trim();
     if (!canSubmit || !value) return;
@@ -30,10 +32,10 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
     <section className="conversation" aria-live="polite">
       {history.length > 0 && <div className="turn-history" aria-label="Turn history">{history.map((record) => <button className={record.turn.turnId === turn?.turnId ? "selected" : ""} key={record.turn.turnId} onClick={() => onSelectTurn(record.turn.turnId)}><span>{record.prompt}</span><small>{record.editableCellIds.length} editable · {record.contextCellIds.length} context · {record.turn.state.replaceAll("_", " ")}</small></button>)}</div>}
       {activeTurn && activeTurn.turnId !== turn?.turnId && <button className="manual-cancel" onClick={onCancel}><Square /> Cancel active turn</button>}
-      {!turn && <div className="empty-conversation"><p>No agent turn yet</p><span>Select editable cells, then describe the change.</span></div>}
+      {!turn && <div className="empty-conversation"><p>No agent turn yet</p><span>Select cells to edit, or just ask a read-only question.</span></div>}
       {turn && <div className="turn-status">
         <div className="turn-state"><span className={active ? "activity-dot" : ""} />{turn.state.replaceAll("_", " ")}</div>
-        {turn.finalOutput && <p>{turn.finalOutput}</p>}
+        {turn.finalOutput && <div className="turn-output"><ReactMarkdown>{turn.finalOutput}</ReactMarkdown></div>}
         {turn.error && <p className="error-text">{turn.error.message}</p>}
         {turn.changes.length > 0 && <p>{turn.changes.length} cell{turn.changes.length === 1 ? "" : "s"} changed. Review the inline diff.</p>}
         <div className="turn-actions">{active && <button onClick={onCancel}><Square /> Cancel turn</button>}{turn.undoEligible && !active && <button disabled={mutationsDisabled} onClick={onUndo}><RotateCcw /> Undo turn</button>}</div>
@@ -49,8 +51,9 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
         if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
         event.preventDefault();
         submitPrompt();
-      }} placeholder="Change the selected cells…" rows={3} />
-      <button className="primary" disabled={!canSubmit} type="submit"><Send /> Send</button>
+      }} placeholder={readOnly ? "Ask about the notebook, or select cells to edit…" : "Change the selected cells…"} rows={3} />
+      {readOnly && <span className="prompt-mode" role="note">Read-only turn — the agent can answer but not write.</span>}
+      <button className="primary" disabled={!canSubmit} type="submit"><Send /> {readOnly ? "Ask" : "Send"}</button>
     </form>
   </aside>;
 }

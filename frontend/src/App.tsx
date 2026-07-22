@@ -1,5 +1,5 @@
 import { AlertTriangle, BookOpen, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { ApiError, api, connectEvents, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type KernelStatus, type NotebookSnapshot, type TurnScope } from "./api/client";
 import AgentChatPanel from "./agentChat/AgentChatPanel";
 import type { TurnRecord } from "./agentChat/AgentChatPanel";
@@ -7,6 +7,11 @@ import KernelControls from "./execution/KernelControls";
 import CloseNotebookDialog from "./fileOperations/CloseNotebookDialog";
 import FileToolbar from "./fileOperations/FileToolbar";
 import NotebookView from "./notebook/NotebookView";
+
+const AGENT_MIN_WIDTH = 300;
+const AGENT_MAX_WIDTH = 760;
+const AGENT_WIDTH_KEY = "notebook-agent-width";
+const clampAgentWidth = (value: number): number => Math.min(AGENT_MAX_WIDTH, Math.max(AGENT_MIN_WIDTH, Math.round(value)));
 
 const emptyScope: TurnScope = { editableCellIds: [], contextCellIds: [], sessionId: null, notebookRevision: null };
 const emptyKernel: KernelStatus = { kernelSessionId: null, state: "not_started", executionAttemptId: null };
@@ -28,6 +33,27 @@ export default function App() {
   const [dirtyCellIds, setDirtyCellIds] = useState<Set<string>>(() => new Set());
   const [polling, setPolling] = useState(false);
   const [closeTarget, setCloseTarget] = useState<{ sessionId: string; revision: number } | null>(null);
+  const [agentWidth, setAgentWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(AGENT_WIDTH_KEY));
+    return Number.isFinite(saved) && saved > 0 ? clampAgentWidth(saved) : 360;
+  });
+  useEffect(() => { localStorage.setItem(AGENT_WIDTH_KEY, String(agentWidth)); }, [agentWidth]);
+  const startAgentResize = useCallback((event: PointerEvent) => {
+    event.preventDefault();
+    const onMove = (moveEvent: globalThis.PointerEvent) => setAgentWidth(clampAgentWidth(window.innerWidth - moveEvent.clientX));
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.classList.remove("resizing-agent");
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    document.body.classList.add("resizing-agent");
+  }, []);
+  const nudgeAgentResize = useCallback((event: KeyboardEvent) => {
+    if (event.key === "ArrowLeft") { event.preventDefault(); setAgentWidth((width) => clampAgentWidth(width + 24)); }
+    else if (event.key === "ArrowRight") { event.preventDefault(); setAgentWidth((width) => clampAgentWidth(width - 24)); }
+  }, []);
   const snapshotRef = useRef(notebook);
   const scopeRef = useRef(scope);
   const eventCursorRef = useRef({ sessionId: "", sequence: 0 });
@@ -248,7 +274,7 @@ export default function App() {
     </header>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
     {closeTarget && <CloseNotebookDialog busy={busy} onCancel={() => setCloseTarget(null)} onConfirm={confirmClose} />}
-    <div className="editor-layout">
+    <div className="editor-layout" style={{ "--agent-width": `${agentWidth}px` } as CSSProperties}>
       <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} focusRequest={focusRequest}
         onDirtyChange={(cellId, dirty) => setDirtyCellIds((current) => {
           if (current.has(cellId) === dirty) return current;
@@ -268,11 +294,13 @@ export default function App() {
         )}
         onRun={(cellId) => void mutate(() => api.runCell(notebook, cellId), { refreshAfter: false }, setOperation)}
         onScope={(cellId, editable) => void mutate(() => api.addScope(notebook, cellId, editable), { refreshAfter: false }, setScope)}
+        onScopeMany={(cellIds, editable) => { if (cellIds.length) void mutate(async () => { let latest: TurnScope | undefined; for (const cellId of cellIds) latest = await api.addScope(notebook, cellId, editable); return latest as TurnScope; }, { refreshAfter: false }, setScope); }}
         onRevert={(turnId, cellId) => void mutate(() => api.revertCell(notebook, turnId, cellId), {}, (updated) => {
           setNotebook(updated);
           setHistory((items) => updateTurnRecord(items, turnId, (item) => ({ ...item, changes: item.changes.filter((change) => change.cellId !== cellId) })));
           setTurn((item) => item?.turnId === turnId ? { ...item, changes: item.changes.filter((change) => change.cellId !== cellId) } : item);
         })} />
+      <div className="editor-resizer" role="separator" aria-orientation="vertical" aria-label="Resize agent panel" tabIndex={0} onPointerDown={startAgentResize} onKeyDown={nudgeAgentResize} />
       <AgentChatPanel notebook={notebook} scope={scope} turn={selectedTurn} activeTurn={activeTurn} history={history} operation={operation} busy={busy} mutationsDisabled={mutationsDisabled || hasDirtyDrafts}
         onClearScope={() => void mutate(() => api.clearScope(notebook), { refreshAfter: false }, setScope)}
         onSubmit={(prompt) => { const frozen = { ...scope, editableCellIds: [...scope.editableCellIds], contextCellIds: [...scope.contextCellIds] }; void mutate(() => api.startTurn(notebook, prompt), { refreshAfter: false }, (result) => { setTurn(result); setSelectedTurnId(result.turnId); setHistory((items) => upsertRecord(items, result, frozen, prompt)); }); }}
