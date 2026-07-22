@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..agent_workspace.models import (
-    AgentAdapter, AgentCancelled, WorkspaceBoundaryError,
+    AgentAdapter, AgentCancelled, WorkspaceBoundaryError, WorkspaceCleanupError,
 )
 from ..agent_workspace.workspace_auditor import WorkspaceAuditor
 from ..agent_workspace.workspace_builder import AgentWorkspaceBuilder
@@ -25,6 +26,9 @@ from ..turn_scope.service import TurnScopeService
 from ..kernel_execution.service import KernelExecutionService
 from ..kernel_execution.models import ExecutionTimedOut
 from ..session_events.service import SessionEventService
+
+
+logger = logging.getLogger(__name__)
 
 
 TERMINAL_STATES = {"completed", "failed", "cancelled", "validation_incomplete"}
@@ -293,6 +297,8 @@ class AgentTurnService:
             workspace = self.builder.build(
                 frozen_snapshot, scope, correction=correction
             )
+            attempt_error: BaseException | None = None
+            cleanup_error: WorkspaceCleanupError | None = None
             try:
                 with self._lock:
                     turn.attempts = attempt_number
@@ -312,12 +318,29 @@ class AgentTurnService:
                 last_violation = None
                 break
             except WorkspaceBoundaryError as error:
+                attempt_error = error
                 last_violation = error
                 correction = "; ".join(error.violations)
                 if attempt_number == 3:
                     raise
+            except BaseException as error:
+                attempt_error = error
+                raise
             finally:
-                self.builder.destroy(workspace)
+                try:
+                    self.builder.destroy(workspace)
+                except WorkspaceCleanupError as error:
+                    cleanup_error = error
+                    logger.exception(
+                        "Failed to remove agent workspace %s", workspace.root,
+                    )
+                    if attempt_error is None:
+                        raise
+                    attempt_error.add_note(str(error))
+            if cleanup_error is not None and attempt_error is not None:
+                # Do not retry from another workspace while sensitive data from
+                # the failed attempt may still remain on disk.
+                raise attempt_error
         if last_violation is not None:
             raise last_violation
         if not changes:

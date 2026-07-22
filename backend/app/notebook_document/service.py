@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import re
 from threading import RLock
 from typing import Any, Callable
@@ -24,6 +25,9 @@ from .models import (
     SessionConflict,
 )
 from .mutation_coordinator import MutationCoordinator
+
+
+logger = logging.getLogger(__name__)
 
 MAX_NOTEBOOK_BYTES = 5 * 1024 * 1024
 _VALID_CELL_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -55,12 +59,18 @@ class NotebookDocumentService:
         self._dirty = False
         self._last_mutation_owner: str | None = None
         self._session_replacement_listeners: list[Callable[[str, int], None]] = []
+        self._last_session_replacement_errors: tuple[str, ...] = ()
 
     def register_session_replacement_listener(
         self, listener: Callable[[str, int], None]
     ) -> None:
         with self._lock:
             self._session_replacement_listeners.append(listener)
+
+    @property
+    def last_session_replacement_errors(self) -> tuple[str, ...]:
+        with self._lock:
+            return self._last_session_replacement_errors
 
     def import_notebook(
         self,
@@ -87,8 +97,17 @@ class NotebookDocumentService:
                 self._revision = 1 if normalized else 0
                 self._dirty = normalized
                 self._last_mutation_owner = "normalization" if normalized else None
-                for listener in self._session_replacement_listeners:
-                    listener(self._session_id, self._revision)
+                listener_errors = []
+                for listener in tuple(self._session_replacement_listeners):
+                    try:
+                        listener(self._session_id, self._revision)
+                    except Exception as error:
+                        listener_errors.append(f"{type(error).__name__}: {error}")
+                        logger.exception(
+                            "Notebook session replacement listener failed for session %s",
+                            self._session_id,
+                        )
+                self._last_session_replacement_errors = tuple(listener_errors)
                 return self._snapshot_unlocked()
         finally:
             self.coordinator.release(lease)

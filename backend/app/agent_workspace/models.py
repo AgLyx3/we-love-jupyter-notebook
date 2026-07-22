@@ -17,6 +17,16 @@ class WorkspaceBoundaryError(NotebookDomainError):
         super().__init__(violations=violations)
 
 
+class WorkspaceCleanupError(RuntimeError):
+    def __init__(self, root: Path, attempts: int, cause: OSError) -> None:
+        super().__init__(
+            f"Agent workspace {root} could not be removed after {attempts} attempts"
+        )
+        self.root = root
+        self.attempts = attempts
+        self.__cause__ = cause
+
+
 class AgentAdapterError(NotebookDomainError):
     code = "agent_adapter_error"
     message = "Agent adapter failed"

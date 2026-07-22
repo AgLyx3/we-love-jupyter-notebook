@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.app.agent_workspace.models import WorkspaceBoundaryError
+from backend.app.agent_workspace.models import WorkspaceBoundaryError, WorkspaceCleanupError
 from backend.app.agent_workspace.adapters import (
     ClaudeAgentAdapter,
     DevelopmentFakeAgentAdapter,
@@ -48,6 +48,141 @@ def test_builds_plain_source_manifest_and_protected_context(notebook_payload):
         }
     finally:
         builder.destroy(workspace)
+
+
+@pytest.mark.parametrize("failure_stage", ["write", "hash", "chmod"])
+def test_build_failure_removes_partial_workspace(
+    monkeypatch, notebook_payload, tmp_path, failure_stage,
+):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scope = FrozenTurnScope.create(
+        turn_id="turn", session_id=snapshot.session_id,
+        notebook_revision=snapshot.revision,
+        selection=ScopeSelection(("editable",), ()), prompt="update",
+    )
+    root = tmp_path / f"workspace-{failure_stage}"
+
+    def make_workspace(*_args, **_kwargs):
+        root.mkdir()
+        return str(root)
+
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.workspace_builder.tempfile.mkdtemp",
+        make_workspace,
+    )
+    if failure_stage == "write":
+        original_write = type(root).write_text
+
+        def failing_write(path, *args, **kwargs):
+            if path.name == "AGENT_CELL_MANIFEST.json":
+                raise OSError("injected write failure")
+            return original_write(path, *args, **kwargs)
+
+        monkeypatch.setattr(type(root), "write_text", failing_write)
+    elif failure_stage == "hash":
+        monkeypatch.setattr(
+            "backend.app.agent_workspace.workspace_builder._hash",
+            lambda _path: (_ for _ in ()).throw(OSError("injected hash failure")),
+        )
+    else:
+        monkeypatch.setattr(
+            "backend.app.agent_workspace.workspace_builder.os.chmod",
+            lambda *_args: (_ for _ in ()).throw(OSError("injected chmod failure")),
+        )
+
+    with pytest.raises(OSError, match=f"injected {failure_stage} failure"):
+        AgentWorkspaceBuilder(cleanup_delay=0).build(snapshot, scope)
+
+    assert not root.exists()
+
+
+def test_workspace_destroy_retries_transient_rmtree_failure(
+    monkeypatch, notebook_payload,
+):
+    builder, workspace = _workspace(notebook_payload)
+    original_rmtree = __import__("shutil").rmtree
+    calls = 0
+
+    def flaky_rmtree(path):
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise OSError("transient cleanup failure")
+        original_rmtree(path)
+
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.workspace_builder.shutil.rmtree", flaky_rmtree,
+    )
+
+    AgentWorkspaceBuilder(cleanup_attempts=3, cleanup_delay=0).destroy(workspace)
+
+    assert calls == 3
+    assert not workspace.root.exists()
+
+
+def test_workspace_destroy_reports_persistent_rmtree_failure(
+    monkeypatch, notebook_payload,
+):
+    builder, workspace = _workspace(notebook_payload)
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.workspace_builder.shutil.rmtree",
+        lambda _path: (_ for _ in ()).throw(OSError("persistent cleanup failure")),
+    )
+
+    with pytest.raises(WorkspaceCleanupError, match="could not be removed") as error:
+        AgentWorkspaceBuilder(cleanup_attempts=2, cleanup_delay=0).destroy(workspace)
+
+    assert error.value.root == workspace.root
+    assert workspace.root.exists()
+    # Restore cleanup for the test process after the injected failure.
+    monkeypatch.undo()
+    builder.destroy(workspace)
+
+
+def test_partial_build_cleanup_failure_does_not_mask_primary_error(
+    monkeypatch, notebook_payload, tmp_path, caplog,
+):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scope = FrozenTurnScope.create(
+        turn_id="turn", session_id=snapshot.session_id,
+        notebook_revision=snapshot.revision,
+        selection=ScopeSelection(("editable",), ()), prompt="update",
+    )
+    root = tmp_path / "workspace-dual-failure"
+
+    def make_workspace(*_args, **_kwargs):
+        root.mkdir()
+        return str(root)
+
+    original_write = type(root).write_text
+
+    def failing_write(path, *args, **kwargs):
+        if path.name == "AGENT_CELL_MANIFEST.json":
+            raise OSError("primary write failure")
+        return original_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.workspace_builder.tempfile.mkdtemp",
+        make_workspace,
+    )
+    monkeypatch.setattr(type(root), "write_text", failing_write)
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.workspace_builder.shutil.rmtree",
+        lambda _path: (_ for _ in ()).throw(OSError("cleanup also failed")),
+    )
+
+    with pytest.raises(OSError, match="primary write failure") as error:
+        AgentWorkspaceBuilder(cleanup_attempts=2, cleanup_delay=0).build(
+            snapshot, scope,
+        )
+
+    assert any("could not be removed" in note for note in error.value.__notes__)
+    assert "Failed to remove partially built agent workspace" in caplog.text
+    assert root.exists()
+    monkeypatch.undo()
+    AgentWorkspaceBuilder(cleanup_delay=0)._remove_root(root)
 
 
 def test_collects_only_changed_declared_regular_utf8_files(notebook_payload):

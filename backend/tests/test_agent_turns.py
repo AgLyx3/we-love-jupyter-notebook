@@ -17,7 +17,10 @@ from backend.app.api.agent_turn_routes import (
 )
 from backend.app.boundary_validation.validator import CandidateCellSourceChange
 from backend.app.agent_workspace.adapters import FakeAgentAdapter, FakeAttempt
-from backend.app.agent_workspace.models import AdapterResult
+from backend.app.agent_workspace.models import (
+    AdapterResult, AgentAdapterError, WorkspaceCleanupError,
+)
+from backend.app.agent_workspace.workspace_builder import AgentWorkspaceBuilder
 from backend.app.agent_workspace.runner import ProcessRunner
 from backend.app.notebook_document.models import MutationConflict, RevisionConflict
 from backend.app.notebook_document.service import NotebookDocumentService
@@ -226,6 +229,48 @@ def test_three_boundary_violations_fail_without_partial_apply(notebook_payload):
     assert turn.attempts == 3
     assert turn.error["code"] == "workspace_boundary_violation"
     assert _source(documents.get_snapshot()) == "value = 1\n"
+
+
+def test_cleanup_failure_does_not_mask_primary_agent_failure(
+    notebook_payload, caplog,
+):
+    class CleanupFailingBuilder(AgentWorkspaceBuilder):
+        def __init__(self):
+            super().__init__(cleanup_delay=0)
+            self.created = []
+
+        def build(self, *args, **kwargs):
+            workspace = super().build(*args, **kwargs)
+            self.created.append(workspace)
+            return workspace
+
+        def destroy(self, workspace):
+            raise WorkspaceCleanupError(
+                workspace.root, 3, OSError("injected cleanup failure")
+            )
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    scopes.add("editable", editable=True)
+    builder = CleanupFailingBuilder()
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes,
+        adapter=FakeAgentAdapter([FakeAttempt(error=AgentAdapterError("primary failure"))]),
+        builder=builder,
+    )
+
+    turn = turns.start(
+        prompt="fail", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+
+    assert turn.state == "failed"
+    assert turn.error["code"] == "agent_adapter_error"
+    assert turn.error["message"] == "primary failure"
+    assert "Failed to remove agent workspace" in caplog.text
+    for workspace in builder.created:
+        AgentWorkspaceBuilder(cleanup_delay=0).destroy(workspace)
 
 
 def test_active_turn_blocks_other_mutations_and_can_be_cancelled(notebook_payload):

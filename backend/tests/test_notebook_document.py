@@ -107,6 +107,34 @@ def test_failed_import_does_not_replace_active_session(notebook_payload):
     assert current.filename == "original.ipynb"
 
 
+def test_replacement_listener_failure_does_not_report_a_failed_import_or_stop_fanout(
+    notebook_payload,
+):
+    service = NotebookDocumentService()
+    original = service.import_notebook(notebook_payload(), filename="original.ipynb")
+    observed = []
+
+    def broken_listener(_session_id, _revision):
+        raise RuntimeError("kernel cleanup failed")
+
+    service.register_session_replacement_listener(broken_listener)
+    service.register_session_replacement_listener(
+        lambda session_id, revision: observed.append((session_id, revision))
+    )
+
+    replaced = service.import_notebook(
+        notebook_payload(cell_ids=("new-intro", "new-code")),
+        filename="replacement.ipynb",
+        expected_session_id=original.session_id,
+        expected_revision=original.revision,
+    )
+
+    assert service.get_snapshot() == replaced
+    assert observed == [(replaced.session_id, replaced.revision)]
+    assert len(service.last_session_replacement_errors) == 1
+    assert "kernel cleanup failed" in service.last_session_replacement_errors[0]
+
+
 def test_mutation_coordinator_rejects_competing_owner():
     coordinator = MutationCoordinator()
     lease = coordinator.acquire(operation_type="agent_turn", operation_id="turn-1")
