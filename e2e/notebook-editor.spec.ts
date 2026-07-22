@@ -334,3 +334,14 @@ test("handles risky decisions and manual kernel controls", async ({ page }) => {
   }).not.toBe(beforeRestart.kernelSessionId);
   await expect(page.locator(".kernel-state")).toContainText("Kernel idle");
 });
+
+test("closes the active notebook and returns to upload state", async ({ page }) => {
+  await uploadSample(page);
+
+  await page.getByLabel("Close notebook").click();
+
+  await expect(page.getByText("Open a notebook to begin")).toBeVisible();
+  await expect(page.getByLabel("Close notebook")).toHaveCount(0);
+  const current = await page.request.get(`${backendUrl}/notebooks/current`);
+  expect(current.status()).toBe(404);
+});
