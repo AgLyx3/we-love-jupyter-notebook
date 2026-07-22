@@ -12,6 +12,9 @@ from backend.app.kernel_execution.risky_cell_classifier import RiskyCellClassifi
     ('cursor.execute("DELETE FROM users")', "database_write"),
     ("token = os.environ['TOKEN']", "environment_secret"),
     ("manager.restart_kernel()", "kernel_control"),
+    ("Path('out.txt').open('w').write('x')", "file_write"),
+    ("eval(\"__import__('os').system('echo x')\")", "dynamic_execution"),
+    ("exec(dynamic_source)", "dynamic_execution"),
 ])
 def test_risky_categories_require_confirmation(source, pattern):
     result = RiskyCellClassifier().classify(source)

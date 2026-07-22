@@ -70,6 +70,10 @@ class RiskyCellClassifier:
                         matches.append(rule)
                     if name == "open" and self._open_writes(node):
                         matches.append(("file_write", "Writes a file"))
+                    if name.endswith(".open") and self._open_writes(node, mode_index=0):
+                        matches.append(("file_write", "Writes a file"))
+                    if name in {"eval", "exec", "builtins.eval", "builtins.exec"}:
+                        matches.append(("dynamic_execution", "Executes dynamic code"))
                     if name.endswith((".write_text", ".write_bytes", ".mkdir", ".touch", ".rename", ".replace")):
                         matches.append(("file_write", "Writes a file"))
                     if name.endswith((".unlink", ".rmdir")):
@@ -123,10 +127,10 @@ class RiskyCellClassifier:
         return aliases
 
     @staticmethod
-    def _open_writes(node: ast.Call) -> bool:
+    def _open_writes(node: ast.Call, *, mode_index: int = 1) -> bool:
         mode = None
-        if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
-            mode = node.args[1].value
+        if len(node.args) > mode_index and isinstance(node.args[mode_index], ast.Constant):
+            mode = node.args[mode_index].value
         for keyword in node.keywords:
             if keyword.arg == "mode" and isinstance(keyword.value, ast.Constant):
                 mode = keyword.value.value

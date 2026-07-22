@@ -86,6 +86,7 @@ class CellExecutionAttempt:
     risk: RiskClassification = field(default_factory=lambda: RiskClassification("safe"))
     decision: str | None = None
     outputs: list[dict[str, Any]] = field(default_factory=list)
+    outputs_truncated: bool = False
     execution_count: int | None = None
     error: dict[str, Any] | None = None
     active: bool = True

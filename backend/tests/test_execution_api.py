@@ -22,8 +22,16 @@ class ApiKernel:
         self.status = "idle"
         return self.kernel_session_id
     def shutdown(self): pass
+    def execution_correlation(self):
+        return self.kernel_session_id, self.busy_attempt_id
     def interrupt_correlated(self, kernel_session_id, attempt_id):
-        return kernel_session_id == self.kernel_session_id and attempt_id == self.busy_attempt_id
+        matched = (
+            kernel_session_id == self.kernel_session_id
+            and attempt_id == self.busy_attempt_id
+        )
+        if matched:
+            self.interrupt()
+        return matched
     def restart_correlated(self, kernel_session_id, attempt_id, on_matched=None):
         if kernel_session_id != self.kernel_session_id or attempt_id != self.busy_attempt_id:
             return False

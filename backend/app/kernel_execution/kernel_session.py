@@ -46,6 +46,10 @@ class KernelSession:
         with self._lock:
             return self._busy_attempt_id
 
+    def execution_correlation(self) -> tuple[str, str | None]:
+        with self._lock:
+            return self.kernel_session_id, self._busy_attempt_id
+
     @property
     def status(self) -> str:
         with self._lock:
@@ -185,8 +189,13 @@ class KernelSession:
                 self.kernel_session_id = uuid4().hex
                 self._restart_required = False
                 return self.kernel_session_id
-            self._manager.restart_kernel(now=True)
-            self._client.wait_for_ready(timeout=self.startup_timeout)
+            try:
+                self._manager.restart_kernel(now=True)
+                self._client.wait_for_ready(timeout=self.startup_timeout)
+            except Exception:
+                self._busy_attempt_id = None
+                self._restart_required = True
+                raise
             self.kernel_session_id = uuid4().hex
             self._busy_attempt_id = None
             self._restart_required = False
@@ -206,8 +215,12 @@ class KernelSession:
                 on_matched()
             self._busy_attempt_id = None
             if self._manager is not None:
-                self._manager.restart_kernel(now=True)
-                self._client.wait_for_ready(timeout=self.startup_timeout)
+                try:
+                    self._manager.restart_kernel(now=True)
+                    self._client.wait_for_ready(timeout=self.startup_timeout)
+                except Exception:
+                    self._restart_required = True
+                    raise
             self.kernel_session_id = uuid4().hex
             self._restart_required = False
             return True
@@ -230,13 +243,21 @@ class KernelSession:
 
         manager = KernelManager(kernel_name="python3")
         manager.start_kernel()
-        client = manager.blocking_client()
-        client.start_channels()
+        client = None
         try:
+            client = manager.blocking_client()
+            client.start_channels()
             client.wait_for_ready(timeout=self.startup_timeout)
         except Exception:
-            client.stop_channels()
-            manager.shutdown_kernel(now=True)
+            if client is not None:
+                try:
+                    client.stop_channels()
+                except Exception:
+                    pass
+            try:
+                manager.shutdown_kernel(now=True)
+            except Exception:
+                pass
             raise
         self._manager = manager
         self._client = client

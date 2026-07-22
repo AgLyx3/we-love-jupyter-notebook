@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 from datetime import datetime, timezone
 from threading import RLock, Thread
 from typing import Any
@@ -20,6 +21,9 @@ from .models import (
     TERMINAL_EXECUTION_STATES,
 )
 from .risky_cell_classifier import RiskyCellClassifier
+
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TERMINAL_OPERATION_LIMIT = 100
 DEFAULT_TERMINAL_RETENTION_SECONDS = 3600
@@ -281,6 +285,7 @@ class KernelExecutionService:
                     attempt.execution_count = result.execution_count
                     attempt.state = "failed" if result.error else "completed"
                     operation.current_revision = updated.revision
+                    self._bound_operation_outputs_locked(operation)
             except NotebookDomainError as error:
                 raise StaleExecutionResult() from error
             self.events.publish("notebook.updated", {"sessionId": operation.session_id, "revision": updated.revision, "ownerId": operation.parent_turn_id or operation.operation_id, "executionAttemptId": attempt.attempt_id})
@@ -300,8 +305,6 @@ class KernelExecutionService:
             operation, attempt = pair
             if (
                 operation.session_id != session_id
-                or operation.current_revision != expected_revision
-                or operation.current_attempt_id != attempt_id
                 or operation.parent_turn_id != turn_id
                 or attempt.cell_id != cell_id
             ):
@@ -310,6 +313,11 @@ class KernelExecutionService:
                 if attempt.decision != decision:
                     raise ExecutionDecisionConflict()
                 return self._copy_operation(operation)
+            if (
+                operation.current_revision != expected_revision
+                or operation.current_attempt_id != attempt_id
+            ):
+                raise ExecutionDecisionConflict()
             if attempt.state != "awaiting_approval":
                 raise ExecutionDecisionConflict()
             attempt.decision = decision
@@ -358,13 +366,16 @@ class KernelExecutionService:
             if attempt.state == "awaiting_approval" and attempt.decision is None:
                 attempt.decision = "cancel"
             attempt.decision_event.set()
-        self.kernel.interrupt()
+        correlation = self.kernel.execution_correlation()
+        if correlation[1] == attempt_id:
+            self.kernel.interrupt_correlated(*correlation)
         self._publish(operation)
         return self.get(operation.operation_id)
 
     def cancel_parent(self, turn_id: str) -> None:
         with self._lock:
             operations = [item for item in self._operations.values() if item.parent_turn_id == turn_id and item.state not in TERMINAL_EXECUTION_STATES]
+            attempt_ids = set()
             for operation in operations:
                 operation.cancel_event.set()
                 if operation.current_attempt_id:
@@ -376,8 +387,10 @@ class KernelExecutionService:
                         if attempt.decision is None:
                             attempt.decision = "cancel"
                         attempt.decision_event.set()
-        if operations:
-            self.kernel.interrupt()
+                        attempt_ids.add(attempt.attempt_id)
+        correlation = self.kernel.execution_correlation()
+        if correlation[1] in attempt_ids:
+            self.kernel.interrupt_correlated(*correlation)
 
     def get(self, execution_id: str) -> ExecutionOperation:
         with self._lock:
@@ -474,15 +487,24 @@ class KernelExecutionService:
     def _on_session_replaced(self, session_id: str, _revision: int) -> None:
         with self._lock:
             old = self._kernel_notebook_session_id
+            if old is None or old == session_id:
+                self._kernel_notebook_session_id = session_id
+                return
+            old_kernel = self.kernel
+            replacement = KernelSession(
+                startup_timeout=old_kernel.startup_timeout,
+                cell_timeout=old_kernel.cell_timeout,
+                recovery_timeout=old_kernel.recovery_timeout,
+                max_output_items=old_kernel.max_output_items,
+                max_output_bytes=old_kernel.max_output_bytes,
+            )
+            self.kernel = replacement
             self._kernel_notebook_session_id = session_id
-        if old is not None and old != session_id:
-            self.kernel.shutdown()
-            self.kernel = KernelSession(
-                startup_timeout=self.kernel.startup_timeout,
-                cell_timeout=self.kernel.cell_timeout,
-                recovery_timeout=self.kernel.recovery_timeout,
-                max_output_items=self.kernel.max_output_items,
-                max_output_bytes=self.kernel.max_output_bytes,
+        try:
+            old_kernel.shutdown()
+        except Exception:
+            logger.exception(
+                "Failed to shut down kernel for replaced notebook session %s", old,
             )
 
     def _set_operation_state(self, operation: ExecutionOperation, state: str) -> None:
@@ -512,8 +534,47 @@ class KernelExecutionService:
         self._publish(operation)
 
     def _publish(self, operation: ExecutionOperation) -> None:
-        snapshot = self._copy_operation(operation)
-        self.events.publish("execution.updated", serialize_operation_summary(snapshot))
+        with self._lock:
+            payload = serialize_operation_summary(operation)
+        self.events.publish("execution.updated", payload)
+
+    def _bound_operation_outputs_locked(
+        self, operation: ExecutionOperation,
+    ) -> None:
+        summary_bytes = len(json.dumps(
+            serialize_operation_summary(operation), default=str,
+            separators=(",", ":"),
+        ).encode())
+        available = max(0, self.max_history_bytes - summary_bytes)
+        retained: list[tuple[CellExecutionAttempt, int]] = []
+        total = 0
+        for attempt in operation.attempts:
+            if not attempt.outputs:
+                continue
+            size = len(json.dumps(
+                attempt.outputs, default=str, separators=(",", ":"),
+            ).encode())
+            retained.append((attempt, size))
+            total += size
+        for attempt, size in retained:
+            if total <= available:
+                break
+            attempt.outputs = []
+            attempt.outputs_truncated = True
+            total -= size
+
+    @staticmethod
+    def _operation_history_size(operation: ExecutionOperation) -> int:
+        size = len(json.dumps(
+            serialize_operation_summary(operation), default=str,
+            separators=(",", ":"),
+        ).encode())
+        for attempt in operation.attempts:
+            if attempt.outputs:
+                size += len(json.dumps(
+                    attempt.outputs, default=str, separators=(",", ":"),
+                ).encode())
+        return size
 
     def _prune_history_locked(self) -> None:
         now = datetime.now(timezone.utc)
@@ -530,10 +591,9 @@ class KernelExecutionService:
             if (now - (item.completed_at or item.created_at)).total_seconds()
             > self.terminal_retention_seconds
         }
-        total_bytes = sum(
-            len(json.dumps(serialize_operation(item), default=str).encode())
-            for item in terminal
-        )
+        for item in terminal:
+            self._bound_operation_outputs_locked(item)
+        total_bytes = sum(self._operation_history_size(item) for item in terminal)
         while terminal and (
             len(terminal) > self.max_terminal_operations
             or expired
@@ -545,9 +605,7 @@ class KernelExecutionService:
             )
             terminal.remove(victim)
             expired.discard(victim.operation_id)
-            total_bytes -= len(
-                json.dumps(serialize_operation(victim), default=str).encode()
-            )
+            total_bytes -= self._operation_history_size(victim)
             self._operations.pop(victim.operation_id, None)
             for attempt in victim.attempts:
                 self._attempts.pop(attempt.attempt_id, None)
@@ -585,6 +643,7 @@ def serialize_operation(operation: ExecutionOperation) -> dict[str, Any]:
                 "risk": {"level": item.risk.level, "reasons": list(item.risk.reasons), "matchedPatterns": list(item.risk.matched_patterns)},
                 "decision": item.decision,
                 "outputs": copy.deepcopy(item.outputs),
+                "outputsTruncated": item.outputs_truncated,
                 "executionCount": item.execution_count,
                 "error": copy.deepcopy(item.error),
             }
@@ -597,7 +656,37 @@ def serialize_operation(operation: ExecutionOperation) -> dict[str, Any]:
 
 
 def serialize_operation_summary(operation: ExecutionOperation) -> dict[str, Any]:
-    result = serialize_operation(operation)
-    for attempt in result["attempts"]:
-        attempt.pop("outputs", None)
-    return result
+    return {
+        "operationId": operation.operation_id,
+        "sessionId": operation.session_id,
+        "baseRevision": operation.base_revision,
+        "currentDocumentRevision": operation.current_revision,
+        "kind": operation.kind,
+        "parentTurnId": operation.parent_turn_id,
+        "state": operation.state,
+        "currentExecutionAttemptId": operation.current_attempt_id,
+        "attempts": [
+            {
+                "executionAttemptId": item.attempt_id,
+                "cellId": item.cell_id,
+                "cellIndex": item.cell_index,
+                "sourcePreview": item.source_preview,
+                "state": item.state,
+                "risk": {
+                    "level": item.risk.level,
+                    "reasons": list(item.risk.reasons),
+                    "matchedPatterns": list(item.risk.matched_patterns),
+                },
+                "decision": item.decision,
+                "outputsTruncated": item.outputs_truncated,
+                "executionCount": item.execution_count,
+                "error": copy.deepcopy(item.error),
+            }
+            for item in operation.attempts
+        ],
+        "error": copy.deepcopy(operation.error),
+        "createdAt": operation.created_at.isoformat(),
+        "completedAt": (
+            operation.completed_at.isoformat() if operation.completed_at else None
+        ),
+    }

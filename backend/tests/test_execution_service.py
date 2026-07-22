@@ -8,12 +8,14 @@ import pytest
 
 from backend.app.kernel_execution.kernel_session import KernelResult, KernelSession
 from backend.app.kernel_execution.models import (
-    KernelCellTimeout, KernelExecutionCancelled, KernelOutputLimitExceeded,
-    KernelRestartRequired,
+    ExecutionDecisionConflict, KernelCellTimeout, KernelExecutionCancelled,
+    KernelOutputLimitExceeded, KernelRestartRequired,
 )
 from backend.app.kernel_execution.models import ExecutionNotFound
 from backend.app.session_events.service import SessionEventService
-from backend.app.kernel_execution.service import KernelExecutionService
+from backend.app.kernel_execution.service import (
+    KernelExecutionService, serialize_operation,
+)
 from backend.app.notebook_document.service import NotebookDocumentService
 from backend.app.notebook_document.models import RevisionConflict
 from backend.app.agent_turns.service import AgentTurnService
@@ -37,9 +39,17 @@ class FakeKernel:
         return KernelResult([{"output_type": "stream", "name": "stdout", "text": source}], len(self.sources), "raise Error" in source)
 
     def interrupt(self): pass
+    def execution_correlation(self):
+        return self.kernel_session_id, self.busy_attempt_id
     def restart(self): self.kernel_session_id = "kernel-2"
     def interrupt_correlated(self, kernel_session_id, attempt_id):
-        return kernel_session_id == self.kernel_session_id and attempt_id == self.busy_attempt_id
+        matched = (
+            kernel_session_id == self.kernel_session_id
+            and attempt_id == self.busy_attempt_id
+        )
+        if matched:
+            self.interrupt()
+        return matched
     def restart_correlated(self, kernel_session_id, attempt_id, on_matched=None):
         if not self.interrupt_correlated(kernel_session_id, attempt_id): return False
         if on_matched is not None:
@@ -83,6 +93,32 @@ def test_manual_run_all_persists_outputs_and_kernel_state():
     assert current.notebook["cells"][1]["execution_count"] == 2
 
 
+def test_notebook_replacement_uses_fresh_kernel_even_when_old_shutdown_fails():
+    class FailingShutdownKernel(FakeKernel):
+        max_output_items = 1000
+        max_output_bytes = 5 * 1024 * 1024
+
+        def shutdown(self):
+            raise RuntimeError("injected shutdown failure")
+
+    documents = NotebookDocumentService()
+    first = documents.import_notebook(notebook("x = 1"))
+    service = KernelExecutionService(
+        documents=documents, kernel=FailingShutdownKernel(),
+    )
+    service._kernel_notebook_session_id = first.session_id
+
+    replaced = documents.import_notebook(
+        notebook("x = 2"), expected_session_id=first.session_id,
+        expected_revision=first.revision,
+    )
+
+    assert documents.get_snapshot() == replaced
+    assert service._kernel_notebook_session_id == replaced.session_id
+    assert service.kernel is not None
+    assert not isinstance(service.kernel, FailingShutdownKernel)
+
+
 def test_agent_execution_pauses_and_correlates_approval():
     documents = NotebookDocumentService()
     snapshot = documents.import_notebook(notebook("open('x', 'w')"))
@@ -109,6 +145,110 @@ def test_agent_execution_pauses_and_correlates_approval():
     documents.coordinator.release(lease)
     assert result["operation"].state == "completed"
     assert kernel.sources == ["open('x', 'w')"]
+
+
+def test_repeated_identical_approval_is_idempotent_after_attempt_advances():
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook("open('x', 'w')"))
+    service = KernelExecutionService(documents=documents, kernel=FakeKernel())
+    lease = documents.coordinator.acquire(
+        operation_type="agent_turn", operation_id="turn-1",
+    )
+    operation = service.create_downstream(
+        parent_turn_id="turn-1", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, cancel_event=threading.Event(),
+    )
+    worker = threading.Thread(target=lambda: service.run_downstream(
+        operation.operation_id, changed_cell_ids={"cell-0"}, lease=lease,
+    ))
+    worker.start()
+    for _ in range(100):
+        pending = service.get(operation.operation_id)
+        if pending.state == "awaiting_approval":
+            break
+        time.sleep(.01)
+    attempt_id = pending.current_attempt_id
+    decision = {
+        "session_id": snapshot.session_id,
+        "expected_revision": snapshot.revision,
+        "turn_id": "turn-1",
+        "cell_id": "cell-0",
+    }
+    service.approve(attempt_id, **decision)
+    worker.join(2)
+    documents.coordinator.release(lease)
+
+    replayed = service.approve(attempt_id, **decision)
+    assert replayed.state == "completed"
+    with pytest.raises(ExecutionDecisionConflict):
+        service.skip(attempt_id, **decision)
+
+
+@pytest.mark.parametrize("cancel_kind", ["attempt", "parent"])
+def test_cancel_uses_immutable_correlation_across_attempt_turnover(cancel_kind):
+    entered = threading.Event()
+    release = threading.Event()
+
+    class TurnoverKernel(FakeKernel):
+        def __init__(self):
+            super().__init__()
+            self.busy_attempt_id = None
+            self.correlations = []
+            self.interrupted = []
+
+        def execute(self, source, attempt_id):
+            self.busy_attempt_id = attempt_id
+            entered.set()
+            assert release.wait(2)
+            self.busy_attempt_id = None
+            return KernelResult([], 1, False)
+
+        def interrupt(self):
+            self.interrupted.append(self.busy_attempt_id)
+
+        def interrupt_correlated(self, kernel_session_id, attempt_id):
+            self.correlations.append((kernel_session_id, attempt_id))
+            self.busy_attempt_id = "subsequent-attempt"
+            matched = (
+                kernel_session_id == self.kernel_session_id
+                and attempt_id == self.busy_attempt_id
+            )
+            if matched:
+                self.interrupted.append(self.busy_attempt_id)
+            release.set()
+            return matched
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook("value = 1"))
+    kernel = TurnoverKernel()
+    service = KernelExecutionService(documents=documents, kernel=kernel)
+    lease = documents.coordinator.acquire(
+        operation_type="agent_turn", operation_id="turn-1",
+    )
+    operation = service.create_downstream(
+        parent_turn_id="turn-1", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, cancel_event=threading.Event(),
+    )
+    worker = threading.Thread(target=lambda: service.run_downstream(
+        operation.operation_id, changed_cell_ids={"cell-0"}, lease=lease,
+    ))
+    worker.start()
+    assert entered.wait(2)
+    attempt_id = service.get(operation.operation_id).current_attempt_id
+    if cancel_kind == "attempt":
+        service.cancel(
+            attempt_id, session_id=snapshot.session_id,
+            expected_revision=snapshot.revision, turn_id="turn-1",
+            cell_id="cell-0",
+        )
+    else:
+        service.cancel_parent("turn-1")
+    worker.join(2)
+    documents.coordinator.release(lease)
+
+    assert kernel.correlations == [("kernel-1", attempt_id)]
+    assert kernel.interrupted == []
+    assert service.get(operation.operation_id).state == "cancelled"
 
 
 def test_parent_cancel_while_awaiting_approval_never_executes_kernel():
@@ -453,6 +593,66 @@ def test_kernel_restart_compare_and_action_are_atomic_against_turnover():
     assert kernel.busy_attempt_id == "attempt-2"
 
 
+def test_correlated_restart_failure_marks_kernel_unusable():
+    class Manager:
+        def restart_kernel(self, now):
+            assert now is True
+            raise RuntimeError("restart failed")
+
+    kernel = KernelSession()
+    kernel._manager = Manager()
+    kernel._client = object()
+    kernel._busy_attempt_id = "attempt-1"
+    original_session_id = kernel.kernel_session_id
+
+    with pytest.raises(RuntimeError, match="restart failed"):
+        kernel.restart_correlated(original_session_id, "attempt-1")
+
+    assert kernel.status == "restart_required"
+    assert kernel.busy_attempt_id is None
+    assert kernel.kernel_session_id == original_session_id
+
+
+@pytest.mark.parametrize("failure_stage", ["blocking_client", "start_channels"])
+def test_kernel_startup_failure_shuts_down_started_process(monkeypatch, failure_stage):
+    calls = []
+
+    class Client:
+        def start_channels(self):
+            calls.append("start_channels")
+            if failure_stage == "start_channels":
+                raise RuntimeError("channels failed")
+
+        def stop_channels(self):
+            calls.append("stop_channels")
+
+        def wait_for_ready(self, timeout):
+            calls.append("ready")
+
+    class Manager:
+        def start_kernel(self):
+            calls.append("start_kernel")
+
+        def blocking_client(self):
+            calls.append("blocking_client")
+            if failure_stage == "blocking_client":
+                raise RuntimeError("client failed")
+            return Client()
+
+        def shutdown_kernel(self, now):
+            calls.append(("shutdown_kernel", now))
+
+    monkeypatch.setattr("jupyter_client.KernelManager", lambda **_: Manager())
+    kernel = KernelSession()
+    with pytest.raises(RuntimeError):
+        kernel._ensure_started()
+
+    assert ("shutdown_kernel", True) in calls
+    assert kernel.status == "not_started"
+    if failure_stage == "start_channels":
+        assert "stop_channels" in calls
+
+
 def test_busy_restart_invalidates_operation_and_prevents_commit():
     entered = threading.Event()
     release = threading.Event()
@@ -617,6 +817,31 @@ def test_terminal_operation_retention_prunes_operations_and_attempts():
     assert byte_service.get(second.operation_id).state == "completed"
 
 
+def test_single_large_operation_history_is_bounded_with_durable_truncation():
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook(*(["x" * 2_000] * 10)))
+    byte_budget = 10_000
+    service = KernelExecutionService(
+        documents=documents, kernel=FakeKernel(),
+        max_terminal_operations=100, max_history_bytes=byte_budget,
+    )
+    completed = wait_terminal(service, service.start_all(
+        session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    ).operation_id)
+
+    first_read = service.get(completed.operation_id)
+    second_read = service.get(completed.operation_id)
+    assert any(attempt.outputs_truncated for attempt in first_read.attempts)
+    assert [item.outputs_truncated for item in first_read.attempts] == [
+        item.outputs_truncated for item in second_read.attempts
+    ]
+    payload_size = len(json.dumps(
+        serialize_operation(first_read), default=str, separators=(",", ":"),
+    ).encode())
+    assert payload_size <= byte_budget
+
+
 def test_event_journal_enforces_count_bytes_and_active_session():
     events = SessionEventService(max_events=2, max_bytes=10_000, retention_seconds=60)
     events.activate_session("one")
@@ -769,10 +994,14 @@ def test_agent_cancel_retry_uses_accepted_child_output_lineage():
 
     class TwoCellKernel(FakeKernel):
         def execute(self, source, attempt_id):
+            self.busy_attempt_id = attempt_id
             if len(self.sources) == 1:
                 second_entered.set()
                 assert release_second.wait(2)
-            return super().execute(source, attempt_id)
+            try:
+                return super().execute(source, attempt_id)
+            finally:
+                self.busy_attempt_id = None
         def interrupt(self):
             release_second.set()
 
