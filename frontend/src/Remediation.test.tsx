@@ -22,7 +22,7 @@ const notebook: NotebookSnapshot = {
 const scope: TurnScope = { editableCellIds: ["code-1"], contextCellIds: [], sessionId: "session-1", notebookRevision: 3 };
 const operation: ExecutionOperation = {
   operationId: "op-1", sessionId: "session-1", baseRevision: 3, currentDocumentRevision: 7, kind: "manual", parentTurnId: null, state: "running", currentExecutionAttemptId: "attempt-1",
-  attempts: [{ executionAttemptId: "attempt-1", cellId: "code-1", cellIndex: 0, sourcePreview: "print('preview')", state: "running", risk: { level: "safe", reasons: [], matchedPatterns: [] }, decision: null, outputs: [], executionCount: null, error: null }], error: null, createdAt: "", completedAt: null,
+  attempts: [{ executionAttemptId: "attempt-1", cellId: "code-1", cellIndex: 0, sourcePreview: "print('preview')", state: "running", risk: { level: "safe", reasons: [], matchedPatterns: [] }, decision: null, outputs: [], outputsTruncated: false, executionCount: null, error: null }], error: null, createdAt: "", completedAt: null,
 };
 const turn = (id: string, state = "completed"): AgentTurn => ({ turnId: id, sessionId: "session-1", baseRevision: 3, prompt: `Prompt ${id}`, editableCellIds: ["code-1"], contextCellIds: [], undoEligible: state === "completed", state, attempts: 1, finalOutput: "Done", appliedRevision: state === "completed" ? 4 : null, executionOperationId: null, changes: [], error: null, createdAt: "", completedAt: state === "completed" ? "" : null });
 
@@ -485,6 +485,8 @@ describe("remediation behaviors", () => {
     EventSourceMock.instances[0].emit("notebook.updated", { revision: 3 }, 1);
     await waitFor(() => expect(statusCalls).toBeGreaterThanOrEqual(2));
     expect(screen.getByText("Cached older turn")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Cached older turn"));
+    expect(screen.queryByRole("button", { name: "Undo turn" })).not.toBeInTheDocument();
   });
 
   it("reconciles terminal turn detail after earlier notebook and execution refreshes", async () => {
@@ -622,6 +624,19 @@ describe("remediation behaviors", () => {
     render(<AgentChatPanel notebook={notebook} scope={scope} turn={null} activeTurn={null} history={[]} operation={failed} busy={false} mutationsDisabled={false} onSubmit={vi.fn()} onCancel={vi.fn()} onUndo={vi.fn()} onClearScope={vi.fn()} onDecision={vi.fn()} onSelectTurn={vi.fn()} onFocusCell={vi.fn()} onDropCell={vi.fn()} />);
     expect(screen.getByText("Cell execution timed out")).toBeInTheDocument();
     expect(screen.getByText("Cell 1: Kernel stopped")).toBeInTheDocument();
+  });
+
+  it("distinguishes truncated retained output from an empty output history", () => {
+    const truncated = {
+      ...operation,
+      state: "completed",
+      attempts: [{ ...operation.attempts[0], state: "completed", outputs: [], outputsTruncated: true }],
+    };
+    const view = render(<AgentChatPanel notebook={notebook} scope={scope} turn={null} activeTurn={null} history={[]} operation={truncated} busy={false} mutationsDisabled={false} onSubmit={vi.fn()} onCancel={vi.fn()} onUndo={vi.fn()} onClearScope={vi.fn()} onDecision={vi.fn()} onSelectTurn={vi.fn()} onFocusCell={vi.fn()} onDropCell={vi.fn()} />);
+    expect(screen.getByText("Cell 1: Retained execution output was truncated.")).toBeInTheDocument();
+
+    view.rerender(<AgentChatPanel notebook={notebook} scope={scope} turn={null} activeTurn={null} history={[]} operation={{ ...truncated, attempts: [{ ...truncated.attempts[0], outputsTruncated: false }] }} busy={false} mutationsDisabled={false} onSubmit={vi.fn()} onCancel={vi.fn()} onUndo={vi.fn()} onClearScope={vi.fn()} onDecision={vi.fn()} onSelectTurn={vi.fn()} onFocusCell={vi.fn()} onDropCell={vi.fn()} />);
+    expect(screen.queryByText("Cell 1: Retained execution output was truncated.")).not.toBeInTheDocument();
   });
 
   it("focuses and contains the approval dialog and cancels on Escape", async () => {

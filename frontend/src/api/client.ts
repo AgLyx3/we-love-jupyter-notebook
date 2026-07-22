@@ -58,6 +58,7 @@ export interface ExecutionAttempt {
   risk: { level: string; reasons: string[]; matchedPatterns: string[] };
   decision: string | null;
   outputs?: CellOutput[];
+  outputsTruncated: boolean;
   executionCount: number | null;
   error: ApiErrorBody | null;
 }
