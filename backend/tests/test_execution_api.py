@@ -17,7 +17,10 @@ class ApiKernel:
     def execute(self, source, attempt_id):
         return KernelResult([{"output_type": "stream", "name": "stdout", "text": "ok\n"}], 1, False)
     def interrupt(self): pass
-    def restart(self): self.kernel_session_id = "api-kernel-2"; return self.kernel_session_id
+    def restart(self):
+        self.kernel_session_id = "api-kernel-2"
+        self.status = "idle"
+        return self.kernel_session_id
     def shutdown(self): pass
     def interrupt_correlated(self, kernel_session_id, attempt_id):
         return kernel_session_id == self.kernel_session_id and attempt_id == self.busy_attempt_id
@@ -55,6 +58,24 @@ def test_kernel_restart_rejects_stale_session(client, notebook_payload):
     restarted = client.post("/kernel/api-kernel/restart", json=body)
     assert restarted.status_code == 200
     assert restarted.json()["kernelSessionId"] == "api-kernel-2"
+
+
+def test_restart_required_rejects_new_execution_with_structured_conflict(
+    client, notebook_payload,
+):
+    uploaded = client.post(
+        "/notebooks/upload",
+        files={"file": ("example.ipynb", notebook_payload(), "application/json")},
+    ).json()
+    kernel = ApiKernel()
+    kernel.status = "restart_required"
+    client.app.state.kernel_execution_service.kernel = kernel
+    response = client.post("/execution/cells/editable/run", json={
+        "sessionId": uploaded["sessionId"],
+        "expectedDocumentRevision": uploaded["revision"],
+    })
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "kernel_restart_required"
 
 
 def test_execution_validation_errors_are_structured(client, notebook_payload):

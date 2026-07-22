@@ -45,6 +45,18 @@ class KernelExecutionCancelled(Exception):
     """The correlated attempt was invalidated while the kernel was running."""
 
 
+class KernelOutputLimitExceeded(Exception):
+    def __init__(self, *, recovered: bool) -> None:
+        super().__init__("Kernel output exceeded the configured limit")
+        self.recovered = recovered
+
+
+class KernelRestartRequired(NotebookDomainError):
+    code = "kernel_restart_required"
+    message = "Kernel must be restarted before execution can continue"
+    status_code = 409
+
+
 class ExecutionTimedOut(NotebookDomainError):
     code = "cell_timed_out"
     message = "Cell execution timed out"

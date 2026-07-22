@@ -83,15 +83,21 @@ class SessionEventService:
         is_disconnected: Callable[[], Awaitable[bool]],
     ) -> AsyncIterator[SessionEvent | None]:
         cursor = after
-        while not await is_disconnected():
+        while self.is_active(session_id) and not await is_disconnected():
             ready = self.list(cursor, session_id)
             if not ready:
                 yield None
                 await asyncio.sleep(0.25)
                 continue
             for event in ready:
+                if not self.is_active(session_id):
+                    return
                 cursor = event.sequence
                 yield event
+
+    def is_active(self, session_id: str) -> bool:
+        with self._lock:
+            return session_id == self._active_session_id
 
     def _prune_locked(self) -> None:
         cutoff = time.monotonic() - self.retention_seconds

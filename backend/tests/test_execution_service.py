@@ -7,11 +7,15 @@ import nbformat
 import pytest
 
 from backend.app.kernel_execution.kernel_session import KernelResult, KernelSession
-from backend.app.kernel_execution.models import KernelCellTimeout, KernelExecutionCancelled
+from backend.app.kernel_execution.models import (
+    KernelCellTimeout, KernelExecutionCancelled, KernelOutputLimitExceeded,
+    KernelRestartRequired,
+)
 from backend.app.kernel_execution.models import ExecutionNotFound
 from backend.app.session_events.service import SessionEventService
 from backend.app.kernel_execution.service import KernelExecutionService
 from backend.app.notebook_document.service import NotebookDocumentService
+from backend.app.notebook_document.models import RevisionConflict
 from backend.app.agent_turns.service import AgentTurnService
 from backend.app.agent_workspace.adapters import FakeAgentAdapter, FakeAttempt
 from backend.app.turn_scope.service import TurnScopeService
@@ -254,6 +258,25 @@ def test_real_kernel_input_fails_promptly_without_stdin_wait():
         service.shutdown()
 
 
+def test_real_kernel_output_limit_interrupts_without_commit():
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook("print('x' * 100_000)"))
+    kernel = KernelSession(max_output_items=10, max_output_bytes=1024)
+    service = KernelExecutionService(documents=documents, kernel=kernel)
+    try:
+        created = service.start_cell(
+            cell_id="cell-0", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision,
+        )
+        failed = wait_terminal(service, created.operation_id, timeout=10)
+        assert failed.state == "failed"
+        assert failed.error["code"] == "output_limit_exceeded"
+        assert failed.error["details"]["truncated"] is True
+        assert documents.get_snapshot().revision == snapshot.revision
+    finally:
+        service.shutdown()
+
+
 def test_real_kernel_busy_restart_cancels_operation_promptly():
     import pytest
     pytest.importorskip("jupyter_client")
@@ -317,9 +340,24 @@ def test_accepted_cancel_disables_attempt_before_result_commit():
 
 def test_timeout_is_explicit_and_unrecovered_kernel_requires_restart():
     class TimeoutKernel(FakeKernel):
-        status = "restart_required"
+        def __init__(self):
+            super().__init__()
+            self.status = "idle"
+            self.did_timeout = False
         def execute(self, source, attempt_id):
-            raise KernelCellTimeout(recovered=False)
+            if not self.did_timeout:
+                self.did_timeout = True
+                self.status = "restart_required"
+                raise KernelCellTimeout(recovered=False)
+            return super().execute(source, attempt_id)
+        def restart_correlated(self, session_id, attempt_id, on_matched=None):
+            if session_id != self.kernel_session_id or attempt_id is not None:
+                return False
+            if on_matched:
+                on_matched()
+            self.status = "idle"
+            self.kernel_session_id = "kernel-restarted"
+            return True
 
     documents = NotebookDocumentService()
     snapshot = documents.import_notebook(notebook("while True: pass"))
@@ -330,6 +368,17 @@ def test_timeout_is_explicit_and_unrecovered_kernel_requires_restart():
     assert completed.error["code"] == "cell_timed_out"
     assert completed.error["details"] == {"kernelRecovered": False}
     assert service.kernel_status()["state"] == "restart_required"
+    with pytest.raises(KernelRestartRequired):
+        service.start_cell(
+            cell_id="cell-0", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision,
+        )
+    service.restart("kernel-1", execution_attempt_id=None)
+    allowed = service.start_cell(
+        cell_id="cell-0", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
+    assert wait_terminal(service, allowed.operation_id).state == "completed"
 
 
 def test_kernel_control_compare_and_action_are_atomic_against_turnover():
@@ -489,6 +538,7 @@ def test_kernel_message_output_state_machine_and_stdin_policy():
         return {"parent_header": {"msg_id": "message-1"}, "header": {"msg_type": kind}, "content": content}
     messages = [
         message("display_data", {"data": {"text/plain": "old"}, "metadata": {}, "transient": {"display_id": "d"}}),
+        message("display_data", {"data": {"text/plain": "also old"}, "metadata": {}, "transient": {"display_id": "d"}}),
         message("update_display_data", {"data": {"text/plain": "new"}, "metadata": {"updated": True}, "transient": {"display_id": "d"}}),
         message("status", {"execution_state": "idle"}),
     ]
@@ -496,7 +546,10 @@ def test_kernel_message_output_state_machine_and_stdin_policy():
     kernel._manager = object()
     kernel._client = Client(messages)
     result = kernel.execute("display", "attempt")
-    assert result.outputs == [{"output_type": "display_data", "data": {"text/plain": "new"}, "metadata": {"updated": True}}]
+    assert result.outputs == [
+        {"output_type": "display_data", "data": {"text/plain": "new"}, "metadata": {"updated": True}},
+        {"output_type": "display_data", "data": {"text/plain": "new"}, "metadata": {"updated": True}},
+    ]
 
     clear_messages = [
         message("stream", {"name": "stdout", "text": "old"}),
@@ -589,6 +642,62 @@ def test_event_journal_enforces_count_bytes_and_active_session():
             await anext(stream)
     asyncio.run(disconnected_stream_stops())
 
+    async def replacement_closes_open_stream():
+        events.activate_session("stream-one")
+        events.publish("test", {"sessionId": "stream-one", "index": 1})
+        stream = events.stream(
+            session_id="stream-one",
+            is_disconnected=lambda: asyncio.sleep(0, result=False),
+        )
+        assert (await anext(stream)).data["index"] == 1
+        events.activate_session("stream-two")
+        with pytest.raises(StopAsyncIteration):
+            await anext(stream)
+    asyncio.run(replacement_closes_open_stream())
+
+
+def test_kernel_output_collection_is_bounded_before_commit():
+    class Manager:
+        def __init__(self): self.interrupted = 0
+        def interrupt_kernel(self): self.interrupted += 1
+    class Client:
+        def __init__(self):
+            self.messages = iter([
+                {"parent_header": {"msg_id": "m"}, "header": {"msg_type": "stream"}, "content": {"name": "stdout", "text": "a" * 20}},
+                {"parent_header": {"msg_id": "m"}, "header": {"msg_type": "stream"}, "content": {"name": "stdout", "text": "b" * 20}},
+                {"parent_header": {"msg_id": "m"}, "header": {"msg_type": "stream"}, "content": {"name": "stdout", "text": "c" * 20}},
+                {"parent_header": {"msg_id": "m"}, "header": {"msg_type": "status"}, "content": {"execution_state": "idle"}},
+            ])
+        def execute(self, source, **kwargs): return "m"
+        def get_iopub_msg(self, timeout): return next(self.messages)
+    kernel = KernelSession(max_output_items=2, max_output_bytes=10_000)
+    manager = Manager()
+    kernel._manager = manager
+    kernel._client = Client()
+    with pytest.raises(KernelOutputLimitExceeded) as raised:
+        kernel.execute("spam", "attempt")
+    assert raised.value.recovered is True
+    assert manager.interrupted == 1
+
+    class LimitedKernel(FakeKernel):
+        def execute(self, source, attempt_id):
+            raise KernelOutputLimitExceeded(recovered=True)
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook("print('spam')"))
+    service = KernelExecutionService(documents=documents, kernel=LimitedKernel())
+    created = service.start_cell(
+        cell_id="cell-0", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
+    failed = wait_terminal(service, created.operation_id)
+    assert failed.state == "failed"
+    assert failed.error == {
+        "code": "output_limit_exceeded",
+        "message": "Kernel output exceeded the configured limit",
+        "details": {"truncated": True, "kernelRecovered": True},
+    }
+    assert documents.get_snapshot().revision == snapshot.revision
+
 
 def test_agent_turn_publishes_execution_id_before_risky_wait():
     documents = NotebookDocumentService()
@@ -652,6 +761,64 @@ def test_agent_turn_commits_downstream_output_before_terminal_release():
     assert turn.applied_revision == snapshot.revision + 2
     assert current.notebook["cells"][0]["outputs"][0]["text"] == "value = 2"
     assert documents.coordinator.active_lease is None
+
+
+def test_agent_cancel_retry_uses_accepted_child_output_lineage():
+    second_entered = threading.Event()
+    release_second = threading.Event()
+
+    class TwoCellKernel(FakeKernel):
+        def execute(self, source, attempt_id):
+            if len(self.sources) == 1:
+                second_entered.set()
+                assert release_second.wait(2)
+            return super().execute(source, attempt_id)
+        def interrupt(self):
+            release_second.set()
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook("value = 1", "value = 2"))
+    scopes = TurnScopeService(documents)
+    scopes.add("cell-0", editable=True)
+    executions = KernelExecutionService(documents=documents, kernel=TwoCellKernel())
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes,
+        adapter=FakeAgentAdapter([FakeAttempt(edits={
+            "editable/cell_cell-0.py": "value = 10",
+        })]), executions=executions,
+    )
+    turn = turns.start(
+        prompt="change", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
+    assert second_entered.wait(2)
+    accepted_revision = documents.get_snapshot().revision
+    first = turns.cancel(
+        turn.turn_id, session_id=snapshot.session_id,
+        expected_revision=accepted_revision,
+    )
+    second = turns.cancel(
+        turn.turn_id, session_id=snapshot.session_id,
+        expected_revision=accepted_revision,
+    )
+    assert first.accepted_cancel_revision == second.accepted_cancel_revision
+    for _ in range(200):
+        cancelled = turns.get(turn.turn_id)
+        if cancelled.state == "cancelled":
+            break
+        time.sleep(.01)
+    assert cancelled.state == "cancelled"
+    current = documents.get_snapshot()
+    updated = documents.update_cell_source(
+        cell_id="cell-1", source="unrelated = True",
+        expected_revision=current.revision, owner="manual",
+        expected_session_id=current.session_id,
+    )
+    with pytest.raises(RevisionConflict):
+        turns.cancel(
+            turn.turn_id, session_id=updated.session_id,
+            expected_revision=accepted_revision,
+        )
 
 
 def test_real_kernel_agent_turn_commits_output_and_releases_lease():

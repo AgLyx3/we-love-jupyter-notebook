@@ -67,6 +67,7 @@ class AgentTurn:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
     accepted_cancel_revision: int | None = None
+    accepted_cancel_lineage_revision: int | None = None
     cancel_event: Event = field(default_factory=Event, repr=False)
 
 
@@ -155,10 +156,9 @@ class AgentTurnService:
             if snapshot.session_id != session_id or turn.session_id != session_id:
                 raise SessionConflict(snapshot.session_id)
             if turn.accepted_cancel_revision is not None:
-                lineage_revision = turn.applied_revision or turn.base_revision
                 if (
                     expected_revision != turn.accepted_cancel_revision
-                    or snapshot.revision != lineage_revision
+                    or snapshot.revision != turn.accepted_cancel_lineage_revision
                 ):
                     raise RevisionConflict(snapshot.revision)
                 return self.get(turn_id)
@@ -179,6 +179,7 @@ class AgentTurnService:
                 raise RevisionConflict(snapshot.revision)
             if turn.state not in TERMINAL_STATES:
                 turn.accepted_cancel_revision = expected_revision
+                turn.accepted_cancel_lineage_revision = snapshot.revision
                 turn.cancel_event.set()
                 if self.executions is not None:
                     self.executions.cancel_parent(turn_id)

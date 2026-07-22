@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from queue import Empty
 from threading import RLock
 from typing import Any
 from uuid import uuid4
 from time import monotonic
 
-from .models import KernelCellTimeout, KernelExecutionCancelled
+from .models import (
+    KernelCellTimeout, KernelExecutionCancelled, KernelOutputLimitExceeded,
+    KernelRestartRequired,
+)
 
 
 @dataclass(frozen=True)
@@ -22,11 +26,14 @@ class KernelSession:
 
     def __init__(
         self, *, startup_timeout: float = 30, cell_timeout: float = 300,
-        recovery_timeout: float = 5,
+        recovery_timeout: float = 5, max_output_items: int = 1000,
+        max_output_bytes: int = 5 * 1024 * 1024,
     ) -> None:
         self.startup_timeout = startup_timeout
         self.cell_timeout = cell_timeout
         self.recovery_timeout = recovery_timeout
+        self.max_output_items = max_output_items
+        self.max_output_bytes = max_output_bytes
         self.kernel_session_id = uuid4().hex
         self._manager = None
         self._client = None
@@ -50,6 +57,8 @@ class KernelSession:
 
     def execute(self, source: str, attempt_id: str) -> KernelResult:
         with self._lock:
+            if self._restart_required:
+                raise KernelRestartRequired()
             self._ensure_started()
             self._busy_attempt_id = attempt_id
             client = self._client
@@ -59,10 +68,24 @@ class KernelSession:
             )
             deadline = monotonic() + self.cell_timeout
             outputs: list[dict[str, Any]] = []
-            display_indexes: dict[str, int] = {}
+            display_indexes: dict[str, list[int]] = {}
+            output_bytes = 0
             clear_pending = False
             execution_count = None
             saw_error = False
+
+            def retain(output: dict[str, Any], display_id: str | None = None) -> None:
+                nonlocal output_bytes
+                size = self._output_size(output)
+                if (
+                    len(outputs) >= self.max_output_items
+                    or output_bytes + size > self.max_output_bytes
+                ):
+                    self._raise_output_limit(client)
+                outputs.append(output)
+                output_bytes += size
+                if display_id:
+                    display_indexes.setdefault(display_id, []).append(len(outputs) - 1)
             while True:
                 try:
                     remaining = deadline - monotonic()
@@ -89,6 +112,7 @@ class KernelSession:
                     else:
                         outputs.clear()
                         display_indexes.clear()
+                        output_bytes = 0
                     continue
                 if msg_type in {
                     "stream", "display_data", "update_display_data",
@@ -96,29 +120,39 @@ class KernelSession:
                 } and clear_pending:
                     outputs.clear()
                     display_indexes.clear()
+                    output_bytes = 0
                     clear_pending = False
                 if msg_type == "execute_input":
                     execution_count = content.get("execution_count")
                 elif msg_type == "stream":
-                    outputs.append({"output_type": "stream", "name": content["name"], "text": content["text"]})
+                    retain({"output_type": "stream", "name": content["name"], "text": content["text"]})
                 elif msg_type in {"display_data", "execute_result"}:
                     output = {"output_type": msg_type, "data": content.get("data", {}), "metadata": content.get("metadata", {})}
                     if msg_type == "execute_result":
                         output["execution_count"] = content.get("execution_count")
                         execution_count = content.get("execution_count")
-                    outputs.append(output)
                     display_id = content.get("transient", {}).get("display_id")
-                    if display_id:
-                        display_indexes[display_id] = len(outputs) - 1
+                    retain(output, display_id)
                 elif msg_type == "update_display_data":
                     display_id = content.get("transient", {}).get("display_id")
                     if display_id in display_indexes:
-                        target = outputs[display_indexes[display_id]]
-                        target["data"] = content.get("data", {})
-                        target["metadata"] = content.get("metadata", {})
+                        replacements = []
+                        new_total = output_bytes
+                        for index in display_indexes[display_id]:
+                            target = dict(outputs[index])
+                            new_total -= self._output_size(outputs[index])
+                            target["data"] = content.get("data", {})
+                            target["metadata"] = content.get("metadata", {})
+                            new_total += self._output_size(target)
+                            replacements.append((index, target))
+                        if new_total > self.max_output_bytes:
+                            self._raise_output_limit(client)
+                        for index, target in replacements:
+                            outputs[index] = target
+                        output_bytes = new_total
                 elif msg_type == "error":
                     saw_error = True
-                    outputs.append({"output_type": "error", "ename": content.get("ename", "Error"), "evalue": content.get("evalue", ""), "traceback": content.get("traceback", [])})
+                    retain({"output_type": "error", "ename": content.get("ename", "Error"), "evalue": content.get("evalue", ""), "traceback": content.get("traceback", [])})
                 elif msg_type == "status" and content.get("execution_state") == "idle":
                     break
             return KernelResult(outputs, execution_count, saw_error)
@@ -225,3 +259,13 @@ class KernelSession:
             ):
                 return True
         return False
+
+    @staticmethod
+    def _output_size(output: dict[str, Any]) -> int:
+        return len(json.dumps(output, default=str, separators=(",", ":")).encode())
+
+    def _raise_output_limit(self, client) -> None:
+        recovered = self._interrupt_and_wait_idle(client)
+        with self._lock:
+            self._restart_required = not recovered
+        raise KernelOutputLimitExceeded(recovered=recovered)

@@ -15,7 +15,8 @@ from .kernel_session import KernelSession
 from .models import (
     CellExecutionAttempt, ExecutionDecisionConflict, ExecutionNotFound,
     ExecutionOperation, KernelCellTimeout, KernelExecutionCancelled,
-    KernelSessionConflict, StaleExecutionResult,
+    KernelOutputLimitExceeded, KernelRestartRequired, KernelSessionConflict,
+    StaleExecutionResult,
     TERMINAL_EXECUTION_STATES,
 )
 from .risky_cell_classifier import RiskyCellClassifier
@@ -56,6 +57,8 @@ class KernelExecutionService:
         return self._start_manual(cell_id=None, session_id=session_id, expected_revision=expected_revision)
 
     def _start_manual(self, *, cell_id: str | None, session_id: str, expected_revision: int) -> ExecutionOperation:
+        if self.kernel.status == "restart_required":
+            raise KernelRestartRequired()
         operation_id = uuid4().hex
         lease = self.documents.coordinator.acquire(operation_type="manual_execution", operation_id=operation_id)
         try:
@@ -209,6 +212,32 @@ class KernelExecutionService:
                         attempt.state = "cancelled"
                 if operation.state not in TERMINAL_EXECUTION_STATES:
                     self._finish(operation, "cancelled")
+                return
+            except KernelOutputLimitExceeded as error:
+                with self._lock:
+                    attempt.active = False
+                    attempt.state = "failed"
+                    attempt.error = {
+                        "code": "output_limit_exceeded",
+                        "message": "Kernel output exceeded the configured limit",
+                        "details": {
+                            "truncated": True,
+                            "kernelRecovered": error.recovered,
+                        },
+                    }
+                    operation.error = copy.deepcopy(attempt.error)
+                self._finish(operation, "failed")
+                return
+            except KernelRestartRequired as error:
+                with self._lock:
+                    attempt.active = False
+                    attempt.state = "failed"
+                    attempt.error = {
+                        "code": error.code, "message": error.message,
+                        "details": {},
+                    }
+                    operation.error = copy.deepcopy(attempt.error)
+                self._finish(operation, "failed")
                 return
             except Exception as error:
                 with self._lock:
@@ -423,6 +452,8 @@ class KernelExecutionService:
                     startup_timeout=self.kernel.startup_timeout,
                     cell_timeout=self.kernel.cell_timeout,
                     recovery_timeout=self.kernel.recovery_timeout,
+                    max_output_items=self.kernel.max_output_items,
+                    max_output_bytes=self.kernel.max_output_bytes,
                 )
             self._kernel_notebook_session_id = notebook_session_id
 
@@ -436,6 +467,8 @@ class KernelExecutionService:
                 startup_timeout=self.kernel.startup_timeout,
                 cell_timeout=self.kernel.cell_timeout,
                 recovery_timeout=self.kernel.recovery_timeout,
+                max_output_items=self.kernel.max_output_items,
+                max_output_bytes=self.kernel.max_output_bytes,
             )
 
     def _set_operation_state(self, operation: ExecutionOperation, state: str) -> None:
