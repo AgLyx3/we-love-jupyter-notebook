@@ -117,6 +117,66 @@ def test_notebook_replacement_uses_fresh_kernel_even_when_old_shutdown_fails():
     assert service._kernel_notebook_session_id == replaced.session_id
     assert service.kernel is not None
     assert not isinstance(service.kernel, FailingShutdownKernel)
+    assert documents.last_session_replacement_errors == (
+        "RuntimeError: injected shutdown failure",
+    )
+
+
+def test_kernel_session_shutdown_attempts_both_cleanup_steps_and_reports_all_errors():
+    calls = []
+
+    class Client:
+        def stop_channels(self):
+            calls.append("stop_channels")
+            raise RuntimeError("channel cleanup failed")
+
+    class Manager:
+        def shutdown_kernel(self, now):
+            calls.append(("shutdown_kernel", now))
+            raise RuntimeError("process cleanup failed")
+
+    kernel = KernelSession()
+    kernel._client = Client()
+    kernel._manager = Manager()
+
+    with pytest.raises(ExceptionGroup) as error:
+        kernel.shutdown()
+
+    assert calls == ["stop_channels", ("shutdown_kernel", True)]
+    assert [str(item) for item in error.value.exceptions] == [
+        "channel cleanup failed", "process cleanup failed",
+    ]
+    assert kernel.status == "not_started"
+
+
+def test_session_fallback_does_not_hold_service_lock_during_kernel_shutdown():
+    checked = threading.Event()
+    acquired = threading.Event()
+
+    class LockCheckingKernel(FakeKernel):
+        max_output_items = 1000
+        max_output_bytes = 5 * 1024 * 1024
+
+        def shutdown(self):
+            def probe():
+                with service._lock:
+                    acquired.set()
+
+            thread = threading.Thread(target=probe)
+            thread.start()
+            assert acquired.wait(1), "kernel shutdown ran while holding service lock"
+            thread.join()
+            checked.set()
+
+    documents = NotebookDocumentService()
+    service = KernelExecutionService(documents=documents, kernel=LockCheckingKernel())
+    service._kernel_notebook_session_id = "old-session"
+
+    service._ensure_kernel_session("new-session")
+
+    assert checked.is_set()
+    assert service._kernel_notebook_session_id == "new-session"
+    assert not isinstance(service.kernel, LockCheckingKernel)
 
 
 def test_agent_execution_pauses_and_correlates_approval():
@@ -804,7 +864,7 @@ def test_terminal_operation_retention_prunes_operations_and_attempts():
     byte_snapshot = byte_documents.import_notebook(notebook("value = 1"))
     byte_service = KernelExecutionService(
         documents=byte_documents, kernel=FakeKernel(),
-        max_terminal_operations=100, max_history_bytes=1,
+        max_terminal_operations=100, max_history_bytes=1000,
     )
     first = wait_terminal(byte_service, byte_service.start_cell(
         cell_id="cell-0", session_id=byte_snapshot.session_id,
@@ -841,7 +901,65 @@ def test_single_large_operation_history_is_bounded_with_durable_truncation():
     payload_size = len(json.dumps(
         serialize_operation(first_read), default=str, separators=(",", ":"),
     ).encode())
+    assert service._operation_history_size(first_read) == payload_size
     assert payload_size <= byte_budget
+
+
+def test_operation_history_budget_uses_exact_serialized_payload_size():
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook("x"))
+    service = KernelExecutionService(
+        documents=documents, kernel=FakeKernel(),
+        max_terminal_operations=100, max_history_bytes=622,
+    )
+
+    created = service.start_cell(
+        cell_id="cell-0", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            operation = service.get(created.operation_id)
+        except ExecutionNotFound:
+            break
+        if operation.state in {
+            "completed", "failed", "cancelled", "validation_incomplete", "timed_out",
+        }:
+            payload_size = len(json.dumps(
+                serialize_operation(operation), default=str, separators=(",", ":"),
+            ).encode())
+            assert payload_size <= 622
+            break
+        time.sleep(.01)
+    else:
+        raise AssertionError("operation neither fit the exact budget nor was evicted")
+
+
+def test_metadata_only_terminal_operation_over_budget_is_evicted_without_start_race():
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook("x" * 400))
+    service = KernelExecutionService(
+        documents=documents, kernel=FakeKernel(),
+        max_terminal_operations=100, max_history_bytes=1,
+    )
+
+    created = service.start_cell(
+        cell_id="cell-0", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
+
+    assert created.operation_id
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            service.get(created.operation_id)
+        except ExecutionNotFound:
+            break
+        time.sleep(.01)
+    else:
+        raise AssertionError("oversized terminal operation was retained")
 
 
 def test_event_journal_enforces_count_bytes_and_active_session():

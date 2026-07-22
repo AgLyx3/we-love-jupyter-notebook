@@ -231,10 +231,19 @@ class KernelSession:
             self._manager = self._client = None
             self._busy_attempt_id = None
             self._restart_required = False
+        errors: list[Exception] = []
         if client is not None:
-            client.stop_channels()
+            try:
+                client.stop_channels()
+            except Exception as error:
+                errors.append(error)
         if manager is not None:
-            manager.shutdown_kernel(now=True)
+            try:
+                manager.shutdown_kernel(now=True)
+            except Exception as error:
+                errors.append(error)
+        if errors:
+            raise ExceptionGroup("Kernel shutdown cleanup failed", errors)
 
     def _ensure_started(self) -> None:
         if self._manager is not None:

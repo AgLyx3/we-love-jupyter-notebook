@@ -55,3 +55,25 @@ def test_import_aliases_and_direct_side_effect_calls(source, pattern):
     result = RiskyCellClassifier().classify(source)
     assert result.level == "confirm"
     assert pattern in result.matched_patterns
+
+
+@pytest.mark.parametrize("source", [
+    "mode = input('mode')\nopen('out.txt', mode)",
+    "from pathlib import Path\nmode = choose_mode()\nPath('out.txt').open(mode)",
+])
+def test_runtime_controlled_open_modes_require_confirmation(source):
+    result = RiskyCellClassifier().classify(source)
+    assert result.level == "confirm"
+    assert "file_write" in result.matched_patterns
+
+
+@pytest.mark.parametrize("source", [
+    "runner = eval\nrunner(source)",
+    "import builtins as b\nrunner = b.exec\nrunner(source)",
+    "from builtins import eval as evaluate\nevaluate(source)",
+    "getattr(__builtins__, 'exec')(source)",
+])
+def test_dynamic_execution_aliases_and_getattr_require_confirmation(source):
+    result = RiskyCellClassifier().classify(source)
+    assert result.level == "confirm"
+    assert "dynamic_execution" in result.matched_patterns

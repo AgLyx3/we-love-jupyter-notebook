@@ -61,7 +61,7 @@ class RiskyCellClassifier:
         except SyntaxError:
             self._fallback(source, matches)
         else:
-            aliases = self._import_aliases(tree)
+            aliases = self._aliases(tree)
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call):
                     name = self._name(node.func, aliases)
@@ -73,6 +73,8 @@ class RiskyCellClassifier:
                     if name.endswith(".open") and self._open_writes(node, mode_index=0):
                         matches.append(("file_write", "Writes a file"))
                     if name in {"eval", "exec", "builtins.eval", "builtins.exec"}:
+                        matches.append(("dynamic_execution", "Executes dynamic code"))
+                    if self._is_dynamic_getattr(node.func, aliases):
                         matches.append(("dynamic_execution", "Executes dynamic code"))
                     if name.endswith((".write_text", ".write_bytes", ".mkdir", ".touch", ".rename", ".replace")):
                         matches.append(("file_write", "Writes a file"))
@@ -113,7 +115,7 @@ class RiskyCellClassifier:
         return ""
 
     @staticmethod
-    def _import_aliases(tree: ast.Module) -> dict[str, str]:
+    def _aliases(tree: ast.Module) -> dict[str, str]:
         aliases: dict[str, str] = {}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -124,17 +126,63 @@ class RiskyCellClassifier:
                 for item in node.names:
                     if item.name != "*":
                         aliases[item.asname or item.name] = f"{node.module}.{item.name}"
+        # Resolve simple callable aliases such as ``runner = builtins.exec``.
+        # Iterate so short alias chains are handled without evaluating code.
+        assignments = [
+            node for node in ast.walk(tree)
+            if isinstance(node, (ast.Assign, ast.AnnAssign))
+        ]
+        for _ in range(len(assignments) + 1):
+            changed = False
+            for node in assignments:
+                value = node.value
+                if value is None:
+                    continue
+                resolved = RiskyCellClassifier._name(value, aliases)
+                if resolved not in {"eval", "exec", "builtins.eval", "builtins.exec"}:
+                    continue
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    if isinstance(target, ast.Name) and aliases.get(target.id) != resolved:
+                        aliases[target.id] = resolved
+                        changed = True
+            if not changed:
+                break
         return aliases
 
     @staticmethod
     def _open_writes(node: ast.Call, *, mode_index: int = 1) -> bool:
         mode = None
-        if len(node.args) > mode_index and isinstance(node.args[mode_index], ast.Constant):
-            mode = node.args[mode_index].value
+        specified = False
+        if len(node.args) > mode_index:
+            specified = True
+            if isinstance(node.args[mode_index], ast.Constant):
+                mode = node.args[mode_index].value
         for keyword in node.keywords:
-            if keyword.arg == "mode" and isinstance(keyword.value, ast.Constant):
-                mode = keyword.value.value
+            if keyword.arg == "mode":
+                specified = True
+                mode = (
+                    keyword.value.value
+                    if isinstance(keyword.value, ast.Constant)
+                    else None
+                )
+        if specified and not isinstance(mode, str):
+            return True
         return isinstance(mode, str) and any(flag in mode for flag in "wax+")
+
+    @staticmethod
+    def _is_dynamic_getattr(
+        node: ast.AST, aliases: dict[str, str],
+    ) -> bool:
+        if not isinstance(node, ast.Call):
+            return False
+        if RiskyCellClassifier._name(node.func, aliases) != "getattr":
+            return False
+        return (
+            len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value in {"eval", "exec"}
+        )
 
     @staticmethod
     def _looks_like_cloud_client(name: str) -> bool:

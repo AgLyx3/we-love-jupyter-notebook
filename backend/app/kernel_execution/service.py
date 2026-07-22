@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import logging
 from datetime import datetime, timezone
 from threading import RLock, Thread
 from typing import Any
@@ -22,8 +21,6 @@ from .models import (
 )
 from .risky_cell_classifier import RiskyCellClassifier
 
-
-logger = logging.getLogger(__name__)
 
 DEFAULT_TERMINAL_OPERATION_LIMIT = 100
 DEFAULT_TERMINAL_RETENTION_SECONDS = 3600
@@ -72,12 +69,13 @@ class KernelExecutionService:
             with self._lock:
                 self._operations[operation_id] = operation
                 self._prune_history_locked()
+                created = self._copy_operation(operation)
             self._publish(operation)
         except Exception:
             self.documents.coordinator.release(lease)
             raise
         Thread(target=self._run_manual_guarded, args=(operation, lease, cell_id), daemon=True, name=f"execution-{operation_id[:8]}").start()
-        return self.get(operation_id)
+        return created
 
     def _run_manual_guarded(self, operation: ExecutionOperation, lease: MutationLease, cell_id: str | None) -> None:
         try:
@@ -120,8 +118,9 @@ class KernelExecutionService:
         with self._lock:
             self._operations[operation.operation_id] = operation
             self._prune_history_locked()
+            created = self._copy_operation(operation)
         self._publish(operation)
-        return self.get(operation.operation_id)
+        return created
 
     def run_downstream(
         self, operation_id: str, *, changed_cell_ids: set[str],
@@ -138,7 +137,8 @@ class KernelExecutionService:
             self._run(operation, lease, range(start, len(snapshot.notebook["cells"])), prompt_for_risk=True)
         except Exception as error:
             self._fail(operation, error)
-        return self.get(operation.operation_id)
+        with self._lock:
+            return self._copy_operation(operation)
 
     def _run(self, operation: ExecutionOperation, lease: MutationLease, indexes, *, prompt_for_risk: bool) -> None:
         self._ensure_kernel_session(operation.session_id)
@@ -326,7 +326,8 @@ class KernelExecutionService:
                 attempt.active = False
             attempt.decision_event.set()
         self._publish(operation)
-        return self.get(operation.operation_id)
+        with self._lock:
+            return self._copy_operation(operation)
 
     def approve(self, attempt_id: str, **kwargs) -> ExecutionOperation:
         return self.decide(attempt_id, "approve", **kwargs)
@@ -370,7 +371,8 @@ class KernelExecutionService:
         if correlation[1] == attempt_id:
             self.kernel.interrupt_correlated(*correlation)
         self._publish(operation)
-        return self.get(operation.operation_id)
+        with self._lock:
+            return self._copy_operation(operation)
 
     def cancel_parent(self, turn_id: str) -> None:
         with self._lock:
@@ -472,17 +474,20 @@ class KernelExecutionService:
         self.kernel.shutdown()
 
     def _ensure_kernel_session(self, notebook_session_id: str) -> None:
+        old_kernel = None
         with self._lock:
             if self._kernel_notebook_session_id not in {None, notebook_session_id}:
-                self.kernel.shutdown()
+                old_kernel = self.kernel
                 self.kernel = KernelSession(
-                    startup_timeout=self.kernel.startup_timeout,
-                    cell_timeout=self.kernel.cell_timeout,
-                    recovery_timeout=self.kernel.recovery_timeout,
-                    max_output_items=self.kernel.max_output_items,
-                    max_output_bytes=self.kernel.max_output_bytes,
+                    startup_timeout=old_kernel.startup_timeout,
+                    cell_timeout=old_kernel.cell_timeout,
+                    recovery_timeout=old_kernel.recovery_timeout,
+                    max_output_items=old_kernel.max_output_items,
+                    max_output_bytes=old_kernel.max_output_bytes,
                 )
             self._kernel_notebook_session_id = notebook_session_id
+        if old_kernel is not None:
+            old_kernel.shutdown()
 
     def _on_session_replaced(self, session_id: str, _revision: int) -> None:
         with self._lock:
@@ -500,12 +505,7 @@ class KernelExecutionService:
             )
             self.kernel = replacement
             self._kernel_notebook_session_id = session_id
-        try:
-            old_kernel.shutdown()
-        except Exception:
-            logger.exception(
-                "Failed to shut down kernel for replaced notebook session %s", old,
-            )
+        old_kernel.shutdown()
 
     def _set_operation_state(self, operation: ExecutionOperation, state: str) -> None:
         with self._lock:
@@ -541,40 +541,21 @@ class KernelExecutionService:
     def _bound_operation_outputs_locked(
         self, operation: ExecutionOperation,
     ) -> None:
-        summary_bytes = len(json.dumps(
-            serialize_operation_summary(operation), default=str,
-            separators=(",", ":"),
-        ).encode())
-        available = max(0, self.max_history_bytes - summary_bytes)
-        retained: list[tuple[CellExecutionAttempt, int]] = []
-        total = 0
+        retained: list[CellExecutionAttempt] = []
         for attempt in operation.attempts:
-            if not attempt.outputs:
-                continue
-            size = len(json.dumps(
-                attempt.outputs, default=str, separators=(",", ":"),
-            ).encode())
-            retained.append((attempt, size))
-            total += size
-        for attempt, size in retained:
-            if total <= available:
+            if attempt.outputs:
+                retained.append(attempt)
+        for attempt in retained:
+            if self._operation_history_size(operation) <= self.max_history_bytes:
                 break
             attempt.outputs = []
             attempt.outputs_truncated = True
-            total -= size
 
     @staticmethod
     def _operation_history_size(operation: ExecutionOperation) -> int:
-        size = len(json.dumps(
-            serialize_operation_summary(operation), default=str,
-            separators=(",", ":"),
+        return len(json.dumps(
+            serialize_operation(operation), default=str, separators=(",", ":"),
         ).encode())
-        for attempt in operation.attempts:
-            if attempt.outputs:
-                size += len(json.dumps(
-                    attempt.outputs, default=str, separators=(",", ":"),
-                ).encode())
-        return size
 
     def _prune_history_locked(self) -> None:
         now = datetime.now(timezone.utc)
@@ -597,7 +578,7 @@ class KernelExecutionService:
         while terminal and (
             len(terminal) > self.max_terminal_operations
             or expired
-            or (total_bytes > self.max_history_bytes and len(terminal) > 1)
+            or total_bytes > self.max_history_bytes
         ):
             victim = next(
                 (item for item in terminal if item.operation_id in expired),
