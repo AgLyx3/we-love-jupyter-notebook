@@ -947,6 +947,9 @@ attempts, and terminal turn-scope history so old resource IDs become
 inaccessible. Listener cleanup failures do not roll back the committed close;
 the response includes cleanup diagnostics.
 The next upload is a new first upload and omits replacement preconditions.
+Uploading a replacement notebook performs the same purge of outgoing-session
+turn, checkpoint, source-change, execution, attempt, and terminal-scope records;
+old resource IDs cannot be fetched after either replacement or close.
 
 ## Stack
 

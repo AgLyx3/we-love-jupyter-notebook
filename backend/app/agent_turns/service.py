@@ -500,10 +500,8 @@ class AgentTurnService:
                         }
 
     def _on_session_replaced(
-        self, session_id: str | None, _revision: int,
+        self, _session_id: str | None, _revision: int,
     ) -> None:
-        if session_id is not None:
-            return
         with self._lock:
             self._turns.clear()
             self._latest_applied_turn_id = None

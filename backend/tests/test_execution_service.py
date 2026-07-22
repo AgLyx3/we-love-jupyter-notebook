@@ -183,6 +183,38 @@ def test_notebook_close_purges_execution_and_attempt_lookups():
     assert service._attempts == {}
 
 
+def test_notebook_replacement_purges_execution_and_attempt_lookups():
+    class ReplacementKernel(FakeKernel):
+        max_output_items = 1000
+        max_output_bytes = 5 * 1024 * 1024
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook("x = 1"))
+    service = KernelExecutionService(
+        documents=documents, kernel=ReplacementKernel(),
+    )
+    service._kernel_notebook_session_id = snapshot.session_id
+    operation = wait_terminal(service, service.start_cell(
+        cell_id="cell-0", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    ).operation_id)
+    attempt_id = operation.attempts[0].attempt_id
+    current = documents.get_snapshot()
+
+    replacement = documents.import_notebook(
+        notebook("y = 2"), expected_session_id=current.session_id,
+        expected_revision=current.revision,
+    )
+
+    assert replacement.session_id != snapshot.session_id
+    with pytest.raises(ExecutionNotFound):
+        service.get(operation.operation_id)
+    with pytest.raises(ExecutionNotFound):
+        service.get(attempt_id)
+    assert service._operations == {}
+    assert service._attempts == {}
+
+
 def test_kernel_session_shutdown_attempts_both_cleanup_steps_and_reports_all_errors():
     calls = []
 

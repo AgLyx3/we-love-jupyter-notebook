@@ -92,6 +92,31 @@ def test_close_purges_turn_changes_checkpoint_and_lookup(notebook_payload):
     assert turns._latest_applied_turn_id is None
 
 
+def test_replacement_purges_turn_changes_checkpoint_and_lookup(notebook_payload):
+    documents, _scopes, turns, snapshot = _services(
+        notebook_payload,
+        [FakeAttempt(edits={"editable/cell_editable.py": "value = 2\n"})],
+    )
+    turn = turns.start(
+        prompt="change", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    current = documents.get_snapshot()
+
+    replacement = documents.import_notebook(
+        notebook_payload(cell_ids=("new-intro", "new-editable")),
+        expected_session_id=current.session_id,
+        expected_revision=current.revision,
+    )
+
+    assert replacement.session_id != snapshot.session_id
+    with pytest.raises(AgentTurnNotFound):
+        turns.get(turn.turn_id)
+    assert turns.history_for_session(snapshot.session_id) == []
+    assert turns._turns == {}
+    assert turns._latest_applied_turn_id is None
+
+
 def test_session_status_persists_bounded_turn_history_with_frozen_scope(
     notebook_payload,
 ):

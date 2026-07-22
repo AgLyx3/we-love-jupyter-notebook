@@ -144,6 +144,26 @@ def test_close_purges_terminal_scope_history(notebook_payload):
     assert scopes.history == ()
 
 
+def test_replacement_purges_terminal_scope_history(notebook_payload):
+    documents, snapshot = _loaded(notebook_payload)
+    scopes = TurnScopeService(documents)
+    scopes.expire(FrozenTurnScope(
+        turn_id="old-turn", session_id=snapshot.session_id,
+        notebook_revision=snapshot.revision,
+        editable_cell_ids=("editable",), context_cell_ids=("intro",),
+        prompt="old scoped prompt", frozen_at=datetime.now(timezone.utc),
+    ), "completed")
+
+    replacement = documents.import_notebook(
+        notebook_payload(cell_ids=("new-intro", "new-editable")),
+        expected_session_id=snapshot.session_id,
+        expected_revision=snapshot.revision,
+    )
+
+    assert replacement.session_id != snapshot.session_id
+    assert scopes.history == ()
+
+
 def test_scope_is_bound_to_notebook_revision(notebook_payload):
     documents, snapshot = _loaded(notebook_payload)
     scopes = TurnScopeService(documents)

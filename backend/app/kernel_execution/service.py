@@ -500,10 +500,11 @@ class KernelExecutionService:
     ) -> None:
         with self._lock:
             old = self._kernel_notebook_session_id
+            replacing_session = old is not None and old != session_id
             if session_id is not None and (old is None or old == session_id):
                 self._kernel_notebook_session_id = session_id
                 return
-            if session_id is None:
+            if session_id is None or replacing_session:
                 self._operations.clear()
                 self._attempts.clear()
             old_kernel = self.kernel
