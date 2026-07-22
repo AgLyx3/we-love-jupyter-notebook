@@ -1,10 +1,12 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
 import App from "./App";
 import AgentChatPanel, { type TurnRecord } from "./agentChat/AgentChatPanel";
 import LineDiff from "./notebook/LineDiff";
+import { Outputs } from "./notebook/NotebookCell";
+import RiskyExecutionDialog from "./execution/RiskyExecutionDialog";
 import type { AgentTurn, ExecutionOperation, NotebookSnapshot, TurnScope } from "./api/client";
 import { EventSourceMock } from "./test/setup";
 
@@ -22,7 +24,7 @@ const operation: ExecutionOperation = {
   operationId: "op-1", sessionId: "session-1", baseRevision: 3, currentDocumentRevision: 7, kind: "manual", parentTurnId: null, state: "running", currentExecutionAttemptId: "attempt-1",
   attempts: [{ executionAttemptId: "attempt-1", cellId: "code-1", cellIndex: 0, state: "running", risk: { level: "safe", reasons: [], matchedPatterns: [] }, decision: null, outputs: [], executionCount: null, error: null }], error: null, createdAt: "", completedAt: null,
 };
-const turn = (id: string, state = "completed"): AgentTurn => ({ turnId: id, sessionId: "session-1", baseRevision: 3, prompt: `Prompt ${id}`, state, attempts: 1, finalOutput: "Done", appliedRevision: state === "completed" ? 4 : null, executionOperationId: null, changes: [], error: null, createdAt: "", completedAt: state === "completed" ? "" : null });
+const turn = (id: string, state = "completed"): AgentTurn => ({ turnId: id, sessionId: "session-1", baseRevision: 3, prompt: `Prompt ${id}`, editableCellIds: ["code-1"], contextCellIds: [], undoEligible: state === "completed", state, attempts: 1, finalOutput: "Done", appliedRevision: state === "completed" ? 4 : null, executionOperationId: null, changes: [], error: null, createdAt: "", completedAt: state === "completed" ? "" : null });
 
 function json(value: unknown, status = 200) { return Promise.resolve(new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } })); }
 function baseFetch(input: RequestInfo | URL, init?: RequestInit) {
@@ -90,6 +92,19 @@ describe("remediation behaviors", () => {
     expect(diff.querySelector(".diff-added")).toHaveTextContent("new");
   });
 
+  it("uses a bounded regional diff for large cells", () => {
+    const prefix = Array.from({ length: 1_000 }, (_, index) => `prefix ${index}`);
+    const suffix = Array.from({ length: 1_000 }, (_, index) => `suffix ${index}`);
+    render(<LineDiff before={[...prefix, "old region", ...suffix].join("\n")} after={[...prefix, "new region", ...suffix].join("\n")} />);
+    const diff = screen.getByLabelText("Agent source diff");
+    expect(diff.querySelectorAll(".diff-removed")).toHaveLength(1);
+    expect(diff.querySelector(".diff-removed")).toHaveTextContent("old region");
+    expect(diff.querySelectorAll(".diff-added")).toHaveLength(1);
+    expect(diff.querySelector(".diff-added")).toHaveTextContent("new region");
+    expect(diff.querySelectorAll(".diff-same").length).toBeLessThanOrEqual(402);
+    expect(diff).toHaveTextContent("same lines omitted");
+  });
+
   it("shows frozen scope for every turn and selects historical outcomes", async () => {
     const history: TurnRecord[] = [
       { turn: turn("two", "failed"), prompt: "Second prompt", editableCellIds: ["code-1"], contextCellIds: [] },
@@ -153,5 +168,73 @@ describe("remediation behaviors", () => {
     expect(frozen).toHaveTextContent("a = 1");
     await userEvent.click(rows[0]);
     expect(onFocus).toHaveBeenCalledWith("code-1");
+  });
+
+  it("hydrates completed turn history from session status after reload", async () => {
+    const historical = { ...turn("persisted"), prompt: "Persisted backend turn", editableCellIds: ["code-1"], contextCellIds: ["code-1"] };
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      if (String(input).endsWith("/session/status")) return json({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: null, turnHistory: [historical] });
+      return baseFetch(input, init);
+    });
+    render(<App />);
+    expect(await screen.findByText("Persisted backend turn")).toBeInTheDocument();
+    expect(within(screen.getByLabelText("Frozen turn scope")).getAllByTitle("Cell ID: code-1")).toHaveLength(2);
+  });
+
+  it("ignores late refreshes and clears absent active operations", async () => {
+    let currentCall = 0; let statusCall = 0;
+    let resolveOlder!: (value: Response) => void; let resolveNewer!: (value: Response) => void;
+    const older = new Promise<Response>((resolve) => { resolveOlder = resolve; });
+    const newer = new Promise<Response>((resolve) => { resolveNewer = resolve; });
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current")) { currentCall += 1; if (currentCall === 2) return older; if (currentCall === 3) return newer; return json(notebook); }
+      if (path.endsWith("/session/status")) { statusCall += 1; return json({ sessionId: "session-1", documentRevision: statusCall === 1 ? 3 : 5, activeTurn: null, activeExecution: statusCall === 1 ? operation : null, turnHistory: [] }); }
+      return baseFetch(input, init);
+    });
+    render(<App />);
+    await screen.findByText("Revision 3");
+    expect(screen.getByLabelText("Run code cell 1")).toBeDisabled();
+    const source = EventSourceMock.instances[0];
+    source.emit("notebook.updated", { revision: 4 }, 1);
+    source.emit("notebook.updated", { revision: 5 }, 2);
+    resolveNewer(new Response(JSON.stringify({ ...notebook, revision: 5 }), { headers: { "Content-Type": "application/json" } }));
+    await waitFor(() => expect(screen.getByText("Revision 5")).toBeInTheDocument());
+    expect(screen.getByLabelText("Run code cell 1")).toBeEnabled();
+    resolveOlder(new Response(JSON.stringify({ ...notebook, revision: 4 }), { headers: { "Content-Type": "application/json" } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByText("Revision 5")).toBeInTheDocument();
+  });
+
+  it("renders raster and SVG notebook outputs as images", () => {
+    render(<Outputs outputs={[
+      { output_type: "display_data", data: { "image/png": "aGVsbG8=" } },
+      { output_type: "display_data", data: { "image/svg+xml": "<svg xmlns='http://www.w3.org/2000/svg'></svg>" } },
+    ]} />);
+    expect(screen.getByAltText("Cell output 1")).toHaveAttribute("src", "data:image/png;base64,aGVsbG8=");
+    expect(screen.getByAltText("SVG cell output 2").getAttribute("src")).toMatch(/^data:image\/svg\+xml;charset=utf-8,/);
+  });
+
+  it("surfaces operation and attempt errors in execution status", () => {
+    const failed = { ...operation, state: "timed_out", error: { code: "cell_timed_out", message: "Cell execution timed out", details: {} }, attempts: [{ ...operation.attempts[0], error: { code: "kernel_error", message: "Kernel stopped", details: {} } }] };
+    render(<AgentChatPanel notebook={notebook} scope={scope} turn={null} activeTurn={null} history={[]} operation={failed} busy={false} mutationsDisabled={false} onSubmit={vi.fn()} onCancel={vi.fn()} onUndo={vi.fn()} onClearScope={vi.fn()} onDecision={vi.fn()} onSelectTurn={vi.fn()} onFocusCell={vi.fn()} onDropCell={vi.fn()} />);
+    expect(screen.getByText("Cell execution timed out")).toBeInTheDocument();
+    expect(screen.getByText("Cell 1: Kernel stopped")).toBeInTheDocument();
+  });
+
+  it("focuses and contains the approval dialog and cancels on Escape", async () => {
+    const decide = vi.fn();
+    const risky = { ...operation, kind: "agent_downstream", parentTurnId: "turn-1", state: "awaiting_approval", attempts: [{ ...operation.attempts[0], state: "awaiting_approval", risk: { level: "confirm", reasons: ["Risk"], matchedPatterns: ["pattern"] } }] };
+    const outside = document.createElement("button"); document.body.append(outside); outside.focus();
+    const { unmount } = render(<RiskyExecutionDialog operation={risky} attempt={risky.attempts[0]} busy={false} onDecision={decide} />);
+    const approve = screen.getByRole("button", { name: "Approve and run" });
+    expect(approve).toHaveFocus();
+    fireEvent.keyDown(approve, { key: "Tab" });
+    expect(screen.getByRole("button", { name: "Cancel run" })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" });
+    expect(decide).toHaveBeenCalledWith("cancel");
+    unmount();
+    expect(outside).toHaveFocus();
+    outside.remove();
   });
 });

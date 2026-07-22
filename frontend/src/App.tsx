@@ -30,24 +30,34 @@ export default function App() {
   const operationRef = useRef(operation);
   const scopeRef = useRef(scope);
   const eventCursorRef = useRef({ sessionId: "", sequence: 0 });
+  const refreshGenerationRef = useRef(0);
+  const turnGenerationRef = useRef(new Map<string, number>());
+  const executionGenerationRef = useRef(new Map<string, number>());
+  const resourceEpochRef = useRef(0);
   useEffect(() => { snapshotRef.current = notebook; }, [notebook]);
   useEffect(() => { turnRef.current = turn; }, [turn]);
   useEffect(() => { operationRef.current = operation; }, [operation]);
   useEffect(() => { scopeRef.current = scope; }, [scope]);
 
   const refresh = useCallback(async () => {
+    const generation = ++refreshGenerationRef.current;
     try {
       const current = await api.current();
-      setNotebook(current);
       const [nextScope, nextKernel, status] = await Promise.all([api.scope(), api.kernel(), api.status()]);
+      if (generation !== refreshGenerationRef.current) return snapshotRef.current;
+      const existing = snapshotRef.current;
+      if (existing && existing.sessionId === current.sessionId && existing.revision > current.revision) return existing;
+      const nextNotebook = current;
+      resourceEpochRef.current += 1;
+      setNotebook(nextNotebook);
       setScope(nextScope);
       setKernel(nextKernel);
-      if (status.activeTurn) {
-        setTurn(status.activeTurn); setSelectedTurnId((id) => id ?? status.activeTurn!.turnId);
-        setHistory((items) => upsertRecord(items, status.activeTurn!, nextScope, status.activeTurn!.prompt ?? "Active agent turn"));
-      }
-      if (status.activeExecution) setOperation(status.activeExecution);
-      return current;
+      const hydrated = (status.turnHistory ?? []).map(turnToRecord).slice(0, 50);
+      setHistory(hydrated);
+      setTurn(status.activeTurn ?? hydrated[0]?.turn ?? null);
+      setSelectedTurnId((selected) => hydrated.some((item) => item.turn.turnId === selected) ? selected : hydrated[0]?.turn.turnId ?? null);
+      setOperation(status.activeExecution);
+      return nextNotebook;
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) { setNotebook(null); setScope(emptyScope); return null; }
       throw error;
@@ -57,17 +67,34 @@ export default function App() {
   useEffect(() => { refresh().catch((error) => showError(error)).finally(() => setLoading(false)); }, [refresh]);
 
   const fetchTurn = useCallback(async (id: string) => {
+    const epoch = resourceEpochRef.current;
+    const generation = (turnGenerationRef.current.get(id) ?? 0) + 1;
+    turnGenerationRef.current.set(id, generation);
     try {
-      const next = await api.turn(id); setTurn(next); setSelectedTurnId((selected) => selected ?? id);
+      const next = await api.turn(id);
+      if (turnGenerationRef.current.get(id) !== generation || resourceEpochRef.current !== epoch) return;
+      setTurn(next); setSelectedTurnId((selected) => selected ?? id);
       setHistory((items) => upsertRecord(items, next, scopeRef.current, items.find((item) => item.turn.turnId === id)?.prompt ?? "Agent turn"));
-      if (next.executionOperationId) setOperation(await api.execution(next.executionOperationId));
+      if (next.executionOperationId) {
+        const operationId = next.executionOperationId;
+        const operationGeneration = (executionGenerationRef.current.get(operationId) ?? 0) + 1;
+        executionGenerationRef.current.set(operationId, operationGeneration);
+        const nextOperation = await api.execution(operationId);
+        if (turnGenerationRef.current.get(id) !== generation || executionGenerationRef.current.get(operationId) !== operationGeneration || resourceEpochRef.current !== epoch) return;
+        setOperation(nextOperation);
+      }
       if (terminalTurns.has(next.state)) await refresh();
     } catch (error) { showError(error); }
   }, [refresh]);
 
   const fetchExecution = useCallback(async (id: string) => {
+    const epoch = resourceEpochRef.current;
+    const generation = (executionGenerationRef.current.get(id) ?? 0) + 1;
+    executionGenerationRef.current.set(id, generation);
     try {
-      const next = await api.execution(id); setOperation(next);
+      const next = await api.execution(id);
+      if (executionGenerationRef.current.get(id) !== generation || resourceEpochRef.current !== epoch) return;
+      setOperation(next);
       if (terminalExecutions.has(next.state)) await refresh();
       else setKernel(await api.kernel());
     } catch (error) { showError(error); }
@@ -176,7 +203,11 @@ function upsertRecord(items: TurnRecord[], turn: AgentTurn, scope?: TurnScope, p
     contextCellIds: existing?.contextCellIds ?? (scope ? [...scope.contextCellIds] : []),
     prompt: prompt ?? existing?.prompt ?? "Agent turn",
   };
-  return [record, ...items.filter((item) => item.turn.turnId !== turn.turnId)];
+  return [record, ...items.filter((item) => item.turn.turnId !== turn.turnId)].slice(0, 50);
+}
+
+function turnToRecord(turn: AgentTurn): TurnRecord {
+  return { turn, editableCellIds: turn.editableCellIds, contextCellIds: turn.contextCellIds, prompt: turn.prompt };
 }
 
 function Notice({ notice, onClose }: { notice: { tone: "error" | "warning"; text: string }; onClose: () => void }) {

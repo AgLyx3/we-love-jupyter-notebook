@@ -22,12 +22,15 @@ class MutationRequest(BaseModel):
     expected_revision: int = Field(alias="expectedDocumentRevision")
 
 
-def serialize_turn(turn: AgentTurn) -> dict[str, Any]:
+def serialize_turn(turn: AgentTurn, *, undo_eligible: bool = False) -> dict[str, Any]:
     return {
         "turnId": turn.turn_id,
         "sessionId": turn.session_id,
         "baseRevision": turn.base_revision,
         "prompt": turn.prompt,
+        "editableCellIds": list(turn.editable_cell_ids),
+        "contextCellIds": list(turn.context_cell_ids),
+        "undoEligible": undo_eligible,
         "state": turn.state,
         "attempts": turn.attempts,
         "finalOutput": turn.final_output,
@@ -45,25 +48,31 @@ def serialize_turn(turn: AgentTurn) -> dict[str, Any]:
 
 @router.post("", status_code=202)
 def start_turn(body: StartTurnRequest, request: Request) -> dict[str, Any]:
-    return serialize_turn(request.app.state.agent_turn_service.start(
+    service = request.app.state.agent_turn_service
+    turn = service.start(
         prompt=body.prompt, session_id=body.session_id,
         expected_revision=body.expected_revision,
-    ))
+    )
+    return serialize_turn(turn, undo_eligible=service.is_undo_eligible(turn))
 
 
 @router.get("/{turn_id}")
 def get_turn(turn_id: str, request: Request) -> dict[str, Any]:
-    return serialize_turn(request.app.state.agent_turn_service.get(turn_id))
+    service = request.app.state.agent_turn_service
+    turn = service.get(turn_id)
+    return serialize_turn(turn, undo_eligible=service.is_undo_eligible(turn))
 
 
 @router.post("/{turn_id}/cancel")
 def cancel_turn(
     turn_id: str, body: MutationRequest, request: Request,
 ) -> dict[str, Any]:
-    return serialize_turn(request.app.state.agent_turn_service.cancel(
+    service = request.app.state.agent_turn_service
+    turn = service.cancel(
         turn_id, session_id=body.session_id,
         expected_revision=body.expected_revision,
-    ))
+    )
+    return serialize_turn(turn, undo_eligible=service.is_undo_eligible(turn))
 
 
 @router.post("/{turn_id}/undo")

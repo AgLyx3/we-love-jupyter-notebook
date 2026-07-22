@@ -53,6 +53,65 @@ def test_noop_turn_does_not_increment_revision(notebook_payload):
     assert documents.get_snapshot().revision == snapshot.revision
 
 
+def test_session_status_persists_bounded_turn_history_with_frozen_scope(
+    notebook_payload,
+):
+    app = create_app(agent_adapter=FakeAgentAdapter())
+    with TestClient(app) as api:
+        uploaded = api.post(
+            "/notebooks/upload",
+            files={"file": ("sample.ipynb", notebook_payload(), "application/json")},
+        ).json()
+        preconditions = {
+            "sessionId": uploaded["sessionId"],
+            "expectedDocumentRevision": uploaded["revision"],
+        }
+        api.post("/turn-scope/editable-cells", json={
+            **preconditions, "cellId": "editable",
+        })
+        api.post("/turn-scope/context-cells", json={
+            **preconditions, "cellId": "intro",
+        })
+        created = api.post("/agent-turns", json={
+            **preconditions, "prompt": "remember this turn",
+        }).json()
+        for _ in range(100):
+            current = api.get(f"/agent-turns/{created['turnId']}").json()
+            if current["state"] == "completed":
+                break
+            time.sleep(.01)
+        status = api.get("/session/status").json()
+        assert status["activeTurn"] is None
+        assert len(status["turnHistory"]) == 1
+        stored = status["turnHistory"][0]
+        assert stored["prompt"] == "remember this turn"
+        assert stored["editableCellIds"] == ["editable"]
+        assert stored["contextCellIds"] == ["intro"]
+        assert stored["state"] == "completed"
+        assert stored["finalOutput"] == ""
+        assert stored["changes"] == []
+        assert stored["undoEligible"] is False
+
+
+def test_completed_turn_memory_is_bounded(notebook_payload):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=FakeAgentAdapter(), timeout=1,
+    )
+    for index in range(55):
+        scopes.add("editable", editable=True)
+        turns.start(
+            prompt=f"turn {index}", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision, background=False,
+        )
+    history = turns.history_for_session(snapshot.session_id, limit=100)
+    assert len(history) == 50
+    assert history[0].prompt == "turn 54"
+    assert history[-1].prompt == "turn 5"
+
+
 def test_turn_rejects_stale_revision_and_releases_lease(notebook_payload):
     documents, _scopes, turns, snapshot = _services(notebook_payload, [FakeAttempt()])
     with pytest.raises(RevisionConflict):

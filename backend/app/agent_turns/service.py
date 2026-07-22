@@ -27,6 +27,7 @@ from ..session_events.service import SessionEventService
 
 
 TERMINAL_STATES = {"completed", "failed", "cancelled", "validation_incomplete"}
+MAX_TERMINAL_TURNS = 50
 
 
 class AgentTurnNotFound(NotebookDomainError):
@@ -56,6 +57,8 @@ class AgentTurn:
     session_id: str
     base_revision: int
     prompt: str
+    editable_cell_ids: tuple[str, ...] = ()
+    context_cell_ids: tuple[str, ...] = ()
     state: str = "created"
     attempts: int = 0
     final_output: str = ""
@@ -115,6 +118,8 @@ class AgentTurnService:
             turn = AgentTurn(
                 turn_id=turn_id, session_id=session_id,
                 base_revision=expected_revision, prompt=prompt,
+                editable_cell_ids=scope.editable_cell_ids,
+                context_cell_ids=scope.context_cell_ids,
                 checkpoint=copy.deepcopy(snapshot.notebook),
             )
             with self._lock:
@@ -158,6 +163,30 @@ class AgentTurnService:
             result.checkpoint = copy.deepcopy(result.checkpoint)
             result.error = copy.deepcopy(result.error)
             return result
+
+    def history_for_session(
+        self, session_id: str, *, limit: int = 50,
+    ) -> list[AgentTurn]:
+        with self._lock:
+            turns = sorted(
+                (turn for turn in self._turns.values() if turn.session_id == session_id),
+                key=lambda item: item.created_at, reverse=True,
+            )[:limit]
+            return [self.get(turn.turn_id) for turn in turns]
+
+    def is_undo_eligible(self, turn: AgentTurn) -> bool:
+        with self._lock:
+            if self._latest_applied_turn_id != turn.turn_id:
+                return False
+        try:
+            snapshot = self.documents.get_snapshot()
+        except NotebookDomainError:
+            return False
+        return (
+            turn.applied_revision is not None
+            and turn.session_id == snapshot.session_id
+            and turn.applied_revision == snapshot.revision
+        )
 
     def cancel(
         self, turn_id: str, *, session_id: str, expected_revision: int,
@@ -432,3 +461,12 @@ class AgentTurnService:
                 "executionOperationId": turn.execution_operation_id,
                 "error": copy.deepcopy(turn.error),
             })
+        terminal = sorted(
+            (item for item in self._turns.values() if item.state in TERMINAL_STATES),
+            key=lambda item: item.completed_at or item.created_at,
+            reverse=True,
+        )
+        for expired in terminal[MAX_TERMINAL_TURNS:]:
+            self._turns.pop(expired.turn_id, None)
+            if self._latest_applied_turn_id == expired.turn_id:
+                self._latest_applied_turn_id = None

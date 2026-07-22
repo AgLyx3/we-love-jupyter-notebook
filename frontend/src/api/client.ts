@@ -34,6 +34,9 @@ export interface AgentTurn {
   sessionId: string;
   baseRevision: number;
   prompt: string;
+  editableCellIds: string[];
+  contextCellIds: string[];
+  undoEligible: boolean;
   state: string;
   attempts: number;
   finalOutput: string | null;
@@ -83,6 +86,7 @@ export interface SessionStatus {
   documentRevision: number;
   activeTurn: AgentTurn | null;
   activeExecution: ExecutionOperation | null;
+  turnHistory: AgentTurn[];
 }
 
 export interface ApiErrorBody { code: string; message: string; details: Record<string, unknown> }

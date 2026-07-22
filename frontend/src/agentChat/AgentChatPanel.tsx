@@ -29,10 +29,10 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
         {turn.finalOutput && <p>{turn.finalOutput}</p>}
         {turn.error && <p className="error-text">{turn.error.message}</p>}
         {turn.changes.length > 0 && <p>{turn.changes.length} cell{turn.changes.length === 1 ? "" : "s"} changed. Review the inline diff.</p>}
-        <div className="turn-actions">{active && <button onClick={onCancel}><Square /> Cancel turn</button>}{turn.appliedRevision != null && !active && <button disabled={mutationsDisabled} onClick={onUndo}><RotateCcw /> Undo turn</button>}</div>
+        <div className="turn-actions">{active && <button onClick={onCancel}><Square /> Cancel turn</button>}{turn.undoEligible && !active && <button disabled={mutationsDisabled} onClick={onUndo}><RotateCcw /> Undo turn</button>}</div>
       </div>}
       {selectedRecord && <section className="frozen-scope" aria-label="Frozen turn scope"><h3>Frozen scope</h3><ScopeCellList notebook={notebook} editableCellIds={selectedRecord.editableCellIds} contextCellIds={selectedRecord.contextCellIds} onFocusCell={onFocusCell} /></section>}
-      {operation && <div className="execution-status">Execution: {operation.state.replaceAll("_", " ")}</div>}
+      {operation && <div className={`execution-status ${operation.error ? "has-error" : ""}`}><span>Execution: {operation.state.replaceAll("_", " ")}</span>{operation.error && <p>{operation.error.message}</p>}{operation.attempts.filter((attempt) => attempt.error).map((attempt) => <p key={attempt.executionAttemptId}>Cell {attempt.cellIndex + 1}: {attempt.error!.message}</p>)}</div>}
       {operation && operation.kind === "manual" && !["completed", "failed", "cancelled", "validation_incomplete", "timed_out"].includes(operation.state) && manualAttempt && <button disabled={!manualCorrelated} className="manual-cancel" onClick={() => onDecision(manualAttempt, "cancel")}><Square /> Cancel run</button>}
       {operation && awaiting && <RiskyExecutionDialog operation={operation} attempt={awaiting} busy={busy} onDecision={(decision) => onDecision(awaiting, decision)} />}
     </section>

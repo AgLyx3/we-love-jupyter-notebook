@@ -11,13 +11,16 @@ function text(value: unknown): string {
   return value == null ? "" : JSON.stringify(value, null, 2);
 }
 
-function Outputs({ outputs }: { outputs: Record<string, unknown>[] }) {
+export function Outputs({ outputs }: { outputs: Record<string, unknown>[] }) {
   if (!outputs.length) return null;
   return <div className="cell-outputs" aria-label="Cell output">{outputs.map((output, index) => {
     const kind = String(output.output_type ?? "output");
     if (kind === "stream") return <pre key={index}>{text(output.text)}</pre>;
     if (kind === "error") return <pre className="output-error" key={index}>{text(output.ename)}: {text(output.evalue)}{"\n"}{text(output.traceback)}</pre>;
     const data = output.data as Record<string, unknown> | undefined;
+    const rasterMime = ["image/png", "image/jpeg", "image/gif", "image/webp"].find((mime) => data?.[mime]);
+    if (rasterMime) return <img className="image-output" alt={`Cell output ${index + 1}`} src={`data:${rasterMime};base64,${text(data?.[rasterMime])}`} key={index} />;
+    if (data?.["image/svg+xml"]) return <img className="image-output" alt={`SVG cell output ${index + 1}`} src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(text(data["image/svg+xml"]))}`} key={index} />;
     if (data?.["text/html"]) return <iframe className="html-output" title={`HTML output ${index + 1}`} sandbox="" srcDoc={text(data["text/html"])} key={index} />;
     return <pre key={index}>{text(data?.["text/plain"] ?? output)}</pre>;
   })}</div>;
