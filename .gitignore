@@ -10,3 +10,5 @@ node_modules/
 .vite/
 test-results/
 playwright-report/
+.claude/settings.local.json
+.DS_Store
