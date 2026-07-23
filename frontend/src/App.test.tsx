@@ -30,13 +30,13 @@ afterEach(() => vi.restoreAllMocks());
 describe("Notebook editor", () => {
   it("shows a close control only for a loaded notebook", async () => {
     const onClose = vi.fn();
-    const view = render(<FileToolbar notebook={notebook} onUpload={vi.fn()} onDownload={vi.fn()} onClose={onClose} />);
+    const view = render(<FileToolbar notebook={notebook} onBrowse={vi.fn()} onSave={vi.fn()} onSaveAs={vi.fn()} onClose={onClose} />);
     const close = screen.getByRole("button", { name: "Close notebook" });
     expect(close).toHaveAttribute("title", "Close notebook");
     await userEvent.click(close);
     expect(onClose).toHaveBeenCalledOnce();
 
-    view.rerender(<FileToolbar notebook={null} onUpload={vi.fn()} onDownload={vi.fn()} onClose={onClose} />);
+    view.rerender(<FileToolbar notebook={null} onBrowse={vi.fn()} onSave={vi.fn()} onSaveAs={vi.fn()} onClose={onClose} />);
     expect(screen.queryByRole("button", { name: "Close notebook" })).not.toBeInTheDocument();
   });
 
@@ -44,7 +44,7 @@ describe("Notebook editor", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(() => response({ error: { code: "notebook_not_loaded", message: "No notebook is loaded", details: {} } }, 404));
     render(<App />);
     expect(screen.getByText("Loading notebook…")).toBeInTheDocument();
-    expect(await screen.findByText("Open a notebook to begin")).toBeInTheDocument();
+    expect(await screen.findByText("Open a notebook or a folder to begin")).toBeInTheDocument();
   });
 
   it("closes the current notebook and resets to the upload screen", async () => {
@@ -73,7 +73,7 @@ describe("Notebook editor", () => {
       method: "DELETE",
       body: JSON.stringify({ sessionId: notebook.sessionId, expectedDocumentRevision: notebook.revision }),
     }));
-    expect(await screen.findByText("Open a notebook to begin")).toBeInTheDocument();
+    expect(await screen.findByText("Open a notebook or a folder to begin")).toBeInTheDocument();
     expect(screen.queryByText("Persisted turn")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Close notebook" })).not.toBeInTheDocument();
   });
@@ -103,7 +103,7 @@ describe("Notebook editor", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Close notebook" }));
     await userEvent.click(screen.getByRole("button", { name: "Discard notebook" }));
-    expect(await screen.findByText("Open a notebook to begin")).toBeInTheDocument();
+    expect(await screen.findByText("Open a notebook or a folder to begin")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/notebooks/current"), expect.objectContaining({ method: "DELETE" }));
   });
 
@@ -144,7 +144,7 @@ describe("Notebook editor", () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Close notebook" }));
 
-    expect(await screen.findByText("Open a notebook to begin")).toBeInTheDocument();
+    expect(await screen.findByText("Open a notebook or a folder to begin")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("Notebook closed, but cleanup was incomplete: kernel shutdown failed");
   });
 
@@ -167,7 +167,7 @@ describe("Notebook editor", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Notebook changed elsewhere");
     expect(await screen.findByText("Revision 4")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Close notebook" })).toBeEnabled();
-    expect(screen.queryByText("Open a notebook to begin")).not.toBeInTheDocument();
+    expect(screen.queryByText("Open a notebook or a folder to begin")).not.toBeInTheDocument();
   });
 
   it("adds cells to editable and context scope", async () => {
@@ -282,9 +282,9 @@ describe("Notebook editor", () => {
     expect(screen.getByLabelText("Run all cells")).toBeDisabled();
     expect(screen.getByLabelText("Allow agent edit code cell 2")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
-    expect(screen.getByLabelText("Upload notebook").querySelector("input")).toBeDisabled();
+    expect(screen.getByLabelText("Save notebook as")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Close notebook" })).toBeDisabled();
-    expect(screen.getByLabelText("Download notebook")).toBeEnabled();
+    expect(screen.getByLabelText("Open a notebook or folder")).toBeEnabled();
   });
 
   it("renders raw cells literally with manual editing but no agent-edit permission", async () => {
