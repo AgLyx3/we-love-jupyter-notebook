@@ -120,8 +120,10 @@ Responsibilities:
   normalization, then run full nbformat validation afterward.
 - Normalize missing, invalid, and duplicate standard nbformat cell IDs.
 - Upload/import and download/export.
+- Open a notebook from a path within the workspace root and save it in place
+  (see `Workspace Root`), tracking the on-disk baseline used to guard writes.
 - Close/unload the active notebook without terminating the application.
-- Track dirty state.
+- Track dirty state, where dirty means changed since the last successful disk save.
 - Maintain a monotonic document revision and mutation ownership metadata.
 - Store in-memory checkpoints.
 - Apply validated source changes atomically.
@@ -137,9 +139,11 @@ Core use cases:
 
 - `LoadNotebook`
 - `NormalizeCellIds`
+- `OpenNotebookFromPath`
 - `CreateNotebookCheckpoint`
 - `ApplyValidatedCellSourceChanges`
 - `RestoreNotebookCheckpoint`
+- `SaveNotebookToDisk`
 - `ExportNotebook`
 - `CloseNotebook`
 
@@ -173,6 +177,10 @@ Rules:
 - A cell mentioned as editable in one turn is not editable in the next turn unless explicitly added again.
 - Drag/drop into chat adds a cell to the editable set by default.
 - Cell gutter controls expose both "Add as context" and "Add to edit".
+- Cells can also be selected in bulk (click, shift-click for a range) and scoped
+  together through a right-click context menu, which adds the whole selection to
+  the editable or context set in one action. Bulk scoping is a UI affordance over
+  the same per-cell add operations; the backend still records each cell add.
 - The editable set may be empty. A turn with no editable cells is a valid
   read-only turn: the agent reads and answers but is granted no write surface.
   Context cells are optional and independent of whether the turn can write.
@@ -388,10 +396,12 @@ These are conceptual models, not final class definitions:
 ```text
 NotebookSession
   sessionId
-  path?
+  workspaceRoot?     # project folder the session is rooted at
+  notebookPath?      # notebook file location within the workspace root
   notebook
   revision
-  dirty
+  dirty              # changed since the last successful disk save
+  onDiskBaseline?    # file mtime + content hash captured at open/last save
   mutationLease?
   environmentRef?
   checkpoints[]
@@ -569,6 +579,10 @@ Edit permission is a grant, not an obligation:
   reversible through per-cell revert and whole-turn undo.
 - The turn instructions state this explicitly so the agent does not treat edit
   permission as a command to modify code.
+- "Propose" here means apply-then-review: a warranted edit is applied
+  immediately and made reviewable through the diff, per-cell revert, and
+  whole-turn undo. There is no separate un-applied proposal state in v1; a held
+  "pending change the user must accept" model is deferred.
 
 ## Cell Identity
 
@@ -882,6 +896,154 @@ Approval UI:
 This classifier is a guardrail, not a sandbox. It reduces accidental side
 effects during downstream validation, but it cannot prove a cell is safe.
 
+## Workspace Root
+
+The editor should open the way Jupyter opens: a session is rooted at a local
+project folder, and the active notebook is one file inside it. This is the same
+model as `jupyter lab`/`notebook`, which launch rooted at a `root_dir`, confine
+the file browser to that tree, and run the kernel with its working directory set
+to the notebook's folder. Adopting it folds three separate needs into one frame.
+
+### What The Root Model Unifies
+
+- Folder read-context is a permission, not a payload. Because the CLI already
+  runs with the user's filesystem permissions, "let the agent read the project"
+  means pointing it at the root and enabling on-demand read tools (`Read`,
+  `Grep`, `Glob`, `LS`) rather than the app copying or bundling files into the
+  turn. The agent pulls only what it needs, exactly as Claude Code, Codex, and
+  Cursor do. The read boundary is the workspace root, the way Jupyter forbids the
+  browser from navigating above `root_dir`.
+- Kernel working directory equals the notebook's folder. Relative paths such as
+  `read_csv("data.csv")` then resolve against the project, which is how Jupyter
+  behaves and which the current app-directory cwd breaks.
+- The notebook is a file on disk, not an uploaded blob. Opening reads the
+  `.ipynb` from the root; an explicit save persists back to it in place (see
+  `Save In Place`), with export still available. Upload/import becomes a
+  convenience, not the only way in.
+
+### Rules
+
+- A session binds a `workspaceRoot` (a real local path) and a `notebookPath`
+  within that root. Because a browser cannot hand the backend a real absolute
+  path, the path is supplied by the user (typed or pasted) or by a launch
+  configuration, and the backend validates that it exists, is a directory, and is
+  readable before binding it.
+- File operations the app performs itself — opening and saving `notebookPath` —
+  are canonicalized and confined to the workspace root by the backend: `..`
+  traversal and symlinks resolving outside the root are rejected, reusing the
+  containment checks the editable-file collector already applies.
+- The agent's reads are a different enforcement path. The app does not mediate
+  each read; it configures the boundary and the CLI reads directly. The readable
+  scope is the root added as a read-only directory (for example `--add-dir`), and
+  an ignore/deny list excludes sensitive paths (respect `.gitignore`; always
+  exclude `.git`, virtual environments, `node_modules`, large data blobs, and
+  credential files such as `.env`, `.pem`, `.key`). Because reads are not
+  intercepted, the app cannot impose byte caps on them and cannot itself catch a
+  symlink the CLI follows out of the root; that residual containment rests on the
+  CLI's path handling and the deny rules. Context cost is bounded by the readable
+  scope and the ignore/deny list, not by app-side read caps.
+- The write target is unchanged from `Agent Workspace Protocol`. The agent still
+  edits only the plain `editable/cell_<id>` files in the per-turn temp workspace,
+  and the backend imports candidate changes only from those files before applying
+  them to the in-memory document. The real project root is read-only to the agent,
+  never writable. "Edit/Write scoped to the notebook" means scoped to those temp
+  cell files: the CLI never writes the real `.ipynb` or any other project file,
+  and any change it makes outside the temp cell files is ignored for notebook
+  mutation.
+- Kernel working directory: for a `local-interpreter` environment the kernel
+  launches with cwd `dirname(notebookPath)`. A `container` or `remote-gateway`
+  environment (see `Kernel Environment`) has its own filesystem, so the workspace
+  root must be mounted or synced into it at a matching path; otherwise relative
+  paths and folder access do not hold. cwd-in-folder is only automatic for local
+  kernels.
+- Read-only turns and the "edit permission is a grant" behavior are unchanged;
+  the root only widens what may be read, never what may be written.
+
+### Save In Place
+
+Persisting the notebook to its file is a Notebook Document responsibility, owned
+by the domain that already owns the authoritative document — not by the route or
+UI layer. Opening a folder implies save-in-place; the two ship together.
+
+Ubiquitous language:
+
+- `notebookPath`: the notebook's file location within the workspace root.
+- On-disk baseline: the file identity captured from the original bytes when the
+  notebook is opened (before cell-ID normalization) and refreshed on each
+  successful save. The content hash is authoritative; the modification time is
+  only a cheap pre-check. It is the precondition for a safe write.
+- External modification conflict: the on-disk baseline no longer matches the
+  file, meaning another process changed it since it was opened.
+
+Rules:
+
+- `SaveNotebookToDisk` is explicit in the first version of this model: an
+  intentional Save action writes the current document to `notebookPath`. Silent
+  autosave is deferred so writes stay predictable under the mutation lease.
+- The write is atomic: serialize to a temporary file in the same directory, then
+  rename over `notebookPath`, so a crash mid-write cannot corrupt the notebook.
+- The write is guarded by the on-disk baseline, mirroring the document-revision
+  precondition used everywhere else. If the file changed underneath the session
+  (an external modification conflict), the save is refused and surfaced for the
+  user to reconcile rather than clobbering the on-disk file. A successful save
+  records a new on-disk baseline.
+- `SaveNotebookToDisk` serializes a consistent committed snapshot — the same
+  snapshot `ExportNotebook` reads. Because apply is atomic, a consistent snapshot
+  is always available and a save never writes a partially applied mutation. Save
+  does not take the mutation lease and may run alongside an active turn; like
+  export, it writes the latest committed state.
+- The cell write-boundary is unchanged. Agent edits still flow validated changes
+  into the in-memory document; only the app then writes the file, and only
+  through `SaveNotebookToDisk`. The CLI never writes the `.ipynb`.
+- Cell-ID normalization on open marks the document dirty immediately, so a freshly
+  opened notebook can differ from its file before any edit; the first save
+  persists the normalized IDs to the file, as Jupyter also adds missing IDs.
+  Because the baseline is captured from the pre-normalization bytes,
+  external-change detection stays correct.
+- Dirty means unsaved edits to an on-disk file (changed since the last successful
+  disk save), resolving the prior ambiguity where dirty state was undefined after
+  export. A dirty close therefore discards unsaved edits rather than losing the
+  only copy; the dirty-close confirmation carries that meaning.
+- Close and replacement clear `workspaceRoot`, `notebookPath`, and
+  `onDiskBaseline` with the rest of the session's retained state and shut down the
+  folder-scoped kernel. Opening a different notebook is a replacement and follows
+  the same purge and precondition rules as an upload replacement.
+- Export remains available as a secondary "save a copy elsewhere" action,
+  distinct from `SaveNotebookToDisk`.
+
+### Relationship To Other Sections
+
+- Revises `File Operations`: the primary flow becomes open-folder plus
+  save-in-place; upload/import and download/export remain as secondary
+  conveniences.
+- Composes with `Kernel Environment`: the root supplies the kernel's working
+  directory; the environment supplies the interpreter. Together they let a
+  notebook run against the project's files and the project's dependencies.
+- Does not change `Permission Model`, `Boundary Validation`, or the write
+  invariants. It is a read-scope and file-location change, not a write change.
+
+### Trust Posture
+
+Rooting at a real folder moves the app off the deliberately isolated
+upload-a-blob model and onto operating on real local paths. This is a larger
+trust posture, but it is exactly Jupyter's posture, which the target user
+already accepts. As elsewhere, this is not an OS sandbox: the CLI and kernel run
+with the user's permissions. For a conforming CLI the ignore list is a real
+cooperative boundary — read-tool deny rules mean it cannot read excluded paths
+through its tools — but a non-conforming or compromised CLI runs with the user's
+ambient permissions and is not prevented from reading them.
+
+### Phased Path
+
+1. Add a `workspaceRoot` to the session and set the kernel working directory to
+   the notebook's folder. This alone fixes relative-path data access.
+2. Open a notebook by path from the root and save in place; keep upload/download.
+3. Grant the agent read access to the root (readable dir plus `Read`/`Grep`/
+   `Glob`/`LS` tools) with an ignore list, keeping Edit/Write scoped to the
+   notebook. This is the folder-as-context permission change.
+4. Optional later: a file-browser UI over the root and switching the active
+   notebook without a new session.
+
 ## Kernel Environment
 
 The environment that executes a notebook must be a first-class, per-notebook
@@ -933,7 +1095,10 @@ A resolved `EnvironmentSpec` is bound to the `NotebookSession` as
 The selection is a hint that must be validated, exactly as cell-ID normalization
 and CLI adapter capability are validated. If the chosen environment cannot be
 launched or fails its health check, the session reports a clear error rather than
-silently falling back to a different environment.
+silently falling back to a different environment. Opening and editing a notebook
+do not require a launchable environment; only execution does. A notebook whose
+environment cannot start still opens for viewing, editing, and agent turns, with
+execution unavailable until the environment is fixed or reselected.
 
 ### Selection Versus Provisioning
 
@@ -1014,16 +1179,31 @@ Persistence:
 Notebook surface:
 
 - Render cells in notebook order.
+- Show each cell's ordinal number (1-based) in the gutter, matching how cells are
+  referenced everywhere else in the UI (the turn-scope lists and execution
+  messages), so "cell N" means the same cell in the notebook and in the chat.
 - Show gutter controls only on hover or selection.
 - Controls:
   - Add as context.
   - Add to edit.
+- Support selecting cells for bulk scoping: click a cell to select it,
+  shift-click to select a contiguous range, and right-click to open a context
+  menu that adds the whole selection to the editable or context set (or clears
+  the selection). Raw cells are excluded from the editable action. The selection
+  is cleared when the notebook session changes.
 - Support drag/drop from a cell into the chat panel.
 - Drag/drop defaults to editable.
 - Provide run-cell controls for code cells and a run-all command.
 - Provide kernel status, interrupt, and restart controls.
 - Disable mutating controls while another operation owns the mutation lease,
   while keeping notebook download available.
+
+Layout:
+
+- The notebook surface and the agent chat panel sit side by side, separated by a
+  draggable resizer. The user can drag the resizer (or nudge it with the arrow
+  keys when focused) to set the chat panel width, which is clamped to a sensible
+  min/max and persisted across sessions in local storage.
 
 Chat panel:
 
@@ -1040,16 +1220,21 @@ Chat panel:
 - Clicking a list item focuses the cell in the notebook.
 - After any terminal turn state, clear both lists.
 - Preserve terminal turn scope and outcome in chat history.
+- Render the agent's final textual output as Markdown so answers (the whole
+  payload of a read-only turn, and the explanation accompanying an edit) are
+  formatted rather than shown as raw text.
+- On a read-only turn (empty editable set) the composer indicates the agent can
+  answer but not write, and the send control is labeled accordingly.
 
 Diff display:
 
 - Apply valid changes immediately.
-- Show color-coded changed regions in each edited cell.
 - Show Cursor-style inline diff decorations inside the CodeMirror editor of each
-  changed cell (added lines highlighted, removed lines shown as inline markers),
-  in addition to the color-coded diff panel below the cell.
-- Keep the inline decorations and the diff panel complementary; the panel still
-  covers Markdown-preview cells and bounded rendering of very large diffs.
+  changed cell (added lines highlighted, removed lines shown as inline markers).
+  This inline diff is the single diff surface and is always visible for a changed
+  cell; there is no separate diff panel rendered below the cell.
+- A changed Markdown cell shows its inline diff in the editor when opened for
+  editing; in preview mode it renders normally.
 - Provide per-cell revert controls.
 - Provide whole-turn undo in the chat turn.
 
@@ -1064,6 +1249,9 @@ File controls:
 This is a conceptual API surface, not a final implementation contract.
 
 - `POST /notebooks/upload`
+- `POST /workspace/root` (set/clear the session `workspaceRoot`, see `Workspace Root`)
+- `POST /notebooks/open` (open a `notebookPath` within the root)
+- `POST /notebooks/save` (`SaveNotebookToDisk`, baseline-guarded)
 - `GET /notebooks/current`
 - `DELETE /notebooks/current`
 - `GET /notebooks/download`
@@ -1092,17 +1280,24 @@ This is a conceptual API surface, not a final implementation contract.
 the kernel into it under session/revision preconditions; an unlaunchable or
 failed environment returns a structured error and leaves the prior binding.
 
-All mutating requests include `sessionId` and `expectedDocumentRevision` either
-in the body or an `If-Match`-style header. Turn and execution responses expose
-their state and current document revision. Creating an agent turn or execution
-returns an operation resource immediately; the UI receives state changes through
-server-sent events in v1, with polling as a fallback.
+Document-mutating requests include `sessionId` and `expectedDocumentRevision`
+either in the body or an `If-Match`-style header. Turn and execution responses
+expose their state and current document revision. Creating an agent turn or
+execution returns an operation resource immediately; the UI receives state
+changes through server-sent events in v1, with polling as a fallback.
 
 The first upload creates a session and therefore omits those preconditions;
 replacing an active notebook requires both. Kernel interrupt/restart requests
 also include the active `executionAttemptId` when the kernel is busy and use the
 path's `kernelSessionId` as a compare-and-set precondition, preventing a stale
 browser command from affecting a newer kernel or execution.
+
+Not every request is a document mutation. Opening a notebook by path follows the
+same session-lifecycle rules as upload (first open omits preconditions, replacing
+requires them), and setting the workspace root is a session-lifecycle request
+rather than a document mutation. `SaveNotebookToDisk` is guarded by the on-disk
+baseline instead of `expectedDocumentRevision`, because it writes a committed
+snapshot to disk without changing the document.
 
 Closing the active notebook requires its `sessionId` and
 `expectedDocumentRevision`. A successful close atomically unloads the in-memory
@@ -1220,12 +1415,17 @@ The app guarantees:
 - Only validated scoped source changes are written back to the live notebook.
 - Agent-created temp workspace changes outside editable cell files are ignored for notebook mutation.
 - Notebook write boundaries are enforced by the backend.
+- The only real file the app itself writes is the opened notebook, through
+  `SaveNotebookToDisk` and guarded by the on-disk baseline; the CLI never writes
+  the notebook file or other project files (see `Workspace Root`).
 - The app invokes only adapters that pass the v1 capability check and does not
   approve terminal/tool requests from those adapters.
 
 The app does not guarantee in v1:
 
-- The external CLI agent cannot read other local files.
+- The external CLI agent cannot read other local files. With a workspace root,
+  reading the project tree is an intentional grant bounded by ignore/deny rules
+  for a conforming CLI; it is not confidentiality isolation (see `Workspace Root`).
 - The external CLI agent cannot access the network.
 - The external CLI agent cannot execute subprocesses using its own permissions.
 
@@ -1489,8 +1689,39 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
 - Decision: Use upload/import and download/export in v1.
 - Alternatives: Backend local file browser/path workflow; native OS file picker.
 - Rationale: Browser upload/download is enough for the v1 local web app and avoids OS integration complexity.
+- Revised by `Workspace Root`: the target model opens a local project folder and
+  saves the notebook in place, keeping upload/download as secondary conveniences.
 
-### Agent Progress Output
+### Workspace Root
+
+- Decision: Root a session at a local project folder and treat the notebook as a
+  file within it, following the Jupyter `root_dir` model: agent reads the tree on
+  demand (a permission/scope change, not app-assembled content), the kernel's
+  working directory is the notebook's folder, and the notebook is opened and
+  saved in place.
+- Alternatives: Keep the isolated upload-a-blob model and add folder context by
+  copying files into the turn workspace (a payload the app assembles); ignore
+  relative-path and folder-context needs entirely.
+- Rationale: One reframe folds together folder read-context, correct kernel
+  working directory (relative data files), and save-in-place. It matches how
+  Jupyter, Claude Code, Codex, and Cursor actually work — on-demand reads rather
+  than eager bundling — while leaving the cell-source write boundary untouched.
+  The cost is operating on real local paths, which is Jupyter's existing posture.
+
+### Save In Place
+
+- Decision: Persist the notebook to its file through a Notebook Document
+  `SaveNotebookToDisk` use case. The first version is explicit save (not silent
+  autosave), an atomic temp-file-plus-rename write, guarded by an on-disk
+  baseline (modification time and content hash captured at open/last save) so an
+  external modification conflict is refused and surfaced instead of clobbering.
+- Alternatives: Silent autosave from the start; in-place overwrite without a
+  baseline check; keep in-memory-only with export as the sole persistence.
+- Rationale: Save-in-place is a consequence of opening a folder, not an
+  independent toggle, and it removes the "restart loses the notebook" hole.
+  Explicit-plus-atomic-plus-baseline keeps writes predictable under the mutation
+  lease and reuses the same authoritative-precondition pattern as document
+  revisions. Autosave is deferred until the explicit path is proven.
 
 - Decision: Show only final agent output/result plus any final comments emitted by the CLI.
 - Alternatives: Stream all CLI progress and tool output live.
@@ -1498,15 +1729,37 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
 
 ### Inline Diff Decoration
 
-- Decision: Show Cursor-style inline added/removed decorations inside the
-  CodeMirror editor, complementing (not replacing) the separate color-coded diff
-  panel below each changed cell.
-- Alternatives: Only the separate diff panel; replace the panel entirely with
-  inline decorations; a full side-by-side two-pane diff.
-- Rationale: Inline decorations put the change where the user reads/edits the
-  code (Cursor-style), while the separate panel still serves Markdown-preview
-  cells and bounded rendering of very large diffs; keeping both avoids losing the
-  panel's coverage.
+- Decision: Show the agent's change as Cursor-style inline added/removed
+  decorations inside the CodeMirror editor, always visible for a changed cell,
+  and make the inline decorations the single diff surface — the separate
+  color-coded diff panel below the cell was removed.
+- Alternatives: Keep the separate diff panel alongside the inline decorations;
+  keep only the separate panel; a full side-by-side two-pane diff.
+- Rationale: Inline decorations put the change where the user reads and edits the
+  code and read consistently with the editor. Rendering both the inline diff and
+  a separate panel duplicated the same change in two places; one always-visible
+  inline surface is simpler and less noisy.
+
+### Multi-Select Scoping
+
+- Decision: Let the user select multiple cells (click, shift-click range) and add
+  the whole selection to the editable or context set through a right-click menu,
+  on top of the existing per-cell gutter controls.
+- Alternatives: Per-cell scoping only; checkbox column; a dedicated multi-select
+  mode toggle.
+- Rationale: Turns frequently scope several adjacent cells. Bulk selection is a
+  thin UI affordance over the same per-cell add operations, so it adds no new
+  backend surface or permission semantics while removing repetitive clicking.
+
+### Resizable Agent Panel
+
+- Decision: Separate the notebook surface and the agent chat panel with a
+  draggable, keyboard-nudgeable resizer, clamp the width to a min/max, and persist
+  it in local storage.
+- Alternatives: Fixed panel width; collapsible-only panel.
+- Rationale: Users split attention between reading cells and reading agent output
+  differently; a persisted width is a small local-UI concern with no backend or
+  permission impact.
 
 ## Open Follow-Up Decisions
 
