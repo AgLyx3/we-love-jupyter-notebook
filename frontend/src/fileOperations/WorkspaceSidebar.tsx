@@ -13,7 +13,9 @@ function TreeChildren({ path, depth, activePath, onOpenNotebook }: { path: strin
   if (!entries?.length) return <div className="tree-empty" style={pad(depth)}>empty</div>;
   return <>{entries.map((entry) => entry.kind === "directory"
     ? <TreeFolder key={entry.path} path={entry.path} name={entry.name} depth={depth} activePath={activePath} onOpenNotebook={onOpenNotebook} />
-    : <button key={entry.path} className={`tree-row notebook ${activePath === entry.path ? "active" : ""}`} style={pad(depth)} onClick={() => onOpenNotebook(entry.path)} title={entry.name}><File /><span>{entry.name}</span></button>)}</>;
+    : entry.kind === "notebook"
+    ? <button key={entry.path} className={`tree-row notebook ${activePath === entry.path ? "active" : ""}`} style={pad(depth)} onClick={() => onOpenNotebook(entry.path)} title={entry.name}><File /><span>{entry.name}</span></button>
+    : <span key={entry.path} className="tree-row other" style={pad(depth)} aria-disabled="true" title={`${entry.name} — not a notebook; shown for reference, can't be opened`}><File /><span>{entry.name}</span></span>)}</>;
 }
 
 function TreeFolder({ path, name, depth, activePath, onOpenNotebook }: { path: string; name: string; depth: number; activePath: string | null; onOpenNotebook: (path: string) => void }) {
