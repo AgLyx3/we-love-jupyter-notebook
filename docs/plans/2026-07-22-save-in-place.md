@@ -8,9 +8,10 @@ Branch: `feature/save-in-place` (worktree). Deps live in the main repo `.venv`.
 Test command (run from the worktree; PYTHONPATH makes the worktree source win
 over the editable install that points at the main repo):
 
-    cd /Users/lyx_computer/Desktop/jnb-save-in-place && \
-    PYTHONPATH=/Users/lyx_computer/Desktop/jnb-save-in-place \
-    /Users/lyx_computer/Desktop/jupyter-notebook-ai-adapter/.venv/bin/python -m pytest backend/tests -q
+    # Run from the worktree root. PYTHONPATH="$PWD" makes the worktree source win
+    # over the editable install (which points at the main repo). Use the main
+    # repo's virtualenv Python.
+    PYTHONPATH="$PWD" <main-repo>/.venv/bin/python -m pytest backend/tests -q
 
 ## Task 1 — OpenNotebookFromPath + models + containment
 Add `OnDiskBaseline` (path, mtime_ns, content_hash) and `notebook_path` to
