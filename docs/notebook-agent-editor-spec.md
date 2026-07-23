@@ -980,17 +980,63 @@ and CLI agent cannot use a browser handle for cwd or folder reads.
 Mechanics:
 
 - A directory-listing use case (`ListDirectory`, exposed as `GET /files`) returns
-  the subfolders and `.ipynb` files at a given local path, plus the parent, so
+  the subfolders and every regular file at a given local path, plus the parent, so
   the frontend can navigate. It defaults to the user's home directory and, for a
   local single-user app, may navigate anywhere the server process can read;
   dotfiles are hidden by default. Listing validates that the path exists, is a
   directory, and is readable.
+- Each entry carries a `kind`. A regular file whose suffix is `.ipynb` is a
+  `notebook` (openable); every other regular file is a plain `file`. Directories
+  are `directory`. Only `notebook` and `directory` entries are selectable; a
+  plain `file` is listed for visibility but is never openable through the selector.
 - The user selects either an `.ipynb` (opened in place via `open`, with its
   containing folder bound as the `workspaceRoot`) or a folder (bound as the
   `workspaceRoot`, from which a notebook is then chosen).
+
+Browse-for-context (non-openable files):
+
+- The listing shows non-notebook files so the user can *see* what else lives in
+  the project — data files, scripts, configs, model weights — while browsing. The
+  purpose is discovery: the user can find such a file, read its name/path, and
+  refer to it (by path) as context when prompting the agent. It is not a way to
+  open, load, or edit that file in the editor.
+- A plain `file` entry is rendered visible but inert: it is not a clickable/
+  navigable target, carries no open affordance, and selecting it does nothing.
+  Rendering it disabled (rather than omitting it) is deliberate — the value is
+  letting the user orient in a real project folder, not hiding everything that is
+  not a notebook. This does not widen any write or open boundary: the app still
+  only opens `.ipynb` files and still only writes through the notebook document
+  and save-in-place paths.
 - Browsing scope is a convenience for finding files; it is not the agent-read
   boundary. The agent-read boundary remains the selected `workspaceRoot` and its
-  ignore/deny list (see `Rules`).
+  ignore/deny list (see `Rules`). A file being visible (or hidden) in the browser
+  says nothing about whether the agent may read it; the agent reads directly
+  within the readable scope regardless of what the browser lists, and the browser
+  may list a file the deny list keeps the agent from reading (and vice versa).
+
+Chat file mention (`@`):
+
+- The agent chat composer supports an `@`-mention that turns "find a file to
+  reference" into an inline affordance instead of the user hand-typing a path.
+  Typing `@` followed by a query opens a dropdown of matching workspace files;
+  selecting one inserts its workspace-relative path (backtick-wrapped) into the
+  prompt as plain text. The `@` triggers only at the start of the prompt or after
+  whitespace, and the token closes at the first whitespace, so ordinary text and
+  email-like `a@b` do not trigger it.
+- A recursive search use case (`SearchWorkspaceFiles`, exposed as
+  `GET /files/search?root=&query=`) walks the workspace root and returns
+  relative paths matching the query. It prunes the same classes of paths the
+  agent read deny list excludes — version control, dependency and build trees,
+  caches, dotfiles, and credential suffixes — so mention results never surface
+  `.git`, `node_modules`, virtual environments, or `.env`/`.pem`/`.key` files.
+  Results are ranked (basename-prefix matches first, then shallower paths) and
+  capped; the walk is bounded so a large tree cannot stall the request.
+- The mention is purely a prompt-authoring aid and changes no boundary. It
+  inserts *text* (a path), not file contents: nothing is uploaded, attached, or
+  read by the app. The agent still reads the referenced file itself through its
+  own read tools, and only if that path is inside the readable scope and not
+  denied — exactly as if the user had typed the path by hand. Mention search is
+  scoped to `workspaceRoot`; when no root is bound, the affordance is inert.
 
 ### Save In Place
 
@@ -1288,7 +1334,8 @@ File controls:
 This is a conceptual API surface, not a final implementation contract.
 
 - `POST /notebooks/upload`
-- `GET /files` (list subfolders and `.ipynb` files at a local path for the file selector, see `File Selector`)
+- `GET /files` (list subfolders, notebooks, and browse-only files at a local path for the file selector, see `File Selector`)
+- `GET /files/search` (recursively find workspace files matching a query for the chat `@`-mention, see `File Selector` → Chat file mention)
 - `POST /workspace/root` (set/clear the session `workspaceRoot`, see `Workspace Root`)
 - `POST /notebooks/open` (open a `notebookPath` within the root)
 - `POST /notebooks/save` (`SaveNotebookToDisk`, baseline-guarded)
@@ -1794,6 +1841,43 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
   server-side and need a real path, which a browser cannot provide. A
   backend-driven selector is the only browser-compatible way to choose a real
   folder or file, and it matches how Jupyter already works.
+
+### Browse-Only Non-Openable Files
+
+- Decision: List every regular file in the file browser — not only `.ipynb` —
+  tagging non-notebook files with a distinct `file` kind, and render those
+  entries visible but inert (not openable/navigable). Only notebooks and folders
+  remain selectable.
+- Alternatives: Keep filtering the listing to folders and `.ipynb` only (status
+  quo, hides the rest of the project); show all files and let any file be opened
+  (would need a viewer/loader and widens the open boundary); a separate
+  read-only file-viewer surface.
+- Rationale: A real project folder contains data, scripts, and configs the user
+  needs to *see* to orient and to name when giving the agent context; hiding them
+  makes the browser feel emptier than the folder is. Showing them disabled adds
+  discovery without adding an open/load/edit path, so the write and open
+  boundaries are unchanged — the app still only opens `.ipynb` and still lists,
+  not loads, everything else. Visibility in the browser is independent of the
+  agent-read boundary, which stays governed by the workspace root and deny list.
+
+### Chat File Mention
+
+- Decision: Add an `@`-mention to the agent chat composer backed by a recursive
+  `SearchWorkspaceFiles` (`GET /files/search`) endpoint. Typing `@` opens a
+  filtered dropdown of workspace files; picking one inserts its relative path as
+  plain text. Search prunes the agent read deny list's paths and is scoped to the
+  workspace root.
+- Alternatives: Have the user hand-type paths (status quo — no discovery aid);
+  click a browser entry to insert it (rejected by the user as unnecessary);
+  attach file *contents* as a chat payload (would upload/bundle files, breaking
+  the read-as-permission model and inflating turns); a flat top-level-only list
+  (misses files in subfolders).
+- Rationale: The `@`-mention is the smallest change that makes "reference a file
+  as context" ergonomic without touching any boundary. It inserts text, not
+  contents, so it composes with the existing read-as-permission model: the agent
+  still reads the path itself within the readable scope. A recursive, deny-list-
+  pruned search matches how the agent already sees the project and keeps
+  credential/dependency noise out of the suggestions.
 
 - Decision: Show only final agent output/result plus any final comments emitted by the CLI.
 - Alternatives: Stream all CLI progress and tool output live.
