@@ -84,4 +84,7 @@ class AdapterResult:
 class AgentAdapter(Protocol):
     auxiliary_paths: frozenset[str]
 
-    def run(self, workspace: AgentWorkspace, *, timeout: float, cancel_event: object) -> AdapterResult: ...
+    def run(
+        self, workspace: AgentWorkspace, *, timeout: float, cancel_event: object,
+        model: str | None = None, permission_mode: str = "acceptEdits",
+    ) -> AdapterResult: ...

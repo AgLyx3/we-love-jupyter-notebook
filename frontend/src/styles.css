@@ -21,6 +21,9 @@ button:disabled, .disabled { opacity: .42; cursor: not-allowed; }
 button svg, .icon-button svg { width: 17px; height: 17px; }
 button.primary, .primary { background: var(--blue); border-color: var(--blue); color: white; }
 .app-shell { min-height: 100vh; }
+.drop-overlay { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: #1769aa1f; border: 3px dashed var(--blue); pointer-events: none; }
+.drop-overlay > div { background: var(--surface); border: 1px solid var(--blue); border-radius: 10px; padding: 22px 28px; display: grid; justify-items: center; gap: 10px; box-shadow: 0 12px 34px #1a263033; color: #24303a; font-weight: 650; font-size: 15px; }
+.drop-overlay svg { width: 32px; height: 32px; color: var(--blue); }
 .topbar { height: 52px; border-bottom: 1px solid #bec7ce; background: var(--surface); display: flex; align-items: center; justify-content: space-between; padding: 0 14px; position: sticky; top: 0; z-index: 20; }
 .brand, .toolbar-actions, .kernel-controls, .file-toolbar { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .brand svg { width: 20px; color: var(--blue); flex: 0 0 auto; }
@@ -28,6 +31,9 @@ button.primary, .primary { background: var(--blue); border-color: var(--blue); c
 .brand span { color: var(--muted); font-size: 12px; border-left: 1px solid var(--border); padding-left: 8px; }
 .brand span.dirty { color: var(--amber); font-weight: 650; }
 .icon-button input, .upload-button input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.autosave-toggle { height: 30px; padding: 0 10px; font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.autosave-toggle svg { width: 14px; height: 14px; }
+.autosave-toggle.on { background: #dff2e8; border-color: #8fccac; color: var(--green); }
 .kernel-state { font-size: 12px; color: var(--muted); display: flex; align-items: center; white-space: nowrap; text-transform: capitalize; }
 .kernel-state i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #87939c; margin-right: 5px; }
 .kernel-state.state-idle i { background: #28a266; }.kernel-state.state-busy i { background: #d48112; }
@@ -95,6 +101,14 @@ body.resizing-agent iframe { pointer-events: none; }
 .output-add-chat svg { width: 14px; height: 14px; }
 .output-error { user-select: text; }
 .prompt-form { border-top: 1px solid #cdd4d9; padding: 12px; background: #fff; display: grid; gap: 7px; }.prompt-form label { font-size: 12px; font-weight: 650; }.prompt-form textarea { width: 100%; resize: vertical; min-height: 64px; max-height: 150px; border: 1px solid #aeb8c0; border-radius: 5px; padding: 9px; line-height: 1.4; }.prompt-form button { justify-self: end; padding: 0 12px; }.prompt-mode { font-size: 11px; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }.prompt-mode::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #6aa5cc; }
+.prompt-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.prompt-controls .primary { margin-left: auto; height: 34px; align-self: end; }
+.prompt-select { display: grid; gap: 4px; min-width: 0; }
+.prompt-select span { font-size: 11px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.prompt-select select { appearance: none; -webkit-appearance: none; width: 100%; height: 34px; border: 1px solid #aeb8c0; border-radius: 5px; padding: 0 28px 0 9px; font-size: 12px; color: #34404b; cursor: pointer; background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2363707c' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 9px center; }
+.prompt-select select:hover:not(:disabled) { border-color: #92aec2; }
+.prompt-select select:focus-visible { outline: 2px solid #2780bd; outline-offset: 2px; }
+.prompt-select select:disabled { opacity: .5; cursor: not-allowed; }
 .risk-dialog { border: 1px solid #d9a544; border-radius: 6px; background: #fffaf0; padding: 12px; margin: 10px 0; }.risk-title { display: flex; gap: 9px; align-items: flex-start; }.risk-title svg { color: var(--amber); width: 20px; flex: 0 0 auto; }.risk-title h3 { font-size: 13px; margin: 0; letter-spacing: 0; }.risk-title p { color: var(--muted); font-size: 11px; margin: 3px 0 0; }.risk-dialog ul { padding-left: 18px; font-size: 12px; }.risk-dialog code { display: block; font-size: 11px; overflow-wrap: anywhere; }.risk-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }.risk-actions button { height: 30px; min-width: auto; padding: 0 8px; font-size: 11px; }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: #20262e73; }
 .confirm-dialog { width: min(420px, 100%); border: 1px solid var(--border); border-radius: 6px; background: var(--surface); padding: 20px; box-shadow: 0 14px 38px #1118203d; }

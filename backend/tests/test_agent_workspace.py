@@ -291,6 +291,51 @@ def test_claude_adapter_is_version_gated_and_effectively_whitelists_tools(
         builder.destroy(workspace)
 
 
+def test_model_and_plan_mode_shape_cli_args_and_prompt(notebook_payload, monkeypatch):
+    builder, workspace = _workspace(notebook_payload)
+    captured = {}
+
+    class StubRunner:
+        def run(self, args, **kwargs):
+            captured["args"] = args
+            return "finished", ""
+
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="2.1.203", stderr=""),
+    )
+    try:
+        # Default: no --model, acceptEdits, unmodified prompt.
+        ClaudeAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event()
+        )
+        args = captured["args"]
+        assert "--model" not in args
+        assert args[args.index("--permission-mode") + 1] == "acceptEdits"
+        assert not args[args.index("-p") + 1].startswith("You are operating in plan mode")
+
+        # Chosen model + plan mode: --model opus, plan, prompt reframed.
+        ClaudeAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event(),
+            model="opus", permission_mode="plan",
+        )
+        args = captured["args"]
+        assert args[args.index("--model") + 1] == "opus"
+        assert args[args.index("--permission-mode") + 1] == "plan"
+        assert args[args.index("-p") + 1].startswith("You are operating in plan mode")
+
+        # Unknown values fall back to safe defaults.
+        ClaudeAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event(),
+            model="evil --dangerously", permission_mode="bypassPermissions",
+        )
+        args = captured["args"]
+        assert "--model" not in args
+        assert args[args.index("--permission-mode") + 1] == "acceptEdits"
+    finally:
+        builder.destroy(workspace)
+
+
 def _read_only_workspace(notebook_payload):
     documents = NotebookDocumentService()
     snapshot = documents.import_notebook(notebook_payload())

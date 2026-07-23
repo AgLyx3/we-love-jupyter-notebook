@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
@@ -17,6 +17,8 @@ class StartTurnRequest(BaseModel):
     session_id: str = Field(alias="sessionId")
     expected_revision: int = Field(alias="expectedDocumentRevision")
     prompt: str = Field(min_length=1)
+    model: Literal["default", "opus", "sonnet", "haiku"] = "default"
+    mode: Literal["edit", "plan"] = "edit"
 
 
 class MutationRequest(BaseModel):
@@ -30,6 +32,8 @@ def serialize_turn(turn: AgentTurn, *, undo_eligible: bool = False) -> dict[str,
         "sessionId": turn.session_id,
         "baseRevision": turn.base_revision,
         "prompt": turn.prompt,
+        "model": turn.model,
+        "mode": turn.mode,
         "editableCellIds": list(turn.editable_cell_ids),
         "contextCellIds": list(turn.context_cell_ids),
         "undoEligible": undo_eligible,
@@ -126,6 +130,7 @@ def start_turn(body: StartTurnRequest, request: Request) -> dict[str, Any]:
     turn = service.start(
         prompt=body.prompt, session_id=body.session_id,
         expected_revision=body.expected_revision,
+        model=body.model, mode=body.mode,
     )
     return serialize_turn(turn, undo_eligible=service.is_undo_eligible(turn))
 

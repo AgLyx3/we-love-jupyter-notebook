@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 TERMINAL_STATES = {"completed", "failed", "cancelled", "validation_incomplete"}
 MAX_TERMINAL_TURNS = 50
 MAX_TURN_HISTORY_BYTES = 2 * 1024 * 1024
+# UI "mode" (edit/plan) maps to a Claude CLI permission mode.
+PERMISSION_MODE_BY_MODE = {"edit": "acceptEdits", "plan": "plan"}
 
 
 class AgentTurnNotFound(NotebookDomainError):
@@ -69,6 +71,8 @@ class AgentTurn:
     session_id: str
     base_revision: int
     prompt: str
+    model: str = "default"
+    mode: str = "edit"
     editable_cell_ids: tuple[str, ...] = ()
     context_cell_ids: tuple[str, ...] = ()
     state: str = "created"
@@ -115,7 +119,7 @@ class AgentTurnService:
 
     def start(
         self, *, prompt: str, session_id: str, expected_revision: int,
-        background: bool = True,
+        model: str = "default", mode: str = "edit", background: bool = True,
     ) -> AgentTurn:
         turn_id = uuid4().hex
         with self._lock:
@@ -138,6 +142,7 @@ class AgentTurnService:
                 turn = AgentTurn(
                     turn_id=turn_id, session_id=session_id,
                     base_revision=expected_revision, prompt=prompt,
+                    model=model, mode=mode,
                     editable_cell_ids=scope.editable_cell_ids,
                     context_cell_ids=scope.context_cell_ids,
                     checkpoint=copy.deepcopy(snapshot.notebook),
@@ -306,7 +311,9 @@ class AgentTurnService:
                 with self._lock:
                     turn.attempts = attempt_number
                 result = self.adapter.run(
-                    workspace, timeout=self.timeout, cancel_event=turn.cancel_event
+                    workspace, timeout=self.timeout, cancel_event=turn.cancel_event,
+                    model=None if turn.model == "default" else turn.model,
+                    permission_mode=PERMISSION_MODE_BY_MODE.get(turn.mode, "acceptEdits"),
                 )
                 with self._lock:
                     turn.final_output = result.final_output

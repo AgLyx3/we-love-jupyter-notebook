@@ -682,6 +682,12 @@ Rules:
 
 - The CLI agent may read the temp workspace.
 - The CLI agent may edit files listed in `editableCells`.
+- The app selects the adapter's permission mode from the turn's requested mode
+  (Edit → the CLI's edit-accepting mode; Plan → the CLI's read-only plan mode)
+  and, when the user requests a specific model, passes it to the adapter. Plan
+  mode also reframes the sent prompt to ask for a plan rather than an edit. These
+  are constrained to a fixed allow-list before reaching the CLI; they never widen
+  the editable-cell boundary or the denied-terminal-execution policy.
 - When the editable set is empty (a read-only turn), the app launches the adapter
   with a read-only tool set (no edit or write tools) and writes no editable
   files. The boundary is then enforced at the tool level as well as by the
@@ -1225,6 +1231,12 @@ Chat panel:
   formatted rather than shown as raw text.
 - On a read-only turn (empty editable set) the composer indicates the agent can
   answer but not write, and the send control is labeled accordingly.
+- The composer exposes a **model** selector (Default, Opus, Sonnet, Haiku) and a
+  **mode** selector (Edit, Plan). Both are sent with the turn request and are
+  advisory hints to the adapter; the enforced edit boundary is unchanged by
+  either. Model maps to the adapter's model selection; the default defers to the
+  adapter's own default. In **Plan** mode the adapter runs read-only (proposes a
+  plan and writes no changes), and the send control is labeled "Plan".
 
 Diff display:
 
@@ -1579,6 +1591,22 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
   ("what would be useful here?"). Forcing an edit produces unwanted changes and
   buries the answer. Answer-first, edit-when-warranted keeps the same immediate-
   apply-with-diff model without compelling edits.
+
+### Composer Model And Mode Selection
+
+- Decision: Let the composer choose an adapter model (Default, Opus, Sonnet,
+  Haiku) and an interaction mode (Edit, Plan) per turn. The request carries both;
+  the backend validates each against a fixed allow-list, maps mode to the CLI
+  permission mode (Edit → edit-accepting, Plan → read-only plan), and passes an
+  explicit model only when one is chosen. Plan mode additionally prefixes the sent
+  prompt to request a plan instead of an edit.
+- Alternatives: A single global env/config for model; no plan mode; reuse the
+  empty-editable-set read-only turn instead of an explicit Plan mode.
+- Rationale: Users want to trade cost/latency per turn and to preview an approach
+  before committing edits, without changing scope. Both inputs are advisory to the
+  adapter and are constrained before reaching the CLI, so neither widens the
+  editable-cell boundary nor the denied-terminal-execution policy — the write
+  boundary remains authoritative regardless of model or mode.
 
 ### Boundary Violation Handling
 
