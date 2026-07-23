@@ -41,3 +41,11 @@ The Playwright suite uploads `examples/sample.ipynb` and covers desktop and mobi
 The editor binds to loopback and keeps one active notebook in process memory. The agent workspace contains the full notebook, so the agent can read every cell. Context selection is an attention signal in the manifest and prompt, not a confidentiality control. Writes are imported only from manifest-listed editable-cell source files; notebook structure, metadata, outputs, and unselected-cell writes are rejected at the workspace boundary. Risk classification pauses selected downstream operations for explicit approval.
 
 This is not an operating-system sandbox. The CLI and executed notebook code run with the current user's permissions. Risk classification is heuristic, approval does not make code safe, and notebook execution can read files, use credentials, access the network, or start processes. Use the editor only with notebooks and agent instructions you trust.
+
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the checks CI runs, and pull-request guidelines. Participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md). To report a vulnerability, see [SECURITY.md](SECURITY.md).
+
+## License
+
+Released under the [MIT License](LICENSE).
