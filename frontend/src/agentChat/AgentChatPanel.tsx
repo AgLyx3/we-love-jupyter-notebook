@@ -9,10 +9,10 @@ import { attachmentLabel, type SelectionAttachment } from "../notebook/selection
 const activeStates = new Set(["created", "agent_running", "validating", "applying", "executing", "cleaning_up"]);
 export interface TurnRecord { turn: AgentTurn; editableCellIds: string[]; contextCellIds: string[]; prompt: string }
 
-export default function AgentChatPanel({ notebook, scope, turn, activeTurn, history, operation, busy, mutationsDisabled, attachments = [], onSubmit, onCancel, onUndo, onClearScope, onDecision, onSelectTurn, onFocusCell, onDropCell, onRemoveAttachment, onRemoveScopeCell }: {
+export default function AgentChatPanel({ notebook, scope, turn, activeTurn, history, operation, busy, mutationsDisabled, attachments = [], onSubmit, onCancel, onUndo, onClearScope, onDecision, onSelectTurn, onFocusCell, onDropCell, onDropCells, onRemoveAttachment, onRemoveScopeCell }: {
   notebook: NotebookSnapshot; scope: TurnScope; turn: AgentTurn | null; activeTurn: AgentTurn | null; history: TurnRecord[]; operation: ExecutionOperation | null; busy: boolean; mutationsDisabled: boolean;
   attachments?: SelectionAttachment[];
-  onSubmit: (prompt: string, options: TurnOptions) => void; onCancel: () => void; onUndo: () => void; onClearScope: () => void; onDecision: (attempt: ExecutionAttempt, decision: "approve" | "skip" | "cancel") => void; onSelectTurn: (id: string) => void; onFocusCell: (id: string) => void; onDropCell: (id: string) => void;
+  onSubmit: (prompt: string, options: TurnOptions) => void; onCancel: () => void; onUndo: () => void; onClearScope: () => void; onDecision: (attempt: ExecutionAttempt, decision: "approve" | "skip" | "cancel") => void; onSelectTurn: (id: string) => void; onFocusCell: (id: string) => void; onDropCell: (id: string) => void; onDropCells?: (ids: string[]) => void;
   onRemoveAttachment?: (id: string) => void; onRemoveScopeCell?: (id: string) => void;
 }) {
   const [prompt, setPrompt] = useState("");
@@ -30,7 +30,7 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
     onSubmit(value, { model, mode });
     setPrompt("");
   };
-  return <aside className="agent-panel" aria-label="Agent workspace" onDragOver={(event) => { if (!mutationsDisabled) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }} onDrop={(event) => { event.preventDefault(); const id = event.dataTransfer.getData("application/x-notebook-cell"); if (id && !mutationsDisabled) onDropCell(id); }}>
+  return <aside className="agent-panel" aria-label="Agent workspace" onDragOver={(event) => { if (!mutationsDisabled) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }} onDrop={(event) => { event.preventDefault(); if (mutationsDisabled) return; const many = event.dataTransfer.getData("application/x-notebook-cells"); if (many) { try { const ids = JSON.parse(many) as string[]; if (ids?.length) { if (onDropCells) onDropCells(ids); else ids.forEach(onDropCell); return; } } catch { /* fall through to single */ } } const id = event.dataTransfer.getData("application/x-notebook-cell"); if (id) onDropCell(id); }}>
     <header><h1>Notebook Agent</h1><span>Scoped local edits</span></header>
     <TurnScopePanel notebook={notebook} scope={scope} disabled={mutationsDisabled} onClear={onClearScope} onFocusCell={onFocusCell} onDropCell={onDropCell} onRemoveCell={onRemoveScopeCell} />
     <section className="conversation" aria-live="polite">

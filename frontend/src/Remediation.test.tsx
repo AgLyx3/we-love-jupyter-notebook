@@ -51,9 +51,9 @@ describe("remediation behaviors", () => {
     render(<App />);
     expect(await screen.findByLabelText("Run code cell 1")).toBeDisabled();
     expect(screen.getByLabelText("Allow agent edit code cell 1")).toBeDisabled();
-    expect(screen.getByLabelText("Upload notebook").querySelector("input")).toBeDisabled();
+    expect(screen.getByLabelText("Save notebook as")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Close notebook" })).toBeDisabled();
-    expect(screen.getByLabelText("Download notebook")).toBeEnabled();
+    expect(screen.getByLabelText("Open a notebook or folder")).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: "Cancel run" }));
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/execution/attempt-1/cancel"), expect.objectContaining({ body: JSON.stringify({ sessionId: "session-1", expectedDocumentRevision: 7, turnId: null, cellId: "code-1" }) }));
   });
@@ -69,26 +69,6 @@ describe("remediation behaviors", () => {
     expect(await screen.findByText("agent running")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel turn" })).toBeEnabled();
     expect(screen.getByLabelText("Source for code cell 1")).toBeDisabled();
-  });
-
-  it("downloads through the API and always revokes the object URL", async () => {
-    const create = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:notebook");
-    const revoke = vi.spyOn(URL, "revokeObjectURL");
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
-    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => String(input).endsWith("/notebooks/download") ? Promise.resolve(new Response(new Blob(["{}"]))) : baseFetch(input, init));
-    render(<App />);
-    await userEvent.click(await screen.findByLabelText("Download notebook"));
-    expect(create).toHaveBeenCalled();
-    expect(revoke).toHaveBeenCalledWith("blob:notebook");
-  });
-
-  it("surfaces download failures without creating an object URL", async () => {
-    const create = vi.spyOn(URL, "createObjectURL");
-    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => String(input).endsWith("/notebooks/download") ? json({ error: { code: "download_failed", message: "Download unavailable", details: {} } }, 500) : baseFetch(input, init));
-    render(<App />);
-    await userEvent.click(await screen.findByLabelText("Download notebook"));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Download unavailable");
-    expect(create).not.toHaveBeenCalled();
   });
 
   it("shows frozen scope for every turn and selects historical outcomes", async () => {
@@ -403,28 +383,6 @@ describe("remediation behaviors", () => {
     resolveOldKernel(new Response(JSON.stringify({ state: "busy", kernelSessionId: "kernel-1", executionAttemptId: "attempt-1" }), { headers: { "Content-Type": "application/json" } }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.getByText("Kernel idle")).toBeInTheDocument();
-  });
-
-  it("keeps the uploaded session when the following kernel read fails", async () => {
-    const uploaded = { ...notebook, sessionId: "session-2", filename: "replacement.ipynb", revision: 0 };
-    let uploadCommitted = false;
-    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-      const path = String(input);
-      if (path.endsWith("/notebooks/upload") && init?.method === "POST") {
-        uploadCommitted = true;
-        return json(uploaded, 201);
-      }
-      if (path.endsWith("/kernel/status") && uploadCommitted) return json({ error: { code: "kernel_unavailable", message: "Kernel status unavailable", details: {} } }, 500);
-      if (path.endsWith("/session/status")) return json({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: null, turnHistory: [], turnHistoryTruncated: false });
-      return baseFetch(input, init);
-    });
-    render(<App />);
-    expect(await screen.findByText("sample.ipynb")).toBeInTheDocument();
-    const file = new File(["{}"], "replacement.ipynb", { type: "application/x-ipynb+json" });
-    await userEvent.upload(screen.getByLabelText("Upload notebook").querySelector("input")!, file);
-
-    expect(await screen.findByText("replacement.ipynb")).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("Kernel status unavailable");
   });
 
   it("rehydrates eligibility before allowing undo for cached truncated history", async () => {
