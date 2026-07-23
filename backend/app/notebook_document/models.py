@@ -75,6 +75,18 @@ class ReplacementPreconditionRequired(NotebookDomainError):
     status_code = 409
 
 
+class NotebookPathError(NotebookDomainError):
+    code = "notebook_path_invalid"
+    message = "Notebook path is not a readable .ipynb file within the workspace root"
+    status_code = 400
+
+
+class ExternalModificationConflict(NotebookDomainError):
+    code = "external_modification_conflict"
+    message = "Notebook file changed on disk since it was opened"
+    status_code = 409
+
+
 class MutationConflict(NotebookDomainError):
     code = "mutation_conflict"
     message = "Another notebook mutation is active"
@@ -102,6 +114,13 @@ class MutationLease:
 
 
 @dataclass(frozen=True)
+class OnDiskBaseline:
+    path: str
+    mtime_ns: int
+    content_hash: str
+
+
+@dataclass(frozen=True)
 class NotebookSnapshot:
     session_id: str
     filename: str
@@ -109,6 +128,7 @@ class NotebookSnapshot:
     revision: int
     dirty: bool
     last_mutation_owner: str | None
+    notebook_path: str | None = None
 
 
 @dataclass(frozen=True)

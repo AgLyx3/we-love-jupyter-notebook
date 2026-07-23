@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import re
+from pathlib import Path
 from threading import RLock
 from typing import Any, Callable
 from uuid import uuid4
@@ -19,8 +20,10 @@ from .models import (
     NotebookCloseResult,
     NotebookImportError,
     NotebookNotLoaded,
+    NotebookPathError,
     NotebookSizeError,
     NotebookSnapshot,
+    OnDiskBaseline,
     ReplacementPreconditionRequired,
     RevisionConflict,
     SessionConflict,
@@ -59,6 +62,8 @@ class NotebookDocumentService:
         self._revision = 0
         self._dirty = False
         self._last_mutation_owner: str | None = None
+        self._notebook_path: str | None = None
+        self._on_disk_baseline: OnDiskBaseline | None = None
         self._session_replacement_listeners: list[
             Callable[[str | None, int], None]
         ] = []
@@ -89,23 +94,97 @@ class NotebookDocumentService:
         try:
             with self._lock:
                 candidate, normalized = self._parse_and_validate(payload)
-                if self._notebook is not None:
-                    if expected_session_id is None or expected_revision is None:
-                        raise ReplacementPreconditionRequired()
-                    self._check_preconditions(expected_session_id, expected_revision)
-
-                self._session_id = uuid4().hex
-                self._filename = self._safe_filename(filename)
-                self._notebook = candidate
-                self._revision = 1 if normalized else 0
-                self._dirty = normalized
-                self._last_mutation_owner = "normalization" if normalized else None
-                self._notify_session_replaced_unlocked(
-                    self._session_id, self._revision,
+                self._enforce_replacement_preconditions(
+                    expected_session_id, expected_revision
                 )
-                return self._snapshot_unlocked()
+                return self._install_notebook_unlocked(
+                    notebook=candidate,
+                    normalized=normalized,
+                    filename=filename,
+                    notebook_path=None,
+                    on_disk_baseline=None,
+                )
         finally:
             self.coordinator.release(lease)
+
+    def open_notebook_from_path(
+        self,
+        path: str,
+        *,
+        workspace_root: str | None = None,
+        expected_session_id: str | None = None,
+        expected_revision: int | None = None,
+    ) -> NotebookSnapshot:
+        resolved = self._resolve_notebook_path(path, workspace_root)
+        try:
+            payload = resolved.read_bytes()
+            mtime_ns = resolved.stat().st_mtime_ns
+        except OSError as error:
+            raise NotebookPathError() from error
+        lease = self._acquire_lease(
+            operation_type="notebook_open", operation_id=uuid4().hex
+        )
+        try:
+            with self._lock:
+                candidate, normalized = self._parse_and_validate(payload)
+                self._enforce_replacement_preconditions(
+                    expected_session_id, expected_revision
+                )
+                baseline = OnDiskBaseline(
+                    path=str(resolved),
+                    mtime_ns=mtime_ns,
+                    content_hash=hashlib.sha256(payload).hexdigest(),
+                )
+                return self._install_notebook_unlocked(
+                    notebook=candidate,
+                    normalized=normalized,
+                    filename=str(resolved),
+                    notebook_path=str(resolved),
+                    on_disk_baseline=baseline,
+                )
+        finally:
+            self.coordinator.release(lease)
+
+    def _install_notebook_unlocked(
+        self,
+        *,
+        notebook: dict[str, Any],
+        normalized: bool,
+        filename: str,
+        notebook_path: str | None,
+        on_disk_baseline: OnDiskBaseline | None,
+    ) -> NotebookSnapshot:
+        self._session_id = uuid4().hex
+        self._filename = self._safe_filename(filename)
+        self._notebook = notebook
+        self._revision = 1 if normalized else 0
+        self._dirty = normalized
+        self._last_mutation_owner = "normalization" if normalized else None
+        self._notebook_path = notebook_path
+        self._on_disk_baseline = on_disk_baseline
+        self._notify_session_replaced_unlocked(self._session_id, self._revision)
+        return self._snapshot_unlocked()
+
+    def _enforce_replacement_preconditions(
+        self, expected_session_id: str | None, expected_revision: int | None
+    ) -> None:
+        if self._notebook is None:
+            return
+        if expected_session_id is None or expected_revision is None:
+            raise ReplacementPreconditionRequired()
+        self._check_preconditions(expected_session_id, expected_revision)
+
+    def _resolve_notebook_path(
+        self, path: str, workspace_root: str | None
+    ) -> Path:
+        resolved = Path(path).resolve()
+        if workspace_root is not None:
+            root = Path(workspace_root).resolve()
+            if not resolved.is_relative_to(root):
+                raise NotebookPathError()
+        if resolved.suffix != ".ipynb" or not resolved.is_file():
+            raise NotebookPathError()
+        return resolved
 
     def close_notebook(
         self, *, expected_session_id: str, expected_revision: int,
@@ -126,6 +205,8 @@ class NotebookDocumentService:
                 self._revision = 0
                 self._dirty = False
                 self._last_mutation_owner = None
+                self._notebook_path = None
+                self._on_disk_baseline = None
                 self._notify_session_replaced_unlocked(None, 0)
                 return NotebookCloseResult(
                     closed_session_id=closed_session_id,
@@ -397,6 +478,7 @@ class NotebookDocumentService:
             revision=self._revision,
             dirty=self._dirty,
             last_mutation_owner=self._last_mutation_owner,
+            notebook_path=self._notebook_path,
         )
 
     @staticmethod
