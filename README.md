@@ -2,9 +2,9 @@
 
 ## Demo
 
-<video src="demo-video/i-love-jupyter-notebook-demo-1.mp4" controls width="100%"></video>
+<video src="https://github.com/AgLyx3/we-love-jupyter-notebook/raw/main/demo-video/i-love-jupyter-notebook-demo-1.mp4" controls width="100%"></video>
 
-> If the video does not play inline, [watch it here](demo-video/i-love-jupyter-notebook-demo-1.mp4).
+> If the video does not play inline, [watch it here](https://github.com/AgLyx3/we-love-jupyter-notebook/raw/main/demo-video/i-love-jupyter-notebook-demo-1.mp4).
 
 A local FastAPI + React editor for working on Jupyter notebooks with scoped AI
 agent editing. You open a local `.ipynb` file (or a project folder), edit and
