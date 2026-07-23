@@ -135,6 +135,21 @@ def test_open_rejects_oversize_file(tmp_path):
         NotebookDocumentService().open_notebook_from_path(str(file))
 
 
+def test_open_oversize_rejected_by_stat_before_reading(tmp_path, monkeypatch):
+    file = tmp_path / "huge.ipynb"
+    _write(file, b" " * (MAX_NOTEBOOK_BYTES + 1))
+
+    from pathlib import Path
+
+    def _forbidden(self):
+        raise AssertionError("read_bytes must not be called for oversize file")
+
+    monkeypatch.setattr(Path, "read_bytes", _forbidden)
+
+    with pytest.raises(NotebookSizeError):
+        NotebookDocumentService().open_notebook_from_path(str(file))
+
+
 def test_open_replacement_without_preconditions_is_refused(tmp_path, notebook_payload):
     first = tmp_path / "first.ipynb"
     second = tmp_path / "second.ipynb"

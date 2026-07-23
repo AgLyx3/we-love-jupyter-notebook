@@ -187,6 +187,12 @@ class NotebookDocumentService:
                 raise NotebookPathError()
         if resolved.suffix != ".ipynb" or not resolved.is_file():
             raise NotebookPathError()
+        try:
+            size = resolved.stat().st_size
+        except OSError as error:
+            raise NotebookPathError() from error
+        if size > MAX_NOTEBOOK_BYTES:
+            raise NotebookSizeError(MAX_NOTEBOOK_BYTES)
         return resolved
 
     def close_notebook(
