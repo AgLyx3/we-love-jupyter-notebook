@@ -375,6 +375,59 @@ class NotebookDocumentService:
             self._dirty = False
             return self._snapshot_unlocked()
 
+    def save_notebook_as(
+        self,
+        path: str,
+        *,
+        expected_session_id: str,
+        expected_revision: int,
+        workspace_root: str | None = None,
+    ) -> NotebookSnapshot:
+        """Write the committed document to a NEW path and rebind the session to it.
+
+        Like ``save_notebook_to_disk`` this holds only the document RLock and never
+        the coordinator lease, so it may run alongside an active turn. Save As is an
+        explicit write to a chosen path, so no on-disk baseline conflict applies; the
+        target need not pre-exist and is overwritten if it does. The revision is
+        preserved while the file binding, filename, baseline, and workspace root are
+        replaced to point at the new location.
+        """
+        with self._lock:
+            self._require_notebook()
+            self._check_preconditions(expected_session_id, expected_revision)
+            target = self._resolve_save_as_target(path, workspace_root)
+            content = self._serialize_notebook(self._notebook)
+
+            mtime_ns = self._atomic_write(target, content)
+            self._notebook_path = str(target)
+            self._filename = self._safe_filename(str(target))
+            self._on_disk_baseline = OnDiskBaseline(
+                path=str(target),
+                mtime_ns=mtime_ns,
+                content_hash=hashlib.sha256(content).hexdigest(),
+            )
+            self._workspace_root = (
+                str(Path(workspace_root).expanduser().resolve())
+                if workspace_root is not None
+                else str(target.parent)
+            )
+            self._dirty = False
+            return self._snapshot_unlocked()
+
+    @staticmethod
+    def _resolve_save_as_target(path: str, workspace_root: str | None) -> Path:
+        resolved = Path(path).expanduser().resolve()
+        if resolved.suffix != ".ipynb":
+            raise NotebookPathError()
+        parent = resolved.parent
+        if not parent.is_dir() or not os.access(parent, os.W_OK):
+            raise NotebookPathError()
+        if workspace_root is not None:
+            root = Path(workspace_root).expanduser().resolve()
+            if not resolved.is_relative_to(root):
+                raise NotebookPathError()
+        return resolved
+
     @staticmethod
     def _atomic_write(path: Path, content: bytes) -> int:
         handle, tmp_name = tempfile.mkstemp(

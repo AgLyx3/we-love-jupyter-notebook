@@ -425,6 +425,51 @@ def test_save_rejects_notebook_without_path(client, notebook_payload):
     assert response.json()["error"]["code"] == "notebook_path_invalid"
 
 
+def test_save_as_notebook_rebinds_to_new_path(client, notebook_payload, tmp_path):
+    from pathlib import Path
+
+    source = _write_notebook(tmp_path, notebook_payload, name="src.ipynb")
+    opened = client.post("/notebooks/open", json={"path": str(source)}).json()
+    target = tmp_path / "renamed.ipynb"
+
+    response = client.post(
+        "/notebooks/save-as",
+        json={
+            "path": str(target),
+            "sessionId": opened["sessionId"],
+            "expectedDocumentRevision": opened["revision"],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["notebookPath"] == str(Path(target).resolve())
+    assert body["filename"] == "renamed.ipynb"
+    assert body["dirty"] is False
+    assert body["revision"] == opened["revision"]
+    assert target.exists()
+
+    current = client.get("/notebooks/current").json()
+    assert current["notebookPath"] == str(Path(target).resolve())
+
+
+def test_save_as_rejects_non_ipynb_target(client, notebook_payload, tmp_path):
+    source = _write_notebook(tmp_path, notebook_payload, name="src2.ipynb")
+    opened = client.post("/notebooks/open", json={"path": str(source)}).json()
+
+    response = client.post(
+        "/notebooks/save-as",
+        json={
+            "path": str(tmp_path / "bad.txt"),
+            "sessionId": opened["sessionId"],
+            "expectedDocumentRevision": opened["revision"],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "notebook_path_invalid"
+
+
 def test_open_replacement_requires_current_session_and_revision(
     client, notebook_payload, tmp_path
 ):

@@ -37,6 +37,13 @@ class NotebookSaveRequest(BaseModel):
     expected_revision: int = Field(alias="expectedDocumentRevision")
 
 
+class NotebookSaveAsRequest(BaseModel):
+    path: str
+    session_id: str = Field(alias="sessionId")
+    expected_revision: int = Field(alias="expectedDocumentRevision")
+    workspace_root: str | None = Field(default=None, alias="workspaceRoot")
+
+
 def _service(request: Request) -> NotebookDocumentService:
     return request.app.state.notebook_service
 
@@ -117,6 +124,17 @@ def save_notebook(body: NotebookSaveRequest, request: Request) -> dict[str, Any]
     snapshot = _service(request).save_notebook_to_disk(
         expected_session_id=body.session_id,
         expected_revision=body.expected_revision,
+    )
+    return serialize_snapshot(snapshot)
+
+
+@router.post("/notebooks/save-as")
+def save_notebook_as(body: NotebookSaveAsRequest, request: Request) -> dict[str, Any]:
+    snapshot = _service(request).save_notebook_as(
+        body.path,
+        expected_session_id=body.session_id,
+        expected_revision=body.expected_revision,
+        workspace_root=body.workspace_root,
     )
     return serialize_snapshot(snapshot)
 
