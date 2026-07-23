@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from backend.app.agent_turns.service import (
     AgentTurn, AgentTurnNotFound, AgentTurnService, AgentTurnServiceShuttingDown,
-    MAX_TURN_HISTORY_BYTES, RevertConflict, UndoConflict,
+    MAX_TURN_HISTORY_BYTES, RevertConflict, UndoConflict, UnknownAgentAdapter,
 )
 from backend.app.api.agent_turn_routes import (
     MAX_TURN_SUMMARY_BYTES, StartTurnRequest, serialize_turn, serialize_turn_summary,
@@ -190,6 +190,12 @@ def test_session_status_persists_bounded_turn_history_with_frozen_scope(
         created = api.post("/agent-turns", json={
             **preconditions, "prompt": "remember this turn",
         }).json()
+        assert created["agent"] == "default"
+        rejected = api.post("/agent-turns", json={
+            **preconditions, "prompt": "remember this turn", "agent": "nope",
+        })
+        assert rejected.status_code == 422
+        assert rejected.json()["error"]["code"] == "unknown_agent_adapter"
         for _ in range(100):
             current = api.get(f"/agent-turns/{created['turnId']}").json()
             if current["state"] == "completed":
@@ -1167,3 +1173,53 @@ def test_trusted_plan_turn_writes_nothing_and_is_not_structural(notebook_payload
     assert turn.structural_ops == ()
     assert turn.applied_revision is None
     assert documents.get_snapshot().revision == snapshot.revision  # nothing applied
+
+
+def test_turn_routes_to_selected_adapter_and_serializes_agent(notebook_payload):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    claude_like = FakeAgentAdapter([FakeAttempt(final_output="from claude")])
+    codex_like = FakeAgentAdapter([FakeAttempt(final_output="from codex")])
+    service = AgentTurnService(
+        documents=documents, scopes=scopes,
+        adapters={"claude": claude_like, "codex": codex_like},
+        default_agent="claude", timeout=1,
+    )
+    turn = service.start(
+        prompt="explain", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, agent="codex", background=False,
+    )
+    assert turn.agent == "codex"
+    assert turn.final_output == "from codex"
+    assert codex_like.call_count == 1 and claude_like.call_count == 0
+
+    turn = service.start(
+        prompt="explain", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    assert turn.agent == "claude"
+    assert claude_like.call_count == 1
+
+
+def test_unknown_agent_is_rejected_without_running(notebook_payload):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    adapter = FakeAgentAdapter()
+    service = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=adapter, timeout=1,
+    )
+    with pytest.raises(UnknownAgentAdapter):
+        service.start(
+            prompt="explain", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision, agent="gemini", background=False,
+        )
+    assert adapter.call_count == 0
+    # The failed start must not leak the mutation lease: a follow-up default
+    # turn still runs.
+    turn = service.start(
+        prompt="explain", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    assert turn.agent == "default"

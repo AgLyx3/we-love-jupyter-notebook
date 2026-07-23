@@ -18,11 +18,12 @@ class StartTurnRequest(BaseModel):
     session_id: str = Field(alias="sessionId")
     expected_revision: int = Field(alias="expectedDocumentRevision")
     prompt: str = Field(min_length=1)
-    model: Literal["default", "opus", "sonnet", "haiku"] = "default"
+    model: str = Field(default="default", max_length=64)
     mode: Literal["edit", "plan"] = "edit"
     write_scope: Literal["blocking", "trusted"] = Field(
         default="blocking", alias="writeScope"
     )
+    agent: str = Field(default="default", max_length=64)
 
 
 class MutationRequest(BaseModel):
@@ -87,6 +88,7 @@ def serialize_turn(
         "model": turn.model,
         "mode": turn.mode,
         "writeScope": turn.write_scope,
+        "agent": turn.agent,
         "editableCellIds": list(turn.editable_cell_ids),
         "contextCellIds": list(turn.context_cell_ids),
         "undoEligible": undo_eligible,
@@ -222,6 +224,7 @@ def start_turn(body: StartTurnRequest, request: Request) -> dict[str, Any]:
         prompt=body.prompt, session_id=body.session_id,
         expected_revision=body.expected_revision,
         model=body.model, mode=body.mode, write_scope=body.write_scope,
+        agent=body.agent,
     )
     return _serialize_current(service, turn)
 

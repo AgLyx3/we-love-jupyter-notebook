@@ -97,6 +97,15 @@ class AgentTurnServiceShuttingDown(NotebookDomainError):
     status_code = 503
 
 
+class UnknownAgentAdapter(NotebookDomainError):
+    code = "unknown_agent_adapter"
+    message = "Requested agent backend is not available"
+    status_code = 422
+
+    def __init__(self, agent: str) -> None:
+        super().__init__(agent=agent)
+
+
 @dataclass
 class AgentTurn:
     turn_id: str
@@ -106,6 +115,7 @@ class AgentTurn:
     model: str = "default"
     mode: str = "edit"
     write_scope: str = "blocking"
+    agent: str = "default"
     editable_cell_ids: tuple[str, ...] = ()
     context_cell_ids: tuple[str, ...] = ()
     state: str = "created"
@@ -131,7 +141,10 @@ class AgentTurn:
 class AgentTurnService:
     def __init__(
         self, *, documents: NotebookDocumentService, scopes: TurnScopeService,
-        adapter: AgentAdapter, builder: AgentWorkspaceBuilder | None = None,
+        adapter: AgentAdapter | None = None,
+        adapters: dict[str, AgentAdapter] | None = None,
+        default_agent: str = "default",
+        builder: AgentWorkspaceBuilder | None = None,
         auditor: WorkspaceAuditor | None = None,
         validator: BoundaryValidator | None = None, timeout: float = 600,
         executions: KernelExecutionService | None = None,
@@ -139,7 +152,12 @@ class AgentTurnService:
     ) -> None:
         self.documents = documents
         self.scopes = scopes
-        self.adapter = adapter
+        self.adapters: dict[str, AgentAdapter] = (
+            dict(adapters) if adapters else {"default": adapter}
+        )
+        self.default_agent = default_agent if adapters else "default"
+        if self.default_agent not in self.adapters:
+            raise ValueError("default_agent must be a registered adapter")
         self.builder = builder or AgentWorkspaceBuilder()
         self.auditor = auditor or WorkspaceAuditor()
         self.validator = validator or BoundaryValidator()
@@ -155,15 +173,22 @@ class AgentTurnService:
             self._on_session_replaced
         )
 
+    @property
+    def adapter(self) -> AgentAdapter:
+        return self.adapters[self.default_agent]
+
     def start(
         self, *, prompt: str, session_id: str, expected_revision: int,
-        model: str = "default", mode: str = "edit",
+        model: str = "default", mode: str = "edit", agent: str = "default",
         write_scope: str = "blocking", background: bool = True,
     ) -> AgentTurn:
         turn_id = uuid4().hex
+        agent = self.default_agent if agent in ("", "default") else agent
         with self._lock:
             if self._shutting_down:
                 raise AgentTurnServiceShuttingDown()
+            if agent not in self.adapters:
+                raise UnknownAgentAdapter(agent)
             try:
                 lease = self.documents.coordinator.acquire(
                     operation_type="agent_turn", operation_id=turn_id
@@ -182,6 +207,7 @@ class AgentTurnService:
                     turn_id=turn_id, session_id=session_id,
                     base_revision=expected_revision, prompt=prompt,
                     model=model, mode=mode, write_scope=write_scope,
+                    agent=agent,
                     editable_cell_ids=scope.editable_cell_ids,
                     context_cell_ids=scope.context_cell_ids,
                     checkpoint=copy.deepcopy(snapshot.notebook),
@@ -446,7 +472,8 @@ class AgentTurnService:
             try:
                 with self._lock:
                     turn.attempts = attempt_number
-                result = self.adapter.run(
+                adapter = self.adapters[turn.agent]
+                result = adapter.run(
                     workspace, timeout=self.timeout, cancel_event=turn.cancel_event,
                     model=None if turn.model == "default" else turn.model,
                     permission_mode=PERMISSION_MODE_BY_MODE.get(turn.mode, "acceptEdits"),
@@ -455,7 +482,7 @@ class AgentTurnService:
                     turn.final_output = result.final_output
                 self._set_state(turn, "validating")
                 candidates = self.auditor.collect(
-                    workspace, auxiliary_paths=self.adapter.auxiliary_paths
+                    workspace, auxiliary_paths=adapter.auxiliary_paths
                 )
                 changes = self.validator.validate(
                     snapshot=self.documents.get_snapshot(), scope=scope,
@@ -576,7 +603,7 @@ class AgentTurnService:
             try:
                 with self._lock:
                     turn.attempts = attempt_number
-                result = self.adapter.run(
+                result = self.adapters[turn.agent].run(
                     workspace, timeout=self.timeout, cancel_event=turn.cancel_event,
                     model=None if turn.model == "default" else turn.model,
                     permission_mode="acceptEdits",
@@ -1110,9 +1137,13 @@ class AgentTurnService:
         if self.executions is not None:
             for turn in active:
                 self.executions.cancel_parent(turn.turn_id)
-        adapter_shutdown = getattr(self.adapter, "shutdown", None)
-        if callable(adapter_shutdown):
-            adapter_shutdown()
+        for name, adapter in self.adapters.items():
+            adapter_shutdown = getattr(adapter, "shutdown", None)
+            if callable(adapter_shutdown):
+                try:
+                    adapter_shutdown()
+                except Exception:
+                    logger.exception("Adapter %r failed to shut down cleanly", name)
         for worker, _turn_id in workers:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
