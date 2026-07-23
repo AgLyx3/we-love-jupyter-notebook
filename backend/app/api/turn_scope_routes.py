@@ -51,6 +51,13 @@ def add_context(body: ScopeCellRequest, request: Request) -> dict[str, Any]:
     ))
 
 
+@router.delete("/cells/{cell_id}")
+def remove_cell(cell_id: str, body: ClearScopeRequest, request: Request) -> dict[str, Any]:
+    return _serialize(request.app.state.turn_scope_service.remove(
+        cell_id, session_id=body.session_id, revision=body.expected_revision,
+    ))
+
+
 @router.delete("")
 def clear_scope(body: ClearScopeRequest, request: Request) -> dict[str, Any]:
     return _serialize(request.app.state.turn_scope_service.clear(

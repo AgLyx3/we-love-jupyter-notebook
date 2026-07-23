@@ -29,6 +29,29 @@ def test_scope_moves_cells_between_roles_and_clears(notebook_payload):
     assert scopes.clear(session_id=snapshot.session_id, revision=snapshot.revision).context_cell_ids == ()
 
 
+def test_scope_removes_individual_cells(notebook_payload):
+    documents, snapshot = _loaded(notebook_payload)
+    scopes = TurnScopeService(documents)
+    scopes.add("editable", editable=True, session_id=snapshot.session_id, revision=snapshot.revision)
+    scopes.add("intro", editable=False, session_id=snapshot.session_id, revision=snapshot.revision)
+    remaining = scopes.remove("editable", session_id=snapshot.session_id, revision=snapshot.revision)
+    assert remaining.editable_cell_ids == ()
+    assert remaining.context_cell_ids == ("intro",)
+    # Removing a cell that is not scoped is a harmless no-op.
+    assert scopes.remove("editable").context_cell_ids == ("intro",)
+    emptied = scopes.remove("intro", session_id=snapshot.session_id, revision=snapshot.revision)
+    assert emptied.editable_cell_ids == () and emptied.context_cell_ids == ()
+    assert emptied.session_id is None and emptied.notebook_revision is None
+
+
+def test_scope_remove_rejects_stale_revision(notebook_payload):
+    documents, snapshot = _loaded(notebook_payload)
+    scopes = TurnScopeService(documents)
+    scopes.add("editable", editable=True, session_id=snapshot.session_id, revision=snapshot.revision)
+    with pytest.raises(RevisionConflict):
+        scopes.remove("editable", session_id=snapshot.session_id, revision=99)
+
+
 def test_scope_rejects_stale_revision_and_active_mutation(notebook_payload):
     documents, snapshot = _loaded(notebook_payload)
     scopes = TurnScopeService(documents)

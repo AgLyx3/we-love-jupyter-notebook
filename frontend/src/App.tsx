@@ -7,6 +7,7 @@ import KernelControls from "./execution/KernelControls";
 import CloseNotebookDialog from "./fileOperations/CloseNotebookDialog";
 import FileToolbar from "./fileOperations/FileToolbar";
 import NotebookView from "./notebook/NotebookView";
+import { composeChatPrompt, composeInlineEditPrompt, makeAttachment, makeErrorAttachment, type CellSelection, type SelectionAttachment } from "./notebook/selectionEdit";
 
 const AGENT_MIN_WIDTH = 300;
 const AGENT_MAX_WIDTH = 760;
@@ -26,6 +27,7 @@ export default function App() {
   const [history, setHistory] = useState<TurnRecord[]>([]);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState<{ cellId: string; requestId: number } | null>(null);
+  const [attachments, setAttachments] = useState<SelectionAttachment[]>([]);
   const [operation, setOperation] = useState<ExecutionOperation | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -64,7 +66,7 @@ export default function App() {
   const mutationGenerationRef = useRef(0);
   useEffect(() => { snapshotRef.current = notebook; }, [notebook]);
   useEffect(() => { scopeRef.current = scope; }, [scope]);
-  useEffect(() => { setDirtyCellIds(new Set()); }, [notebook?.sessionId]);
+  useEffect(() => { setDirtyCellIds(new Set()); setAttachments([]); }, [notebook?.sessionId]);
   useEffect(() => {
     setCloseTarget((target) => target && (target.sessionId !== notebook?.sessionId || target.revision !== notebook.revision) ? null : target);
   }, [notebook?.sessionId, notebook?.revision]);
@@ -253,6 +255,48 @@ export default function App() {
   };
   const requestCellFocus = (cellId: string) => setFocusRequest((current) => ({ cellId, requestId: (current?.requestId ?? 0) + 1 }));
 
+  // Selection → "Add to agent chat": the containing cell becomes the editable
+  // boundary and the selection is attached to the chat as a reference chip
+  // (Cursor-style — cell/line label, not raw code). The code is sent to the
+  // agent as context only when the turn is submitted.
+  const addSelectionToChat = (notebook: NotebookSnapshot, selection: CellSelection) => {
+    const cell = notebook.cells.find((item) => item.cellId === selection.cellId);
+    if (!cell) return;
+    void mutate(() => api.addScope(notebook, selection.cellId, true), { refreshAfter: false }, setScope);
+    const attachment = makeAttachment(selection, cell.index, cell.cellType);
+    setAttachments((current) => [...current.filter((item) => item.id !== attachment.id), attachment]);
+  };
+
+  // Selection → "Add to chat" from a cell's error output: attach the selected
+  // traceback text as a reference chip and scope the erroring cell as editable.
+  const addErrorToChat = (notebook: NotebookSnapshot, cellId: string, errorText: string) => {
+    const cell = notebook.cells.find((item) => item.cellId === cellId);
+    if (!cell) return;
+    void mutate(() => api.addScope(notebook, cellId, true), { refreshAfter: false }, setScope);
+    const attachment = makeErrorAttachment(cellId, errorText, cell.index, cell.cellType);
+    setAttachments((current) => [...current.filter((item) => item.id !== attachment.id), attachment]);
+  };
+
+  // Selection right-click → "Edit inline": scope the containing cell as editable
+  // and immediately start a turn focused on the selected region. The enforced
+  // edit boundary stays the whole cell; the selection only focuses the agent.
+  const inlineEditSelection = (notebook: NotebookSnapshot, selection: CellSelection, instruction: string) => {
+    const frozen: TurnScope = {
+      ...scope,
+      editableCellIds: Array.from(new Set([...scope.editableCellIds, selection.cellId])),
+      contextCellIds: scope.contextCellIds.filter((id) => id !== selection.cellId),
+    };
+    void mutate(async () => {
+      await api.addScope(notebook, selection.cellId, true);
+      return api.startTurn(notebook, composeInlineEditPrompt(instruction, selection));
+    }, { refreshAfter: false }, (result) => {
+      setScope(frozen);
+      setTurn(result);
+      setSelectedTurnId(result.turnId);
+      setHistory((items) => upsertRecord(items, result, frozen, instruction.trim() || "Inline edit"));
+    });
+  };
+
   if (loading) return <div className="loading-screen"><span className="spinner" />Loading notebook…</div>;
 
   if (!notebook) return <div className="app-shell empty-shell">
@@ -295,6 +339,9 @@ export default function App() {
         onRun={(cellId) => void mutate(() => api.runCell(notebook, cellId), { refreshAfter: false }, setOperation)}
         onScope={(cellId, editable) => void mutate(() => api.addScope(notebook, cellId, editable), { refreshAfter: false }, setScope)}
         onScopeMany={(cellIds, editable) => { if (cellIds.length) void mutate(async () => { let latest: TurnScope | undefined; for (const cellId of cellIds) latest = await api.addScope(notebook, cellId, editable); return latest as TurnScope; }, { refreshAfter: false }, setScope); }}
+        onAddSelectionToChat={(selection) => addSelectionToChat(notebook, selection)}
+        onInlineEdit={(selection, instruction) => inlineEditSelection(notebook, selection, instruction)}
+        onAddErrorToChat={(cellId, errorText) => addErrorToChat(notebook, cellId, errorText)}
         onRevert={(turnId, cellId) => void mutate(() => api.revertCell(notebook, turnId, cellId), {}, (updated) => {
           setNotebook(updated);
           setHistory((items) => updateTurnRecord(items, turnId, (item) => ({ ...item, changes: item.changes.filter((change) => change.cellId !== cellId) })));
@@ -303,7 +350,9 @@ export default function App() {
       <div className="editor-resizer" role="separator" aria-orientation="vertical" aria-label="Resize agent panel" tabIndex={0} onPointerDown={startAgentResize} onKeyDown={nudgeAgentResize} />
       <AgentChatPanel notebook={notebook} scope={scope} turn={selectedTurn} activeTurn={activeTurn} history={history} operation={operation} busy={busy} mutationsDisabled={mutationsDisabled || hasDirtyDrafts}
         onClearScope={() => void mutate(() => api.clearScope(notebook), { refreshAfter: false }, setScope)}
-        onSubmit={(prompt) => { const frozen = { ...scope, editableCellIds: [...scope.editableCellIds], contextCellIds: [...scope.contextCellIds] }; void mutate(() => api.startTurn(notebook, prompt), { refreshAfter: false }, (result) => { setTurn(result); setSelectedTurnId(result.turnId); setHistory((items) => upsertRecord(items, result, frozen, prompt)); }); }}
+        onRemoveScopeCell={(cellId) => void mutate(() => api.removeScope(notebook, cellId), { refreshAfter: false }, setScope)}
+        onSubmit={(prompt) => { const frozen = { ...scope, editableCellIds: [...scope.editableCellIds], contextCellIds: [...scope.contextCellIds] }; const composed = composeChatPrompt(prompt, attachments); void mutate(() => api.startTurn(notebook, composed), { refreshAfter: false }, (result) => { setTurn(result); setSelectedTurnId(result.turnId); setHistory((items) => upsertRecord(items, result, frozen, prompt)); setAttachments([]); }); }}
+        attachments={attachments} onRemoveAttachment={(id) => setAttachments((current) => current.filter((item) => item.id !== id))}
         onCancel={() => activeTurn && void mutate(() => api.cancelTurn(notebook, activeTurn.turnId), { refreshAfter: false }, (result) => { setTurn(result); setHistory((items) => upsertRecord(items, result)); })}
         onUndo={() => selectedTurn && void mutate(() => api.undoTurn(notebook, selectedTurn.turnId), {}, (updated) => {
           setNotebook(updated);

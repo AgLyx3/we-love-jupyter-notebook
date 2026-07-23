@@ -147,6 +147,8 @@ export const api = {
     request<{ sessionId: string; cellId: string; source: string; revision: number; dirty: boolean }>(`/cells/${encodeURIComponent(cellId)}/source`, { method: "POST", body: JSON.stringify({ ...mutation(snapshot), source }) }),
   addScope: (snapshot: NotebookSnapshot, cellId: string, editable: boolean) =>
     request<TurnScope>(`/turn-scope/${editable ? "editable-cells" : "context-cells"}`, { method: "POST", body: JSON.stringify({ ...mutation(snapshot), cellId }) }),
+  removeScope: (snapshot: NotebookSnapshot, cellId: string) =>
+    request<TurnScope>(`/turn-scope/cells/${encodeURIComponent(cellId)}`, { method: "DELETE", body: JSON.stringify(mutation(snapshot)) }),
   clearScope: (snapshot: NotebookSnapshot) => request<TurnScope>("/turn-scope", { method: "DELETE", body: JSON.stringify(mutation(snapshot)) }),
   runCell: (snapshot: NotebookSnapshot, cellId: string) => request<ExecutionOperation>(`/execution/cells/${encodeURIComponent(cellId)}/run`, { method: "POST", body: JSON.stringify(mutation(snapshot)) }),
   runAll: (snapshot: NotebookSnapshot) => request<ExecutionOperation>("/execution/run-all", { method: "POST", body: JSON.stringify(mutation(snapshot)) }),
