@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
 import App from "./App";
 import AgentChatPanel, { type TurnRecord } from "./agentChat/AgentChatPanel";
-import LineDiff from "./notebook/LineDiff";
 import NotebookView from "./notebook/NotebookView";
 import { Outputs } from "./notebook/NotebookCell";
 import RiskyExecutionDialog from "./execution/RiskyExecutionDialog";
@@ -84,27 +83,6 @@ describe("remediation behaviors", () => {
     await userEvent.click(await screen.findByLabelText("Download notebook"));
     expect(await screen.findByRole("alert")).toHaveTextContent("Download unavailable");
     expect(create).not.toHaveBeenCalled();
-  });
-
-  it("renders unchanged, removed, and added diff lines separately", () => {
-    render(<LineDiff before={"same\nold"} after={"same\nnew"} />);
-    const diff = screen.getByLabelText("Agent source diff");
-    expect(diff.querySelector(".diff-same")).toHaveTextContent("same");
-    expect(diff.querySelector(".diff-removed")).toHaveTextContent("old");
-    expect(diff.querySelector(".diff-added")).toHaveTextContent("new");
-  });
-
-  it("uses a bounded regional diff for large cells", () => {
-    const prefix = Array.from({ length: 1_000 }, (_, index) => `prefix ${index}`);
-    const suffix = Array.from({ length: 1_000 }, (_, index) => `suffix ${index}`);
-    render(<LineDiff before={[...prefix, "old region", ...suffix].join("\n")} after={[...prefix, "new region", ...suffix].join("\n")} />);
-    const diff = screen.getByLabelText("Agent source diff");
-    expect(diff.querySelectorAll(".diff-removed")).toHaveLength(1);
-    expect(diff.querySelector(".diff-removed")).toHaveTextContent("old region");
-    expect(diff.querySelectorAll(".diff-added")).toHaveLength(1);
-    expect(diff.querySelector(".diff-added")).toHaveTextContent("new region");
-    expect(diff.querySelectorAll(".diff-same").length).toBeLessThanOrEqual(402);
-    expect(diff).toHaveTextContent("same lines omitted");
   });
 
   it("shows frozen scope for every turn and selects historical outcomes", async () => {

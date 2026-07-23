@@ -135,7 +135,8 @@ export default function NotebookCell({ cell, focused, selected, editable, contex
     if ((event.target as HTMLElement).closest?.(".cell-outputs, .markdown-preview-wrap")) { event.preventDefault(); return; }
     event.dataTransfer.setData("application/x-notebook-cell", cell.cellId); event.dataTransfer.effectAllowed = "copy";
   }} className={`notebook-cell ${focused ? "is-focused" : ""} ${selected ? "is-selected" : ""}`} tabIndex={0} onFocus={onFocus} onContextMenu={onContextMenu} aria-label={description}>
-    <div className="cell-gutter" aria-label={`Select ${description}`} title="Click to select · Shift-click for a range · right-click for scope actions" onClick={onSelect}><span className="execution-count">{cell.cellType === "code" ? `[${cell.executionCount ?? " "}]` : cell.cellType === "raw" ? "RAW" : "MD"}</span><div className="gutter-actions">
+    <div className="cell-gutter" aria-label={`Select ${description}`} title="Click to select · Shift-click for a range · right-click for scope actions" onClick={onSelect}><span className="cell-number" title={`Cell ${cell.index + 1}`}>{cell.index + 1}</span><span className="execution-count">{cell.cellType === "code" ? `[${cell.executionCount ?? " "}]` : cell.cellType === "raw" ? "RAW" : "MD"}</span><div className="gutter-actions">
+
       <button disabled={dependentDisabled || cell.cellType === "raw"} className={editable ? "selected" : ""} title="Allow agent edit" aria-label={`Allow agent edit ${description}`} onClick={(event) => { event.stopPropagation(); onAddEditable(); }}>{editable ? <Check /> : <Pencil />}</button>
       <button disabled={dependentDisabled} className={context ? "selected context" : ""} title="Add as context" aria-label={`Add ${description} as context`} onClick={(event) => { event.stopPropagation(); onAddContext(); }}>{context ? <Check /> : <BookOpen />}</button>
     </div></div>
