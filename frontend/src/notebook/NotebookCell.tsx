@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import type { AgentChange, NotebookCellData } from "../api/client";
 import CellEditor from "./CellEditor";
+import { useAutoSave } from "./useAutoSave";
 import type { CellSelection } from "./selectionEdit";
 
 function text(value: unknown): string {
@@ -110,9 +111,9 @@ export function Outputs({ outputs, disabled = false, onAddErrorToChat, onHoverCh
   })}</div>;
 }
 
-export default function NotebookCell({ cell, focused, selected, editable, context, change, disabled, sourceActionsDisabled, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
+export default function NotebookCell({ cell, focused, selected, editable, context, change, disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
   cell: NotebookCellData; focused: boolean; selected: boolean; editable: boolean; context: boolean; change?: AgentChange;
-  disabled: boolean; sourceActionsDisabled: boolean; cellRef: (node: HTMLElement | null) => void;
+  disabled: boolean; sourceActionsDisabled: boolean; autoSave: boolean; cellRef: (node: HTMLElement | null) => void;
   onFocus: () => void; onSelect: (event: MouseEvent) => void; onContextMenu: (event: MouseEvent) => void; onDirtyChange: (dirty: boolean) => void; onSave: (source: string) => void; onRun: () => void; onAddEditable: () => void; onAddContext: () => void; onRevert: () => void;
   onAddSelectionToChat?: (selection: CellSelection) => void; onInlineEdit?: (selection: CellSelection, instruction: string) => void; onAddErrorToChat?: (text: string) => void;
 }) {
@@ -128,6 +129,9 @@ export default function NotebookCell({ cell, focused, selected, editable, contex
     previousServerSource.current = cell.source;
   }, [cell.source]);
   useEffect(() => onDirtyChange(dirty), [cell.cellId, dirty]);
+  // Auto-save (opt-in) a short idle after the last edit; paused while off, or
+  // while the agent/kernel is busy (disabled) so saves never race a turn.
+  useAutoSave(source, dirty, disabled || !autoSave, onSave);
   const description = `${cell.cellType} cell ${cell.index + 1}`;
   const dependentDisabled = disabled || sourceActionsDisabled;
   return <article ref={cellRef} draggable={!dependentDisabled && !suppressDrag} onDragStart={(event) => {

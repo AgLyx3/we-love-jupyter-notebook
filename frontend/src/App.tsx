@@ -1,5 +1,6 @@
-import { AlertTriangle, BookOpen, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
+import { AlertTriangle, BookOpen, FileUp, Save, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type PointerEvent } from "react";
+import { extractNotebookFiles } from "./fileOperations/dropUpload";
 import { ApiError, api, connectEvents, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type KernelStatus, type NotebookSnapshot, type TurnScope } from "./api/client";
 import AgentChatPanel from "./agentChat/AgentChatPanel";
 import type { TurnRecord } from "./agentChat/AgentChatPanel";
@@ -12,6 +13,7 @@ import { composeChatPrompt, composeInlineEditPrompt, makeAttachment, makeErrorAt
 const AGENT_MIN_WIDTH = 300;
 const AGENT_MAX_WIDTH = 760;
 const AGENT_WIDTH_KEY = "notebook-agent-width";
+const AUTO_SAVE_KEY = "notebook-auto-save";
 const clampAgentWidth = (value: number): number => Math.min(AGENT_MAX_WIDTH, Math.max(AGENT_MIN_WIDTH, Math.round(value)));
 
 const emptyScope: TurnScope = { editableCellIds: [], contextCellIds: [], sessionId: null, notebookRevision: null };
@@ -28,6 +30,8 @@ export default function App() {
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState<{ cellId: string; requestId: number } | null>(null);
   const [attachments, setAttachments] = useState<SelectionAttachment[]>([]);
+  const [fileDragging, setFileDragging] = useState(false);
+  const dragDepth = useRef(0);
   const [operation, setOperation] = useState<ExecutionOperation | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -40,6 +44,8 @@ export default function App() {
     return Number.isFinite(saved) && saved > 0 ? clampAgentWidth(saved) : 360;
   });
   useEffect(() => { localStorage.setItem(AGENT_WIDTH_KEY, String(agentWidth)); }, [agentWidth]);
+  const [autoSave, setAutoSave] = useState<boolean>(() => localStorage.getItem(AUTO_SAVE_KEY) === "on");
+  useEffect(() => { localStorage.setItem(AUTO_SAVE_KEY, autoSave ? "on" : "off"); }, [autoSave]);
   const startAgentResize = useCallback((event: PointerEvent) => {
     event.preventDefault();
     const onMove = (moveEvent: globalThis.PointerEvent) => setAgentWidth(clampAgentWidth(window.innerWidth - moveEvent.clientX));
@@ -206,6 +212,7 @@ export default function App() {
       setNotebook(next); setScope(emptyScope); setTurn(null); setHistory([]); setSelectedTurnId(null); setOperation(null); setKernel(emptyKernel); setDirtyCellIds(new Set());
     });
     if (uploaded) await mutate(() => api.kernel(), { refreshAfter: false }, setKernel);
+    return Boolean(uploaded);
   };
 
   const handleDownload = async () => {
@@ -297,12 +304,31 @@ export default function App() {
     });
   };
 
+  const handleDrop = async (dataTransfer: DataTransfer) => {
+    let files: File[];
+    try { files = await extractNotebookFiles(dataTransfer); }
+    catch { setNotice({ tone: "error", text: "Could not read the dropped item." }); return; }
+    if (!files.length) { setNotice({ tone: "warning", text: "No .ipynb notebook was found in what you dropped." }); return; }
+    const opened = await handleUpload(files[0]);
+    if (opened && files.length > 1) setNotice({ tone: "warning", text: `Opened ${files[0].name}; ${files.length - 1} other notebook${files.length > 2 ? "s were" : " was"} ignored.` });
+  };
+  // Drag-and-drop upload (files or folders). Ignores cell drags (no "Files"
+  // type) so it never interferes with dragging a cell into the agent panel.
+  const dropZone = (accept: boolean) => ({
+    onDragEnter: (event: DragEvent) => { if (!event.dataTransfer.types.includes("Files")) return; event.preventDefault(); if (!accept) return; dragDepth.current += 1; setFileDragging(true); },
+    onDragOver: (event: DragEvent) => { if (!event.dataTransfer.types.includes("Files")) return; event.preventDefault(); event.dataTransfer.dropEffect = accept ? "copy" : "none"; },
+    onDragLeave: (event: DragEvent) => { if (!event.dataTransfer.types.includes("Files")) return; dragDepth.current = Math.max(0, dragDepth.current - 1); if (dragDepth.current === 0) setFileDragging(false); },
+    onDrop: (event: DragEvent) => { if (!event.dataTransfer.types.includes("Files")) return; event.preventDefault(); dragDepth.current = 0; setFileDragging(false); if (accept) void handleDrop(event.dataTransfer); },
+  });
+  const dropOverlay = fileDragging ? <div className="drop-overlay" aria-hidden="true"><div><FileUp /><p>Drop a notebook (.ipynb) file or folder to open</p></div></div> : null;
+
   if (loading) return <div className="loading-screen"><span className="spinner" />Loading notebook…</div>;
 
-  if (!notebook) return <div className="app-shell empty-shell">
+  if (!notebook) return <div className="app-shell empty-shell" {...dropZone(!busy)}>
     <header className="topbar"><div className="brand"><BookOpen /><strong>Notebook Agent</strong></div><FileToolbar notebook={null} onUpload={handleUpload} onDownload={() => void handleDownload()} onClose={handleClose} /></header>
-    <main className="upload-state"><BookOpen /><h1>Open a notebook to begin</h1><p>Upload a local <code>.ipynb</code> file. Edits remain in this editor until downloaded.</p><label className="upload-button">Choose notebook<input type="file" accept=".ipynb,application/x-ipynb+json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleUpload(file); }} /></label></main>
+    <main className="upload-state"><BookOpen /><h1>Open a notebook to begin</h1><p>Upload a local <code>.ipynb</code> file, or drag one (or a folder) onto the window. Edits remain in this editor until downloaded.</p><label className="upload-button">Choose notebook<input type="file" accept=".ipynb,application/x-ipynb+json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleUpload(file); }} /></label></main>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
+    {dropOverlay}
   </div>;
 
   const activeTurn = history.find((item) => !terminalTurns.has(item.turn.state))?.turn ?? (turn && !terminalTurns.has(turn.state) ? turn : null);
@@ -311,15 +337,16 @@ export default function App() {
   const hasDirtyDrafts = dirtyCellIds.size > 0;
   const selectedTurn = history.find((item) => item.turn.turnId === selectedTurnId)?.turn ?? turn;
 
-  return <div className="app-shell">
+  return <div className="app-shell" {...dropZone(!(mutationsDisabled || busy || hasDirtyDrafts))}>
+    {dropOverlay}
     <header className="topbar">
       <div className="brand"><BookOpen /><strong>{notebook.filename}</strong><span className={notebook.dirty ? "dirty" : ""}>{notebook.dirty ? "Unsaved" : "Clean"}</span><span>Revision {notebook.revision}</span></div>
-      <div className="toolbar-actions"><KernelControls status={kernel} mutationDisabled={mutationsDisabled || busy || hasDirtyDrafts} onRunAll={() => void mutate(() => api.runAll(notebook), { refreshAfter: false }, setOperation)} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} /><FileToolbar notebook={notebook} uploadDisabled={mutationsDisabled || busy || hasDirtyDrafts} closeDisabled={mutationsDisabled || busy || hasDirtyDrafts} onUpload={handleUpload} onDownload={() => void handleDownload()} onClose={handleClose} /></div>
+      <div className="toolbar-actions"><button className={`autosave-toggle ${autoSave ? "on" : ""}`} role="switch" aria-checked={autoSave} aria-label="Auto-save" title={autoSave ? "Auto-save is on — click to turn off" : "Auto-save is off — click to turn on"} onClick={() => setAutoSave((value) => !value)}><Save /> Auto-save {autoSave ? "on" : "off"}</button><KernelControls status={kernel} mutationDisabled={mutationsDisabled || busy || hasDirtyDrafts} onRunAll={() => void mutate(() => api.runAll(notebook), { refreshAfter: false }, setOperation)} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} /><FileToolbar notebook={notebook} uploadDisabled={mutationsDisabled || busy || hasDirtyDrafts} closeDisabled={mutationsDisabled || busy || hasDirtyDrafts} onUpload={handleUpload} onDownload={() => void handleDownload()} onClose={handleClose} /></div>
     </header>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
     {closeTarget && <CloseNotebookDialog busy={busy} onCancel={() => setCloseTarget(null)} onConfirm={confirmClose} />}
     <div className="editor-layout" style={{ "--agent-width": `${agentWidth}px` } as CSSProperties}>
-      <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} focusRequest={focusRequest}
+      <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} autoSave={autoSave} focusRequest={focusRequest}
         onDirtyChange={(cellId, dirty) => setDirtyCellIds((current) => {
           if (current.has(cellId) === dirty) return current;
           const next = new Set(current); if (dirty) next.add(cellId); else next.delete(cellId); return next;

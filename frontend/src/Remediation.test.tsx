@@ -582,7 +582,7 @@ describe("remediation behaviors", () => {
   it("shift-selects a range of cells and scopes them all via the context menu", async () => {
     const cells = [0, 1, 2].map((index) => ({ cellId: `c-${index}`, index, cellType: "code" as const, source: `x = ${index}`, metadata: {}, outputs: [], executionCount: null }));
     const scopeMany = vi.fn();
-    render(<NotebookView notebook={{ ...notebook, cells }} scope={{ editableCellIds: [], contextCellIds: [], sessionId: "session-1", notebookRevision: 3 }} turn={null} disabled={false} sourceActionsDisabled={false} focusRequest={null} onDirtyChange={vi.fn()} onSave={vi.fn()} onRun={vi.fn()} onScope={vi.fn()} onScopeMany={scopeMany} onRevert={vi.fn()} />);
+    render(<NotebookView notebook={{ ...notebook, cells }} scope={{ editableCellIds: [], contextCellIds: [], sessionId: "session-1", notebookRevision: 3 }} turn={null} disabled={false} sourceActionsDisabled={false} autoSave={false} focusRequest={null} onDirtyChange={vi.fn()} onSave={vi.fn()} onRun={vi.fn()} onScope={vi.fn()} onScopeMany={scopeMany} onRevert={vi.fn()} />);
     fireEvent.click(screen.getByLabelText("Select code cell 1"));
     fireEvent.click(screen.getByLabelText("Select code cell 3"), { shiftKey: true });
     fireEvent.contextMenu(screen.getByLabelText("code cell 3"));
