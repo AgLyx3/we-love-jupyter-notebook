@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import type { AgentTurn, NotebookSnapshot, TurnScope } from "../api/client";
 import NotebookCell from "./NotebookCell";
+import type { CellSelection } from "./selectionEdit";
 
-export default function NotebookView({ notebook, scope, turn, disabled, sourceActionsDisabled, focusRequest, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert }: {
+export default function NotebookView({ notebook, scope, turn, disabled, sourceActionsDisabled, focusRequest, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
   notebook: NotebookSnapshot; scope: TurnScope; turn: AgentTurn | null;
   disabled: boolean; sourceActionsDisabled: boolean; focusRequest: { cellId: string; requestId: number } | null;
   onDirtyChange: (cellId: string, dirty: boolean) => void;
   onSave: (cellId: string, source: string) => void; onRun: (cellId: string) => void; onScope: (cellId: string, editable: boolean) => void; onScopeMany: (cellIds: string[], editable: boolean) => void; onRevert: (turnId: string, cellId: string) => void;
+  onAddSelectionToChat?: (selection: CellSelection) => void; onInlineEdit?: (selection: CellSelection, instruction: string) => void; onAddErrorToChat?: (cellId: string, text: string) => void;
 }) {
   const [focused, setFocused] = useState(notebook.cells[0]?.cellId ?? "");
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -70,6 +72,7 @@ export default function NotebookView({ notebook, scope, turn, disabled, sourceAc
       onDirtyChange={(dirty) => onDirtyChange(cell.cellId, dirty)}
       onSave={(source) => onSave(cell.cellId, source)} onRun={() => onRun(cell.cellId)}
       onAddEditable={() => onScope(cell.cellId, true)} onAddContext={() => onScope(cell.cellId, false)}
+      onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} onAddErrorToChat={(errorText) => onAddErrorToChat?.(cell.cellId, errorText)}
       onRevert={() => turn && onRevert(turn.turnId, cell.cellId)} />)}
     {menu && <div className="context-menu-backdrop" onClick={() => setMenu(null)} onContextMenu={(event) => { event.preventDefault(); setMenu(null); }}>
       <div className="cell-context-menu" style={{ left: menu.x, top: menu.y }} role="menu" aria-label="Cell scope actions" onClick={(event) => event.stopPropagation()}>

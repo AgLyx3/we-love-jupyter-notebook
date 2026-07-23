@@ -76,6 +76,37 @@ class TurnScopeService:
         finally:
             self.documents.coordinator.release(lease)
 
+    def remove(
+        self, cell_id: str, *,
+        session_id: str | None = None, revision: int | None = None,
+    ) -> ScopeSelection:
+        lease = self.documents.coordinator.acquire(
+            operation_type="turn_scope", operation_id=uuid4().hex
+        )
+        try:
+            snapshot = self.documents.get_snapshot()
+            if session_id is not None and revision is not None:
+                self.documents.check_snapshot_preconditions(snapshot, session_id, revision)
+            with self._lock:
+                if self._selection_session_id is not None and (
+                    self._selection_session_id != snapshot.session_id
+                    or self._selection_revision != snapshot.revision
+                ):
+                    self._editable.clear()
+                    self._context.clear()
+                    self._selection_session_id = None
+                    self._selection_revision = None
+                if cell_id in self._editable:
+                    self._editable.remove(cell_id)
+                if cell_id in self._context:
+                    self._context.remove(cell_id)
+                if not self._editable and not self._context:
+                    self._selection_session_id = None
+                    self._selection_revision = None
+                return self.current()
+        finally:
+            self.documents.coordinator.release(lease)
+
     def clear(
         self, *, session_id: str | None = None, revision: int | None = None
     ) -> ScopeSelection:
