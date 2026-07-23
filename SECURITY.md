@@ -4,7 +4,7 @@
 
 Please **do not** open a public issue for security vulnerabilities. Instead,
 report privately through GitHub's
-["Report a vulnerability"](https://github.com/AgLyx3/jupyter-notebook-ai-adapter/security/advisories/new)
+["Report a vulnerability"](https://github.com/AgLyx3/we-love-jupyter-notebook/security/advisories/new)
 flow, or email the maintainer at yixinli.a@gmail.com.
 
 Include steps to reproduce and the potential impact. You can expect an initial
