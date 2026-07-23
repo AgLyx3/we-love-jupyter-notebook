@@ -423,7 +423,7 @@ def test_sigterm_launcher_exits_and_releases_server_ports(shutdown_signal):
             [
                 "/bin/sh",
                 "-c",
-                "exec \"$1\" scripts/dev.py --fake-agent --backend-port \"$2\" "
+                "exec \"$1\" scripts/dev.py --test-agent --backend-port \"$2\" "
                 "--frontend-port \"$3\"",
                 "playwright-webserver",
                 sys.executable,

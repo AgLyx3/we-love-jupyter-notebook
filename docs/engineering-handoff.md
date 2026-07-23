@@ -52,7 +52,7 @@ npm run build
 npm run test:e2e
 ```
 
-Playwright starts its own fake-agent app on backend port 8001 and frontend port
+Playwright starts its own test-agent app on backend port 8001 and frontend port
 5174 by default. It runs serially in desktop Chrome and a Pixel 5 viewport. The
 main fixture is `examples/sample.ipynb`; traces, screenshots, and videos are
 retained under `test-results/` on failure.
@@ -160,8 +160,8 @@ sandbox. The CLI receives the full notebook and runs with the current user's
 filesystem and network permissions. Tool flags are defense in depth, not proof
 that the child process cannot access the host.
 
-The fake adapter is selected only with `--fake-agent` or
-`NOTEBOOK_AGENT_ADAPTER=fake`. It edits the first editable cell to a deterministic
+The in-process test adapter is selected only with `--test-agent` (automated
+tests only). It edits the first editable cell to a deterministic
 value; `[risk]` in the prompt produces a cell that triggers approval. Never make
 fake mode the production default.
 

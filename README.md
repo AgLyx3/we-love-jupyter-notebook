@@ -23,15 +23,7 @@ One command starts FastAPI at `http://127.0.0.1:8000` and Vite at `http://127.0.
 
 The combined launcher and Playwright server cleanup use POSIX process groups and signals and currently support macOS and Linux. Windows process management is outside the v1 local target.
 
-The normal mode uses the `claude` executable. It requires Claude CLI `>=2.1.203,<2.2.0` with support for `--safe-mode`, `--disable-slash-commands`, `--strict-mcp-config`, `--tools`, and `--permission-mode`. The adapter verifies the CLI version before every turn and rejects unsupported or unavailable installations.
-
-For deterministic local demos and tests, opt into the fake adapter explicitly:
-
-```bash
-.venv/bin/python scripts/dev.py --fake-agent
-```
-
-Fake mode recognizes `[safe]` and `[risk]` in prompts and must never be used as a production default. `NOTEBOOK_AGENT_ADAPTER` accepts only `claude` or `fake`.
+The app uses the `claude` executable. It requires Claude CLI `>=2.1.203,<2.2.0` with support for `--safe-mode`, `--disable-slash-commands`, `--strict-mcp-config`, `--tools`, and `--permission-mode`. The adapter verifies the CLI version before every turn and rejects unsupported or unavailable installations.
 
 ## Verify
 
