@@ -37,10 +37,12 @@ export default function FilePicker({ mode = "open", defaultName = "", initialPat
       {error && <p className="file-picker-error" role="alert">{error}</p>}
       <ul className="file-picker-list" aria-label="Folder contents">
         {loading && <li className="file-picker-empty">Loading…</li>}
-        {!loading && listing && !listing.entries.length && <li className="file-picker-empty">No folders or notebooks here.</li>}
+        {!loading && listing && !listing.entries.length && <li className="file-picker-empty">This folder is empty.</li>}
         {!loading && listing?.entries.map((entry) => <li key={entry.path}>{entry.kind === "directory"
           ? <button className="file-picker-row" onClick={() => navigate(entry.path)}><FolderOpen /> {entry.name}</button>
-          : <button className="file-picker-row notebook" onClick={() => mode === "save" ? setName(entry.name) : onOpenNotebook?.(entry.path, root ?? listing.path)}><File /> {entry.name}</button>}</li>)}
+          : entry.kind === "notebook"
+          ? <button className="file-picker-row notebook" onClick={() => mode === "save" ? setName(entry.name) : onOpenNotebook?.(entry.path, root ?? listing.path)}><File /> {entry.name}</button>
+          : <span className="file-picker-row other" aria-disabled="true" title={`${entry.name} — not a notebook; shown for reference, can't be opened here`}><File /> {entry.name}</span>}</li>)}
       </ul>
       {mode === "save"
         ? <footer className="file-picker-save">

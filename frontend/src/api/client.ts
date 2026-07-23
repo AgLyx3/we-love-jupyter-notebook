@@ -106,8 +106,10 @@ export interface NotebookCloseResult {
   cleanupErrors: string[];
 }
 
-export interface DirectoryEntry { name: string; path: string; kind: "directory" | "notebook" }
+export interface DirectoryEntry { name: string; path: string; kind: "directory" | "notebook" | "file" }
 export interface DirectoryListing { path: string; parent: string | null; entries: DirectoryEntry[] }
+export interface FileMatch { name: string; path: string; relativePath: string; kind: "notebook" | "file" }
+export interface FileSearchResult { root: string; query: string; truncated: boolean; matches: FileMatch[] }
 export interface ApiErrorBody { code: string; message: string; details: Record<string, unknown> }
 
 export class ApiError extends Error {
@@ -139,6 +141,7 @@ export const api = {
   close: (snapshot: Pick<NotebookSnapshot, "sessionId" | "revision">) => request<NotebookCloseResult>("/notebooks/current", { method: "DELETE", body: JSON.stringify(mutation(snapshot)) }),
   open: (path: string, current?: NotebookSnapshot, workspaceRoot?: string) => request<NotebookSnapshot>("/notebooks/open", { method: "POST", body: JSON.stringify({ path, ...(workspaceRoot ? { workspaceRoot } : {}), ...(current ? mutation(current) : {}) }) }),
   listFiles: (path?: string) => request<DirectoryListing>(`/files${path ? `?path=${encodeURIComponent(path)}` : ""}`),
+  searchFiles: (root: string, query: string) => request<FileSearchResult>(`/files/search?root=${encodeURIComponent(root)}&query=${encodeURIComponent(query)}`),
   save: (snapshot: NotebookSnapshot) => request<NotebookSnapshot>("/notebooks/save", { method: "POST", body: JSON.stringify(mutation(snapshot)) }),
   saveAs: (snapshot: NotebookSnapshot, path: string, workspaceRoot?: string) => request<NotebookSnapshot>("/notebooks/save-as", { method: "POST", body: JSON.stringify({ path, ...(workspaceRoot ? { workspaceRoot } : {}), ...mutation(snapshot) }) }),
   saveSource:(snapshot: NotebookSnapshot, cellId: string, source: string) =>

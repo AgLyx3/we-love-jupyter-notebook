@@ -1,10 +1,11 @@
-import { AlertTriangle, Code2, RotateCcw, Send, Square, X } from "lucide-react";
+import { AlertTriangle, BookOpen, Code2, File, RotateCcw, Send, Square, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import { useState } from "react";
-import type { AgentMode, AgentModel, AgentTurn, ExecutionAttempt, ExecutionOperation, NotebookSnapshot, TurnOptions, TurnScope } from "../api/client";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { api, type AgentMode, type AgentModel, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type FileMatch, type NotebookSnapshot, type TurnOptions, type TurnScope } from "../api/client";
 import RiskyExecutionDialog from "../execution/RiskyExecutionDialog";
 import TurnScopePanel from "../turnScope/TurnScopePanel";
 import { attachmentLabel, type SelectionAttachment } from "../notebook/selectionEdit";
+import { applyMention, detectMention, mentionKey, type MentionToken } from "./fileMention";
 
 const activeStates = new Set(["created", "agent_running", "validating", "applying", "executing", "cleaning_up"]);
 export interface TurnRecord { turn: AgentTurn; editableCellIds: string[]; contextCellIds: string[]; prompt: string }
@@ -18,6 +19,59 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState<AgentModel>("default");
   const [mode, setMode] = useState<AgentMode>("edit");
+
+  // "@"-mention: type "@" in the prompt to search workspace files and insert a
+  // path as context. Purely a text-insertion aid — the agent still reads the
+  // referenced file itself; nothing is uploaded here.
+  const workspaceRoot = notebook.workspaceRoot ?? null;
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  const [mention, setMention] = useState<MentionToken | null>(null);
+  const [matches, setMatches] = useState<FileMatch[]>([]);
+  const [activeMatch, setActiveMatch] = useState(0);
+  const dismissedKeyRef = useRef<string | null>(null);
+  const pendingCaretRef = useRef<number | null>(null);
+  const menuOpen = Boolean(mention && workspaceRoot && matches.length && mentionKey(mention) !== dismissedKeyRef.current);
+
+  const syncMention = (target: HTMLTextAreaElement) => {
+    const next = detectMention(target.value, target.selectionStart ?? target.value.length);
+    setMention(next);
+    if (!next) setMatches([]);
+    else if (mentionKey(next) !== dismissedKeyRef.current) dismissedKeyRef.current = null;
+  };
+
+  useEffect(() => {
+    if (!mention || !workspaceRoot || mentionKey(mention) === dismissedKeyRef.current) { setMatches([]); return; }
+    let live = true;
+    const timer = window.setTimeout(() => {
+      api.searchFiles(workspaceRoot, mention.query)
+        .then((result) => { if (live) { setMatches(result.matches); setActiveMatch(0); } })
+        .catch(() => { if (live) setMatches([]); });
+    }, 120);
+    return () => { live = false; window.clearTimeout(timer); };
+  }, [mention, workspaceRoot]);
+
+  // Restore the caret after a mention insertion re-renders the textarea.
+  useLayoutEffect(() => {
+    if (pendingCaretRef.current == null) return;
+    const target = promptRef.current;
+    if (target) { target.focus(); target.setSelectionRange(pendingCaretRef.current, pendingCaretRef.current); }
+    pendingCaretRef.current = null;
+  }, [prompt]);
+
+  const chooseMatch = (match: FileMatch | undefined) => {
+    if (!mention || !match) return;
+    const caret = promptRef.current?.selectionStart ?? prompt.length;
+    const { text, caret: nextCaret } = applyMention(prompt, mention.start, caret, match.relativePath);
+    pendingCaretRef.current = nextCaret;
+    setPrompt(text);
+    setMention(null);
+    setMatches([]);
+  };
+
+  const closeMention = () => {
+    if (mention) dismissedKeyRef.current = mentionKey(mention);
+    setMatches([]);
+  };
   const awaiting = operation?.attempts.find((attempt) => attempt.state === "awaiting_approval" && !attempt.decision);
   const manualAttempt = operation?.attempts.find((item) => item.executionAttemptId === operation.currentExecutionAttemptId);
   const manualCorrelated = Boolean(operation?.operationId && operation.sessionId && operation.currentDocumentRevision != null && operation.parentTurnId === null && manualAttempt?.executionAttemptId && manualAttempt.cellId);
@@ -29,6 +83,8 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
     if (!canSubmit || !value) return;
     onSubmit(value, { model, mode });
     setPrompt("");
+    setMention(null);
+    setMatches([]);
   };
   return <aside className="agent-panel" aria-label="Agent workspace" onDragOver={(event) => { if (!mutationsDisabled) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }} onDrop={(event) => { event.preventDefault(); if (mutationsDisabled) return; const many = event.dataTransfer.getData("application/x-notebook-cells"); if (many) { try { const ids = JSON.parse(many) as string[]; if (ids?.length) { if (onDropCells) onDropCells(ids); else ids.forEach(onDropCell); return; } } catch { /* fall through to single */ } } const id = event.dataTransfer.getData("application/x-notebook-cell"); if (id) onDropCell(id); }}>
     <header><h1>Notebook Agent</h1><span>Scoped local edits</span></header>
@@ -54,11 +110,34 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
         <button type="button" className="attachment-focus" title="Reveal selection" onClick={() => onFocusCell(attachment.cellId)}>{attachment.kind === "error" ? <AlertTriangle /> : <Code2 />} {attachmentLabel(attachment)}</button>
         <button type="button" className="attachment-remove" aria-label={`Remove ${attachmentLabel(attachment)}`} onClick={() => onRemoveAttachment?.(attachment.id)}><X /></button>
       </span>)}</div>}
-      <textarea id="agent-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => {
-        if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-        event.preventDefault();
-        submitPrompt();
-      }} placeholder={readOnly ? "Ask about the notebook, or select cells to edit…" : "Change the selected cells…"} rows={3} />
+      <div className="mention-anchor">
+        {menuOpen && <ul className="mention-menu" role="listbox" aria-label="Workspace files">
+          {matches.map((match, index) => <li key={match.path} role="option" aria-selected={index === activeMatch}>
+            <button type="button" className={`mention-option ${index === activeMatch ? "active" : ""}`}
+              onMouseDown={(event) => { event.preventDefault(); chooseMatch(match); }}
+              onMouseEnter={() => setActiveMatch(index)}>
+              {match.kind === "notebook" ? <BookOpen /> : <File />}
+              <span className="mention-name">{match.name}</span>
+              <span className="mention-path">{match.relativePath}</span>
+            </button>
+          </li>)}
+        </ul>}
+        <textarea id="agent-prompt" ref={promptRef} value={prompt}
+          onChange={(event) => { setPrompt(event.target.value); syncMention(event.target); }}
+          onClick={(event) => syncMention(event.currentTarget)}
+          onKeyUp={(event) => { if (!["Enter", "Tab", "ArrowUp", "ArrowDown", "Escape"].includes(event.key)) syncMention(event.currentTarget); }}
+          onKeyDown={(event) => {
+            if (menuOpen) {
+              if (event.key === "ArrowDown") { event.preventDefault(); setActiveMatch((index) => (index + 1) % matches.length); return; }
+              if (event.key === "ArrowUp") { event.preventDefault(); setActiveMatch((index) => (index - 1 + matches.length) % matches.length); return; }
+              if (event.key === "Enter" || event.key === "Tab") { event.preventDefault(); chooseMatch(matches[activeMatch]); return; }
+              if (event.key === "Escape") { event.preventDefault(); closeMention(); return; }
+            }
+            if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+            event.preventDefault();
+            submitPrompt();
+          }} placeholder={readOnly ? "Ask about the notebook, or select cells to edit…" : "Change the selected cells…"} rows={3} />
+      </div>
       {readOnly && mode === "edit" && <span className="prompt-mode" role="note">Read-only turn — the agent can answer but not write.</span>}
       {mode === "plan" && <span className="prompt-mode" role="note">Plan mode — the agent proposes a plan and writes no changes.</span>}
       <div className="prompt-controls">
