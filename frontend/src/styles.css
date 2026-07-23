@@ -95,6 +95,11 @@ body.resizing-agent iframe { pointer-events: none; }
 .output-add-chat svg { width: 14px; height: 14px; }
 .output-error { user-select: text; }
 .prompt-form { border-top: 1px solid #cdd4d9; padding: 12px; background: #fff; display: grid; gap: 7px; }.prompt-form label { font-size: 12px; font-weight: 650; }.prompt-form textarea { width: 100%; resize: vertical; min-height: 64px; max-height: 150px; border: 1px solid #aeb8c0; border-radius: 5px; padding: 9px; line-height: 1.4; }.prompt-form button { justify-self: end; padding: 0 12px; }.prompt-mode { font-size: 11px; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }.prompt-mode::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #6aa5cc; }
+.prompt-controls { display: flex; align-items: flex-end; gap: 8px; }
+.prompt-controls .primary { margin-left: auto; }
+.prompt-select { display: grid; gap: 3px; }
+.prompt-select span { font-size: 11px; font-weight: 650; color: var(--muted); }
+.prompt-select select { border: 1px solid #aeb8c0; border-radius: 5px; padding: 5px 6px; background: #fff; font-size: 12px; }
 .risk-dialog { border: 1px solid #d9a544; border-radius: 6px; background: #fffaf0; padding: 12px; margin: 10px 0; }.risk-title { display: flex; gap: 9px; align-items: flex-start; }.risk-title svg { color: var(--amber); width: 20px; flex: 0 0 auto; }.risk-title h3 { font-size: 13px; margin: 0; letter-spacing: 0; }.risk-title p { color: var(--muted); font-size: 11px; margin: 3px 0 0; }.risk-dialog ul { padding-left: 18px; font-size: 12px; }.risk-dialog code { display: block; font-size: 11px; overflow-wrap: anywhere; }.risk-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }.risk-actions button { height: 30px; min-width: auto; padding: 0 8px; font-size: 11px; }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: #20262e73; }
 .confirm-dialog { width: min(420px, 100%); border: 1px solid var(--border); border-radius: 6px; background: var(--surface); padding: 20px; box-shadow: 0 14px 38px #1118203d; }

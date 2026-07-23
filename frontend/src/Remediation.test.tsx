@@ -576,7 +576,7 @@ describe("remediation behaviors", () => {
     await userEvent.type(screen.getByLabelText("Agent instruction"), "explain these cells");
     expect(ask).toBeEnabled();
     await userEvent.click(ask);
-    expect(submit).toHaveBeenCalledWith("explain these cells");
+    expect(submit).toHaveBeenCalledWith("explain these cells", { model: "default", mode: "edit" });
   });
 
   it("shift-selects a range of cells and scopes them all via the context menu", async () => {

@@ -833,7 +833,7 @@ def test_shutdown_terminates_agent_tree_cleans_workspace_and_rejects_start(
         def __init__(self):
             self.runner = ProcessRunner()
 
-        def run(self, workspace, *, timeout, cancel_event):
+        def run(self, workspace, *, timeout, cancel_event, model=None, permission_mode="acceptEdits"):
             workspace_paths.append(workspace.root)
             descendant = (
                 "import pathlib,subprocess,sys,time;"
@@ -901,7 +901,7 @@ def test_shutdown_deadline_records_worker_failure_until_cleanup(
     class UncooperativeAdapter:
         auxiliary_paths = frozenset()
 
-        def run(self, workspace, *, timeout, cancel_event):
+        def run(self, workspace, *, timeout, cancel_event, model=None, permission_mode="acceptEdits"):
             entered.set()
             assert release.wait(2)
             return AdapterResult("")

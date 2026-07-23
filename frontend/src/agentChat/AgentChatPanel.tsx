@@ -1,7 +1,7 @@
 import { AlertTriangle, Code2, RotateCcw, Send, Square, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useState } from "react";
-import type { AgentTurn, ExecutionAttempt, ExecutionOperation, NotebookSnapshot, TurnScope } from "../api/client";
+import type { AgentMode, AgentModel, AgentTurn, ExecutionAttempt, ExecutionOperation, NotebookSnapshot, TurnOptions, TurnScope } from "../api/client";
 import RiskyExecutionDialog from "../execution/RiskyExecutionDialog";
 import TurnScopePanel from "../turnScope/TurnScopePanel";
 import { attachmentLabel, type SelectionAttachment } from "../notebook/selectionEdit";
@@ -12,10 +12,12 @@ export interface TurnRecord { turn: AgentTurn; editableCellIds: string[]; contex
 export default function AgentChatPanel({ notebook, scope, turn, activeTurn, history, operation, busy, mutationsDisabled, attachments = [], onSubmit, onCancel, onUndo, onClearScope, onDecision, onSelectTurn, onFocusCell, onDropCell, onRemoveAttachment, onRemoveScopeCell }: {
   notebook: NotebookSnapshot; scope: TurnScope; turn: AgentTurn | null; activeTurn: AgentTurn | null; history: TurnRecord[]; operation: ExecutionOperation | null; busy: boolean; mutationsDisabled: boolean;
   attachments?: SelectionAttachment[];
-  onSubmit: (prompt: string) => void; onCancel: () => void; onUndo: () => void; onClearScope: () => void; onDecision: (attempt: ExecutionAttempt, decision: "approve" | "skip" | "cancel") => void; onSelectTurn: (id: string) => void; onFocusCell: (id: string) => void; onDropCell: (id: string) => void;
+  onSubmit: (prompt: string, options: TurnOptions) => void; onCancel: () => void; onUndo: () => void; onClearScope: () => void; onDecision: (attempt: ExecutionAttempt, decision: "approve" | "skip" | "cancel") => void; onSelectTurn: (id: string) => void; onFocusCell: (id: string) => void; onDropCell: (id: string) => void;
   onRemoveAttachment?: (id: string) => void; onRemoveScopeCell?: (id: string) => void;
 }) {
   const [prompt, setPrompt] = useState("");
+  const [model, setModel] = useState<AgentModel>("default");
+  const [mode, setMode] = useState<AgentMode>("edit");
   const awaiting = operation?.attempts.find((attempt) => attempt.state === "awaiting_approval" && !attempt.decision);
   const manualAttempt = operation?.attempts.find((item) => item.executionAttemptId === operation.currentExecutionAttemptId);
   const manualCorrelated = Boolean(operation?.operationId && operation.sessionId && operation.currentDocumentRevision != null && operation.parentTurnId === null && manualAttempt?.executionAttemptId && manualAttempt.cellId);
@@ -25,7 +27,7 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
   const submitPrompt = () => {
     const value = prompt.trim();
     if (!canSubmit || !value) return;
-    onSubmit(value);
+    onSubmit(value, { model, mode });
     setPrompt("");
   };
   return <aside className="agent-panel" aria-label="Agent workspace" onDragOver={(event) => { if (!mutationsDisabled) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }} onDrop={(event) => { event.preventDefault(); const id = event.dataTransfer.getData("application/x-notebook-cell"); if (id && !mutationsDisabled) onDropCell(id); }}>
@@ -57,8 +59,27 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
         event.preventDefault();
         submitPrompt();
       }} placeholder={readOnly ? "Ask about the notebook, or select cells to edit…" : "Change the selected cells…"} rows={3} />
-      {readOnly && <span className="prompt-mode" role="note">Read-only turn — the agent can answer but not write.</span>}
-      <button className="primary" disabled={!canSubmit} type="submit"><Send /> {readOnly ? "Ask" : "Send"}</button>
+      {readOnly && mode === "edit" && <span className="prompt-mode" role="note">Read-only turn — the agent can answer but not write.</span>}
+      {mode === "plan" && <span className="prompt-mode" role="note">Plan mode — the agent proposes a plan and writes no changes.</span>}
+      <div className="prompt-controls">
+        <label className="prompt-select">
+          <span>Model</span>
+          <select aria-label="Agent model" value={model} disabled={busy} onChange={(event) => setModel(event.target.value as AgentModel)}>
+            <option value="default">Default</option>
+            <option value="opus">Opus</option>
+            <option value="sonnet">Sonnet</option>
+            <option value="haiku">Haiku</option>
+          </select>
+        </label>
+        <label className="prompt-select">
+          <span>Mode</span>
+          <select aria-label="Agent mode" value={mode} disabled={busy} onChange={(event) => setMode(event.target.value as AgentMode)}>
+            <option value="edit">Edit</option>
+            <option value="plan">Plan</option>
+          </select>
+        </label>
+        <button className="primary" disabled={!canSubmit} type="submit"><Send /> {mode === "plan" ? "Plan" : readOnly ? "Ask" : "Send"}</button>
+      </div>
     </form>
   </aside>;
 }

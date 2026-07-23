@@ -319,7 +319,7 @@ describe("Notebook editor", () => {
 
     await userEvent.type(prompt, "  Update the selected cell{Enter}");
 
-    expect(onSubmit).toHaveBeenCalledWith("Update the selected cell");
+    expect(onSubmit).toHaveBeenCalledWith("Update the selected cell", { model: "default", mode: "edit" });
     expect(prompt).toHaveValue("");
   });
 
@@ -335,7 +335,7 @@ describe("Notebook editor", () => {
   });
 });
 
-function renderAgentPanel(onSubmit: (prompt: string) => void) {
+function renderAgentPanel(onSubmit: (prompt: string, options: { model: string; mode: string }) => void) {
   const scope: TurnScope = {
     editableCellIds: ["code-1"], contextCellIds: [],
     sessionId: "session-1", notebookRevision: 3,
