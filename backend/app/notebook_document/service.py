@@ -4,7 +4,9 @@ import copy
 import hashlib
 import json
 import logging
+import os
 import re
+import tempfile
 from pathlib import Path
 from threading import RLock
 from typing import Any, Callable
@@ -15,6 +17,7 @@ from nbformat.validator import NotebookValidationError
 
 from .models import (
     CellNotFound,
+    ExternalModificationConflict,
     MutationConflict,
     MutationLease,
     NotebookCloseResult,
@@ -315,6 +318,63 @@ class NotebookDocumentService:
         snapshot = self.get_snapshot()
         content = self._serialize_notebook(snapshot.notebook)
         return snapshot.filename, content
+
+    def save_notebook_to_disk(
+        self, *, expected_session_id: str, expected_revision: int
+    ) -> NotebookSnapshot:
+        """Persist the committed document to its file, guarded by the baseline.
+
+        Holds only the document RLock, never the coordinator mutation lease, so a
+        save may run alongside an active turn and writes the latest committed
+        state. The RLock spans the read-current-hash, serialize, atomic write, and
+        baseline update so they observe a single consistent committed snapshot;
+        the disk write is kept inside it because the notebook size is bounded and
+        the simplicity outweighs briefly serializing concurrent in-memory commits.
+        """
+        with self._lock:
+            self._require_notebook()
+            if self._notebook_path is None:
+                raise NotebookPathError()
+            self._check_preconditions(expected_session_id, expected_revision)
+            path = Path(self._notebook_path)
+            content = self._serialize_notebook(self._notebook)
+
+            baseline = self._on_disk_baseline
+            try:
+                current = path.read_bytes()
+            except OSError as error:
+                raise ExternalModificationConflict() from error
+            if (
+                baseline is None
+                or hashlib.sha256(current).hexdigest() != baseline.content_hash
+            ):
+                raise ExternalModificationConflict()
+
+            mtime_ns = self._atomic_write(path, content)
+            self._on_disk_baseline = OnDiskBaseline(
+                path=str(path),
+                mtime_ns=mtime_ns,
+                content_hash=hashlib.sha256(content).hexdigest(),
+            )
+            self._dirty = False
+            return self._snapshot_unlocked()
+
+    @staticmethod
+    def _atomic_write(path: Path, content: bytes) -> int:
+        handle, tmp_name = tempfile.mkstemp(
+            prefix=f"{path.name}.", suffix=".tmp", dir=str(path.parent)
+        )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(handle, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(tmp_path, path)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        return path.stat().st_mtime_ns
 
     def update_cell_source(
         self,
