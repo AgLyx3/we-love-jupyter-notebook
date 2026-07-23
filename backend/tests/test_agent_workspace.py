@@ -1,4 +1,5 @@
 import os
+import pathlib
 import sys
 import time
 from threading import Event
@@ -10,6 +11,7 @@ import pytest
 from backend.app.agent_workspace.models import WorkspaceBoundaryError, WorkspaceCleanupError
 from backend.app.agent_workspace.adapters import (
     ClaudeAgentAdapter,
+    CodexAgentAdapter,
     DevelopmentFakeAgentAdapter,
     FakeAgentAdapter,
     FakeAttempt,
@@ -663,3 +665,125 @@ def test_configured_adapter_requires_explicit_fake_mode(monkeypatch):
     monkeypatch.setenv("NOTEBOOK_AGENT_ADAPTER", "unknown")
     with pytest.raises(RuntimeError, match="must be either"):
         configured_agent_adapter()
+
+
+def _codex_version_stub(version="codex-cli 0.133.0", returncode=0):
+    return lambda *args, **kwargs: SimpleNamespace(
+        returncode=returncode, stdout=version, stderr="",
+    )
+
+
+def test_codex_adapter_version_gate(monkeypatch):
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run",
+        _codex_version_stub("codex-cli 0.133.5"),
+    )
+    assert CodexAgentAdapter().verify_supported() == "0.133.5"
+    for bad in ("codex-cli 0.132.9", "codex-cli 0.134.0", "garbage"):
+        monkeypatch.setattr(
+            "backend.app.agent_workspace.adapters.subprocess.run",
+            _codex_version_stub(bad),
+        )
+        with pytest.raises(AgentAdapterError):
+            CodexAgentAdapter().verify_supported()
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run",
+        _codex_version_stub(returncode=1),
+    )
+    with pytest.raises(AgentAdapterError):
+        CodexAgentAdapter().verify_supported()
+
+
+def test_codex_editable_turn_uses_workspace_write_sandbox(notebook_payload, monkeypatch):
+    builder, workspace = _workspace(notebook_payload)
+    captured = {}
+
+    class StubRunner:
+        def run(self, args, **kwargs):
+            captured["args"] = args
+            # Simulate Codex writing the final message file.
+            out = args[args.index("--output-last-message") + 1]
+            pathlib.Path(out).write_text("codex finished\n", encoding="utf-8")
+            return "progress noise", ""
+
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run", _codex_version_stub(),
+    )
+    try:
+        result = CodexAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event()
+        )
+        assert result.final_output == "codex finished"
+        args = captured["args"]
+        assert args[:2] == ["codex", "exec"]
+        assert args[args.index("--sandbox") + 1] == "workspace-write"
+        assert "--ephemeral" in args
+        assert "--ignore-user-config" in args
+        assert "--skip-git-repo-check" in args
+        assert args[args.index("-c") + 1] == "sandbox_workspace_write.network_access=false"
+        assert args[args.index("-C") + 1] == str(workspace.root)
+        # Final-message capture must live outside the audited workspace.
+        out = pathlib.Path(args[args.index("--output-last-message") + 1])
+        assert workspace.root not in out.parents
+        assert "--model" not in args
+    finally:
+        builder.destroy(workspace)
+
+
+def test_codex_read_only_and_plan_turns_use_read_only_sandbox(notebook_payload, monkeypatch):
+    captured = {}
+
+    class StubRunner:
+        def run(self, args, **kwargs):
+            captured["args"] = args
+            return "explanation", ""
+
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run", _codex_version_stub(),
+    )
+    builder, workspace = _read_only_workspace(notebook_payload)
+    try:
+        result = CodexAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event()
+        )
+        # No final-message file written -> falls back to stdout.
+        assert result.final_output == "explanation"
+        assert captured["args"][captured["args"].index("--sandbox") + 1] == "read-only"
+    finally:
+        builder.destroy(workspace)
+    builder, workspace = _workspace(notebook_payload)
+    try:
+        CodexAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event(), permission_mode="plan",
+        )
+        args = captured["args"]
+        assert args[args.index("--sandbox") + 1] == "read-only"
+        assert args[2].startswith("You are operating in plan mode")
+    finally:
+        builder.destroy(workspace)
+
+
+def test_codex_model_allow_list(notebook_payload, monkeypatch):
+    captured = {}
+
+    class StubRunner:
+        def run(self, args, **kwargs):
+            captured["args"] = args
+            return "done", ""
+
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run", _codex_version_stub(),
+    )
+    builder, workspace = _workspace(notebook_payload)
+    try:
+        CodexAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event(), model="gpt-5.5",
+        )
+        args = captured["args"]
+        assert args[args.index("--model") + 1] == "gpt-5.5"
+        CodexAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event(), model="opus",
+        )
+        assert "--model" not in captured["args"]
+    finally:
+        builder.destroy(workspace)
