@@ -1,7 +1,6 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useState } from "react";
 import App from "./App";
 import AgentChatPanel, { type TurnRecord } from "./agentChat/AgentChatPanel";
 import NotebookView from "./notebook/NotebookView";
@@ -127,29 +126,6 @@ describe("remediation behaviors", () => {
     expect((focus.mock.contexts as HTMLElement[]).filter((node) => node.classList.contains("notebook-cell"))).toHaveLength(2);
   });
 
-  it("renders historical frozen members with details and focuses them", async () => {
-    const history: TurnRecord[] = [
-      { turn: turn("new"), prompt: "Current prompt", editableCellIds: [], contextCellIds: [] },
-      { turn: turn("old"), prompt: "Historical prompt", editableCellIds: ["code-1"], contextCellIds: ["code-1"] },
-    ];
-    const onFocus = vi.fn();
-    function Harness() {
-      const [selected, setSelected] = useState("new");
-      return <AgentChatPanel notebook={notebook} scope={{ ...scope, editableCellIds: [], contextCellIds: [] }} turn={history.find((item) => item.turn.turnId === selected)!.turn} activeTurn={null} history={history} operation={null} busy={false} mutationsDisabled={false} onSubmit={vi.fn()} onCancel={vi.fn()} onUndo={vi.fn()} onClearScope={vi.fn()} onDecision={vi.fn()} onSelectTurn={setSelected} onFocusCell={onFocus} onDropCell={vi.fn()} />;
-    }
-    render(<Harness />);
-    await userEvent.click(screen.getByText("Historical prompt"));
-    const frozen = screen.getByLabelText("Frozen turn scope");
-    const rows = within(frozen).getAllByTitle("Cell ID: code-1");
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toHaveClass("editable");
-    expect(rows[1]).toHaveClass("context");
-    expect(frozen).toHaveTextContent("code");
-    expect(frozen).toHaveTextContent("a = 1");
-    await userEvent.click(rows[0]);
-    expect(onFocus).toHaveBeenCalledWith("code-1");
-  });
-
   it("hydrates completed turn history from session status after reload", async () => {
     const historical = { ...turn("persisted"), prompt: "Persisted backend turn", editableCellIds: ["code-1"], contextCellIds: ["code-1"] };
     vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
@@ -158,7 +134,6 @@ describe("remediation behaviors", () => {
     });
     render(<App />);
     expect(await screen.findByText("Persisted backend turn")).toBeInTheDocument();
-    expect(within(screen.getByLabelText("Frozen turn scope")).getAllByTitle("Cell ID: code-1")).toHaveLength(2);
   });
 
   it("hydrates a truncated selected turn before showing its large diff", async () => {

@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import { useState } from "react";
 import type { AgentTurn, ExecutionAttempt, ExecutionOperation, NotebookSnapshot, TurnScope } from "../api/client";
 import RiskyExecutionDialog from "../execution/RiskyExecutionDialog";
-import TurnScopePanel, { ScopeCellList } from "../turnScope/TurnScopePanel";
+import TurnScopePanel from "../turnScope/TurnScopePanel";
 import { attachmentLabel, type SelectionAttachment } from "../notebook/selectionEdit";
 
 const activeStates = new Set(["created", "agent_running", "validating", "applying", "executing", "cleaning_up"]);
@@ -20,7 +20,6 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
   const manualAttempt = operation?.attempts.find((item) => item.executionAttemptId === operation.currentExecutionAttemptId);
   const manualCorrelated = Boolean(operation?.operationId && operation.sessionId && operation.currentDocumentRevision != null && operation.parentTurnId === null && manualAttempt?.executionAttemptId && manualAttempt.cellId);
   const active = turn && activeStates.has(turn.state);
-  const selectedRecord = history.find((record) => record.turn.turnId === turn?.turnId);
   const readOnly = scope.editableCellIds.length === 0;
   const canSubmit = !busy && !mutationsDisabled && Boolean(prompt.trim());
   const submitPrompt = () => {
@@ -43,7 +42,6 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
         {turn.changes.length > 0 && <p>{turn.changes.length} cell{turn.changes.length === 1 ? "" : "s"} changed. Review the inline diff.</p>}
         <div className="turn-actions">{active && <button onClick={onCancel}><Square /> Cancel turn</button>}{turn.undoEligible && !active && <button disabled={mutationsDisabled} onClick={onUndo}><RotateCcw /> Undo turn</button>}</div>
       </div>}
-      {selectedRecord && <section className="frozen-scope" aria-label="Frozen turn scope"><h3>Frozen scope</h3><ScopeCellList notebook={notebook} editableCellIds={selectedRecord.editableCellIds} contextCellIds={selectedRecord.contextCellIds} onFocusCell={onFocusCell} /></section>}
       {operation && <div className={`execution-status ${operation.error ? "has-error" : ""}`}><span>Execution: {operation.state.replaceAll("_", " ")}</span>{operation.error && <p>{operation.error.message}</p>}{operation.attempts.filter((attempt) => attempt.error).map((attempt) => <p key={attempt.executionAttemptId}>Cell {attempt.cellIndex + 1}: {attempt.error!.message}</p>)}{operation.attempts.filter((attempt) => attempt.outputsTruncated).map((attempt) => <p key={`${attempt.executionAttemptId}-output-truncated`}>Cell {attempt.cellIndex + 1}: Retained execution output was truncated.</p>)}</div>}
       {operation && operation.kind === "manual" && !["completed", "failed", "cancelled", "validation_incomplete", "timed_out"].includes(operation.state) && manualAttempt && <button disabled={!manualCorrelated} className="manual-cancel" onClick={() => onDecision(manualAttempt, "cancel")}><Square /> Cancel run</button>}
       {operation && awaiting && <RiskyExecutionDialog operation={operation} attempt={awaiting} busy={busy} onDecision={(decision) => onDecision(awaiting, decision)} />}
