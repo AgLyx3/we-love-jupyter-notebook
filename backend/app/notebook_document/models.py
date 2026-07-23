@@ -129,6 +129,7 @@ class NotebookSnapshot:
     dirty: bool
     last_mutation_owner: str | None
     notebook_path: str | None = None
+    workspace_root: str | None = None
 
 
 @dataclass(frozen=True)

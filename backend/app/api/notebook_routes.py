@@ -25,6 +25,7 @@ class NotebookCloseRequest(BaseModel):
 
 class NotebookOpenRequest(BaseModel):
     path: str
+    workspace_root: str | None = Field(default=None, alias="workspaceRoot")
     session_id: str | None = Field(default=None, alias="sessionId")
     expected_revision: int | None = Field(
         default=None, alias="expectedDocumentRevision"
@@ -68,6 +69,7 @@ def serialize_snapshot(snapshot: NotebookSnapshot) -> dict[str, Any]:
         "nbformat": snapshot.notebook["nbformat"],
         "nbformatMinor": snapshot.notebook["nbformat_minor"],
         "notebookPath": snapshot.notebook_path,
+        "workspaceRoot": snapshot.workspace_root,
         "cells": cells,
     }
 
@@ -97,10 +99,9 @@ async def upload_notebook(
 
 @router.post("/notebooks/open")
 def open_notebook(body: NotebookOpenRequest, request: Request) -> dict[str, Any]:
-    # workspace_root=None for now; binding a workspace root is a later slice.
     snapshot = _service(request).open_notebook_from_path(
         body.path,
-        workspace_root=None,
+        workspace_root=body.workspace_root,
         expected_session_id=body.session_id,
         expected_revision=body.expected_revision,
     )

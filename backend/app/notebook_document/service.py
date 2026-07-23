@@ -66,6 +66,7 @@ class NotebookDocumentService:
         self._dirty = False
         self._last_mutation_owner: str | None = None
         self._notebook_path: str | None = None
+        self._workspace_root: str | None = None
         self._on_disk_baseline: OnDiskBaseline | None = None
         self._session_replacement_listeners: list[
             Callable[[str | None, int], None]
@@ -105,6 +106,7 @@ class NotebookDocumentService:
                     normalized=normalized,
                     filename=filename,
                     notebook_path=None,
+                    workspace_root=None,
                     on_disk_baseline=None,
                 )
         finally:
@@ -119,6 +121,10 @@ class NotebookDocumentService:
         expected_revision: int | None = None,
     ) -> NotebookSnapshot:
         resolved = self._resolve_notebook_path(path, workspace_root)
+        if workspace_root is not None:
+            bound_root = str(Path(workspace_root).resolve())
+        else:
+            bound_root = str(resolved.parent)
         try:
             payload = resolved.read_bytes()
             mtime_ns = resolved.stat().st_mtime_ns
@@ -143,6 +149,7 @@ class NotebookDocumentService:
                     normalized=normalized,
                     filename=str(resolved),
                     notebook_path=str(resolved),
+                    workspace_root=bound_root,
                     on_disk_baseline=baseline,
                 )
         finally:
@@ -155,6 +162,7 @@ class NotebookDocumentService:
         normalized: bool,
         filename: str,
         notebook_path: str | None,
+        workspace_root: str | None,
         on_disk_baseline: OnDiskBaseline | None,
     ) -> NotebookSnapshot:
         self._session_id = uuid4().hex
@@ -164,6 +172,7 @@ class NotebookDocumentService:
         self._dirty = normalized
         self._last_mutation_owner = "normalization" if normalized else None
         self._notebook_path = notebook_path
+        self._workspace_root = workspace_root
         self._on_disk_baseline = on_disk_baseline
         self._notify_session_replaced_unlocked(self._session_id, self._revision)
         return self._snapshot_unlocked()
@@ -215,6 +224,7 @@ class NotebookDocumentService:
                 self._dirty = False
                 self._last_mutation_owner = None
                 self._notebook_path = None
+                self._workspace_root = None
                 self._on_disk_baseline = None
                 self._notify_session_replaced_unlocked(None, 0)
                 return NotebookCloseResult(
@@ -545,6 +555,7 @@ class NotebookDocumentService:
             dirty=self._dirty,
             last_mutation_owner=self._last_mutation_owner,
             notebook_path=self._notebook_path,
+            workspace_root=self._workspace_root,
         )
 
     @staticmethod
