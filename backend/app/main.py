@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api.notebook_routes import router as notebook_router
+from .api.file_routes import router as file_router
 from .api.agent_turn_routes import router as agent_turn_router
 from .api.turn_scope_routes import router as turn_scope_router
 from .api.execution_routes import router as execution_router
@@ -63,6 +64,7 @@ def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
         events=app.state.session_event_service,
     )
     app.include_router(notebook_router)
+    app.include_router(file_router)
     app.include_router(turn_scope_router)
     app.include_router(agent_turn_router)
     app.include_router(execution_router)

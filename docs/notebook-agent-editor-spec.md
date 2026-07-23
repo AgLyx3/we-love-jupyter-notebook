@@ -931,9 +931,11 @@ to the notebook's folder. Adopting it folds three separate needs into one frame.
 
 - A session binds a `workspaceRoot` (a real local path) and a `notebookPath`
   within that root. Because a browser cannot hand the backend a real absolute
-  path, the path is supplied by the user (typed or pasted) or by a launch
-  configuration, and the backend validates that it exists, is a directory, and is
-  readable before binding it.
+  path — and the kernel, the agent's folder reads, and save-in-place all run
+  server-side and need one — the path is chosen through a backend-driven file
+  selector (see `File Selector`) that navigates the local filesystem the server
+  sees, not the browser's sandboxed picker. The backend validates that a chosen
+  folder or file exists, is of the expected kind, and is readable before binding it.
 - File operations the app performs itself — opening and saving `notebookPath` —
   are canonicalized and confined to the workspace root by the backend: `..`
   traversal and symlinks resolving outside the root are rejected, reusing the
@@ -964,6 +966,31 @@ to the notebook's folder. Adopting it folds three separate needs into one frame.
   kernels.
 - Read-only turns and the "edit permission is a grant" behavior are unchanged;
   the root only widens what may be read, never what may be written.
+
+### File Selector
+
+The user opens work through a local file/folder selector, the way Jupyter's file
+browser navigates the server's `root_dir`. Because the browser cannot supply a
+real path, the selector is backend-driven — not the browser's native dialog or an
+`<input type="file">` (which give file contents, not a path, and cannot write
+back to the chosen file). A browser File System Access API handle is likewise
+rejected: it lets the browser read and write a file, but the server-side kernel
+and CLI agent cannot use a browser handle for cwd or folder reads.
+
+Mechanics:
+
+- A directory-listing use case (`ListDirectory`, exposed as `GET /files`) returns
+  the subfolders and `.ipynb` files at a given local path, plus the parent, so
+  the frontend can navigate. It defaults to the user's home directory and, for a
+  local single-user app, may navigate anywhere the server process can read;
+  dotfiles are hidden by default. Listing validates that the path exists, is a
+  directory, and is readable.
+- The user selects either an `.ipynb` (opened in place via `open`, with its
+  containing folder bound as the `workspaceRoot`) or a folder (bound as the
+  `workspaceRoot`, from which a notebook is then chosen).
+- Browsing scope is a convenience for finding files; it is not the agent-read
+  boundary. The agent-read boundary remains the selected `workspaceRoot` and its
+  ignore/deny list (see `Rules`).
 
 ### Save In Place
 
@@ -1261,6 +1288,7 @@ File controls:
 This is a conceptual API surface, not a final implementation contract.
 
 - `POST /notebooks/upload`
+- `GET /files` (list subfolders and `.ipynb` files at a local path for the file selector, see `File Selector`)
 - `POST /workspace/root` (set/clear the session `workspaceRoot`, see `Workspace Root`)
 - `POST /notebooks/open` (open a `notebookPath` within the root)
 - `POST /notebooks/save` (`SaveNotebookToDisk`, baseline-guarded)
@@ -1750,6 +1778,22 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
   Explicit-plus-atomic-plus-baseline keeps writes predictable under the mutation
   lease and reuses the same authoritative-precondition pattern as document
   revisions. Autosave is deferred until the explicit path is proven.
+
+### Local File Selector
+
+- Decision: Open work through a backend-driven file/folder selector — a
+  `ListDirectory` (`GET /files`) use case the frontend navigates — so the user
+  picks either a folder or an `.ipynb` from the real local filesystem the server
+  sees, following Jupyter's `root_dir` file-browser model.
+- Alternatives: The browser's native picker / `<input type="file">` (gives file
+  contents, not a path, and cannot write back); the browser File System Access
+  API (gives the browser a handle the server-side kernel and agent cannot use for
+  cwd or folder reads); a typed/pasted path (works but is not a selector); an
+  Electron desktop shell with true native dialogs (a later step).
+- Rationale: Save-in-place, kernel cwd, and the agent's folder reads all run
+  server-side and need a real path, which a browser cannot provide. A
+  backend-driven selector is the only browser-compatible way to choose a real
+  folder or file, and it matches how Jupyter already works.
 
 - Decision: Show only final agent output/result plus any final comments emitted by the CLI.
 - Alternatives: Stream all CLI progress and tool output live.

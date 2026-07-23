@@ -4,7 +4,10 @@ import copy
 import hashlib
 import json
 import logging
+import os
 import re
+import tempfile
+from pathlib import Path
 from threading import RLock
 from typing import Any, Callable
 from uuid import uuid4
@@ -14,13 +17,16 @@ from nbformat.validator import NotebookValidationError
 
 from .models import (
     CellNotFound,
+    ExternalModificationConflict,
     MutationConflict,
     MutationLease,
     NotebookCloseResult,
     NotebookImportError,
     NotebookNotLoaded,
+    NotebookPathError,
     NotebookSizeError,
     NotebookSnapshot,
+    OnDiskBaseline,
     ReplacementPreconditionRequired,
     RevisionConflict,
     SessionConflict,
@@ -59,6 +65,9 @@ class NotebookDocumentService:
         self._revision = 0
         self._dirty = False
         self._last_mutation_owner: str | None = None
+        self._notebook_path: str | None = None
+        self._workspace_root: str | None = None
+        self._on_disk_baseline: OnDiskBaseline | None = None
         self._session_replacement_listeners: list[
             Callable[[str | None, int], None]
         ] = []
@@ -89,23 +98,111 @@ class NotebookDocumentService:
         try:
             with self._lock:
                 candidate, normalized = self._parse_and_validate(payload)
-                if self._notebook is not None:
-                    if expected_session_id is None or expected_revision is None:
-                        raise ReplacementPreconditionRequired()
-                    self._check_preconditions(expected_session_id, expected_revision)
-
-                self._session_id = uuid4().hex
-                self._filename = self._safe_filename(filename)
-                self._notebook = candidate
-                self._revision = 1 if normalized else 0
-                self._dirty = normalized
-                self._last_mutation_owner = "normalization" if normalized else None
-                self._notify_session_replaced_unlocked(
-                    self._session_id, self._revision,
+                self._enforce_replacement_preconditions(
+                    expected_session_id, expected_revision
                 )
-                return self._snapshot_unlocked()
+                return self._install_notebook_unlocked(
+                    notebook=candidate,
+                    normalized=normalized,
+                    filename=filename,
+                    notebook_path=None,
+                    workspace_root=None,
+                    on_disk_baseline=None,
+                )
         finally:
             self.coordinator.release(lease)
+
+    def open_notebook_from_path(
+        self,
+        path: str,
+        *,
+        workspace_root: str | None = None,
+        expected_session_id: str | None = None,
+        expected_revision: int | None = None,
+    ) -> NotebookSnapshot:
+        resolved = self._resolve_notebook_path(path, workspace_root)
+        if workspace_root is not None:
+            bound_root = str(Path(workspace_root).resolve())
+        else:
+            bound_root = str(resolved.parent)
+        try:
+            payload = resolved.read_bytes()
+            mtime_ns = resolved.stat().st_mtime_ns
+        except OSError as error:
+            raise NotebookPathError() from error
+        lease = self._acquire_lease(
+            operation_type="notebook_open", operation_id=uuid4().hex
+        )
+        try:
+            with self._lock:
+                candidate, normalized = self._parse_and_validate(payload)
+                self._enforce_replacement_preconditions(
+                    expected_session_id, expected_revision
+                )
+                baseline = OnDiskBaseline(
+                    path=str(resolved),
+                    mtime_ns=mtime_ns,
+                    content_hash=hashlib.sha256(payload).hexdigest(),
+                )
+                return self._install_notebook_unlocked(
+                    notebook=candidate,
+                    normalized=normalized,
+                    filename=str(resolved),
+                    notebook_path=str(resolved),
+                    workspace_root=bound_root,
+                    on_disk_baseline=baseline,
+                )
+        finally:
+            self.coordinator.release(lease)
+
+    def _install_notebook_unlocked(
+        self,
+        *,
+        notebook: dict[str, Any],
+        normalized: bool,
+        filename: str,
+        notebook_path: str | None,
+        workspace_root: str | None,
+        on_disk_baseline: OnDiskBaseline | None,
+    ) -> NotebookSnapshot:
+        self._session_id = uuid4().hex
+        self._filename = self._safe_filename(filename)
+        self._notebook = notebook
+        self._revision = 1 if normalized else 0
+        self._dirty = normalized
+        self._last_mutation_owner = "normalization" if normalized else None
+        self._notebook_path = notebook_path
+        self._workspace_root = workspace_root
+        self._on_disk_baseline = on_disk_baseline
+        self._notify_session_replaced_unlocked(self._session_id, self._revision)
+        return self._snapshot_unlocked()
+
+    def _enforce_replacement_preconditions(
+        self, expected_session_id: str | None, expected_revision: int | None
+    ) -> None:
+        if self._notebook is None:
+            return
+        if expected_session_id is None or expected_revision is None:
+            raise ReplacementPreconditionRequired()
+        self._check_preconditions(expected_session_id, expected_revision)
+
+    def _resolve_notebook_path(
+        self, path: str, workspace_root: str | None
+    ) -> Path:
+        resolved = Path(path).resolve()
+        if workspace_root is not None:
+            root = Path(workspace_root).resolve()
+            if not resolved.is_relative_to(root):
+                raise NotebookPathError()
+        if resolved.suffix != ".ipynb" or not resolved.is_file():
+            raise NotebookPathError()
+        try:
+            size = resolved.stat().st_size
+        except OSError as error:
+            raise NotebookPathError() from error
+        if size > MAX_NOTEBOOK_BYTES:
+            raise NotebookSizeError(MAX_NOTEBOOK_BYTES)
+        return resolved
 
     def close_notebook(
         self, *, expected_session_id: str, expected_revision: int,
@@ -126,6 +223,9 @@ class NotebookDocumentService:
                 self._revision = 0
                 self._dirty = False
                 self._last_mutation_owner = None
+                self._notebook_path = None
+                self._workspace_root = None
+                self._on_disk_baseline = None
                 self._notify_session_replaced_unlocked(None, 0)
                 return NotebookCloseResult(
                     closed_session_id=closed_session_id,
@@ -234,6 +334,116 @@ class NotebookDocumentService:
         snapshot = self.get_snapshot()
         content = self._serialize_notebook(snapshot.notebook)
         return snapshot.filename, content
+
+    def save_notebook_to_disk(
+        self, *, expected_session_id: str, expected_revision: int
+    ) -> NotebookSnapshot:
+        """Persist the committed document to its file, guarded by the baseline.
+
+        Holds only the document RLock, never the coordinator mutation lease, so a
+        save may run alongside an active turn and writes the latest committed
+        state. The RLock spans the read-current-hash, serialize, atomic write, and
+        baseline update so they observe a single consistent committed snapshot;
+        the disk write is kept inside it because the notebook size is bounded and
+        the simplicity outweighs briefly serializing concurrent in-memory commits.
+        """
+        with self._lock:
+            self._require_notebook()
+            if self._notebook_path is None:
+                raise NotebookPathError()
+            self._check_preconditions(expected_session_id, expected_revision)
+            path = Path(self._notebook_path)
+            content = self._serialize_notebook(self._notebook)
+
+            baseline = self._on_disk_baseline
+            try:
+                current = path.read_bytes()
+            except OSError as error:
+                raise ExternalModificationConflict() from error
+            if (
+                baseline is None
+                or hashlib.sha256(current).hexdigest() != baseline.content_hash
+            ):
+                raise ExternalModificationConflict()
+
+            mtime_ns = self._atomic_write(path, content)
+            self._on_disk_baseline = OnDiskBaseline(
+                path=str(path),
+                mtime_ns=mtime_ns,
+                content_hash=hashlib.sha256(content).hexdigest(),
+            )
+            self._dirty = False
+            return self._snapshot_unlocked()
+
+    def save_notebook_as(
+        self,
+        path: str,
+        *,
+        expected_session_id: str,
+        expected_revision: int,
+        workspace_root: str | None = None,
+    ) -> NotebookSnapshot:
+        """Write the committed document to a NEW path and rebind the session to it.
+
+        Like ``save_notebook_to_disk`` this holds only the document RLock and never
+        the coordinator lease, so it may run alongside an active turn. Save As is an
+        explicit write to a chosen path, so no on-disk baseline conflict applies; the
+        target need not pre-exist and is overwritten if it does. The revision is
+        preserved while the file binding, filename, baseline, and workspace root are
+        replaced to point at the new location.
+        """
+        with self._lock:
+            self._require_notebook()
+            self._check_preconditions(expected_session_id, expected_revision)
+            target = self._resolve_save_as_target(path, workspace_root)
+            content = self._serialize_notebook(self._notebook)
+
+            mtime_ns = self._atomic_write(target, content)
+            self._notebook_path = str(target)
+            self._filename = self._safe_filename(str(target))
+            self._on_disk_baseline = OnDiskBaseline(
+                path=str(target),
+                mtime_ns=mtime_ns,
+                content_hash=hashlib.sha256(content).hexdigest(),
+            )
+            self._workspace_root = (
+                str(Path(workspace_root).expanduser().resolve())
+                if workspace_root is not None
+                else str(target.parent)
+            )
+            self._dirty = False
+            return self._snapshot_unlocked()
+
+    @staticmethod
+    def _resolve_save_as_target(path: str, workspace_root: str | None) -> Path:
+        resolved = Path(path).expanduser().resolve()
+        if resolved.suffix != ".ipynb":
+            raise NotebookPathError()
+        parent = resolved.parent
+        if not parent.is_dir() or not os.access(parent, os.W_OK):
+            raise NotebookPathError()
+        if workspace_root is not None:
+            root = Path(workspace_root).expanduser().resolve()
+            if not resolved.is_relative_to(root):
+                raise NotebookPathError()
+        return resolved
+
+    @staticmethod
+    def _atomic_write(path: Path, content: bytes) -> int:
+        handle, tmp_name = tempfile.mkstemp(
+            prefix=f"{path.name}.", suffix=".tmp", dir=str(path.parent)
+        )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(handle, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(tmp_path, path)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        return path.stat().st_mtime_ns
 
     def update_cell_source(
         self,
@@ -397,6 +607,8 @@ class NotebookDocumentService:
             revision=self._revision,
             dirty=self._dirty,
             last_mutation_owner=self._last_mutation_owner,
+            notebook_path=self._notebook_path,
+            workspace_root=self._workspace_root,
         )
 
     @staticmethod

@@ -23,6 +23,27 @@ class NotebookCloseRequest(BaseModel):
     expected_revision: int = Field(alias="expectedDocumentRevision")
 
 
+class NotebookOpenRequest(BaseModel):
+    path: str
+    workspace_root: str | None = Field(default=None, alias="workspaceRoot")
+    session_id: str | None = Field(default=None, alias="sessionId")
+    expected_revision: int | None = Field(
+        default=None, alias="expectedDocumentRevision"
+    )
+
+
+class NotebookSaveRequest(BaseModel):
+    session_id: str = Field(alias="sessionId")
+    expected_revision: int = Field(alias="expectedDocumentRevision")
+
+
+class NotebookSaveAsRequest(BaseModel):
+    path: str
+    session_id: str = Field(alias="sessionId")
+    expected_revision: int = Field(alias="expectedDocumentRevision")
+    workspace_root: str | None = Field(default=None, alias="workspaceRoot")
+
+
 def _service(request: Request) -> NotebookDocumentService:
     return request.app.state.notebook_service
 
@@ -54,6 +75,8 @@ def serialize_snapshot(snapshot: NotebookSnapshot) -> dict[str, Any]:
         "metadata": snapshot.notebook.get("metadata", {}),
         "nbformat": snapshot.notebook["nbformat"],
         "nbformatMinor": snapshot.notebook["nbformat_minor"],
+        "notebookPath": snapshot.notebook_path,
+        "workspaceRoot": snapshot.workspace_root,
         "cells": cells,
     }
 
@@ -77,6 +100,41 @@ async def upload_notebook(
     request.app.state.session_event_service.publish(
         "notebook.updated",
         {"sessionId": snapshot.session_id, "revision": snapshot.revision, "ownerId": "upload"},
+    )
+    return serialize_snapshot(snapshot)
+
+
+@router.post("/notebooks/open")
+def open_notebook(body: NotebookOpenRequest, request: Request) -> dict[str, Any]:
+    snapshot = _service(request).open_notebook_from_path(
+        body.path,
+        workspace_root=body.workspace_root,
+        expected_session_id=body.session_id,
+        expected_revision=body.expected_revision,
+    )
+    request.app.state.session_event_service.publish(
+        "notebook.updated",
+        {"sessionId": snapshot.session_id, "revision": snapshot.revision, "ownerId": "open"},
+    )
+    return serialize_snapshot(snapshot)
+
+
+@router.post("/notebooks/save")
+def save_notebook(body: NotebookSaveRequest, request: Request) -> dict[str, Any]:
+    snapshot = _service(request).save_notebook_to_disk(
+        expected_session_id=body.session_id,
+        expected_revision=body.expected_revision,
+    )
+    return serialize_snapshot(snapshot)
+
+
+@router.post("/notebooks/save-as")
+def save_notebook_as(body: NotebookSaveAsRequest, request: Request) -> dict[str, Any]:
+    snapshot = _service(request).save_notebook_as(
+        body.path,
+        expected_session_id=body.session_id,
+        expected_revision=body.expected_revision,
+        workspace_root=body.workspace_root,
     )
     return serialize_snapshot(snapshot)
 

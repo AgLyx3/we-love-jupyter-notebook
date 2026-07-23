@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import type { AgentTurn, NotebookSnapshot, TurnScope } from "../api/client";
 import NotebookCell from "./NotebookCell";
 import type { CellSelection } from "./selectionEdit";
@@ -15,6 +15,8 @@ export default function NotebookView({ notebook, scope, turn, disabled, sourceAc
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const refs = useRef(new Map<string, HTMLElement>());
   const anchorRef = useRef(notebook.cells[0]?.cellId ?? "");
+  const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const surfaceRef = useRef<HTMLElement | null>(null);
   const scopeDisabled = disabled || sourceActionsDisabled;
   useEffect(() => { if (!notebook.cells.some((cell) => cell.cellId === focused)) setFocused(notebook.cells[0]?.cellId ?? ""); }, [notebook, focused]);
   useEffect(() => { setSelected(new Set()); setMenu(null); }, [notebook.sessionId]);
@@ -57,14 +59,66 @@ export default function NotebookView({ notebook, scope, turn, disabled, sourceAc
 
   const editableCount = notebook.cells.filter((cell) => selected.has(cell.cellId) && cell.cellType !== "raw").length;
 
-  return <main className="notebook-surface" aria-label="Notebook cells" onKeyDown={(event) => {
+  // Marquee (rubber-band) select: press on empty surface background and drag a
+  // rectangle; every cell it intersects becomes selected. Hold Shift to add to
+  // the existing selection. Dragging near the top/bottom edge auto-scrolls, and
+  // the rectangle's anchor tracks the scrolled content so cells scrolled into it
+  // are picked up. Ignores presses on a cell so cell drag / text selection /
+  // gutter clicks are unaffected.
+  const startMarquee = (event: PointerEvent) => {
+    if (event.button !== 0 || (event.target as HTMLElement).closest(".notebook-cell, .cell-context-menu")) return;
+    event.preventDefault();
+    const base = event.shiftKey ? Array.from(selected) : [];
+    const box = { x0: event.clientX, y0: event.clientY, x1: event.clientX, y1: event.clientY };
+    let pointerX = event.clientX, pointerY = event.clientY;
+    setMarquee({ ...box });
+    const apply = () => {
+      const minX = Math.min(box.x0, box.x1), maxX = Math.max(box.x0, box.x1), minY = Math.min(box.y0, box.y1), maxY = Math.max(box.y0, box.y1);
+      const hit = notebook.cells.filter((cell) => {
+        const rect = refs.current.get(cell.cellId)?.getBoundingClientRect();
+        return rect && rect.right >= minX && rect.left <= maxX && rect.bottom >= minY && rect.top <= maxY;
+      }).map((cell) => cell.cellId);
+      const next = new Set([...base, ...hit]);
+      setSelected(next);
+      if (hit.length) { anchorRef.current = hit[0]; setFocused(hit[0]); }
+    };
+    let raf = 0;
+    const EDGE = 48, SPEED = 14;
+    const tick = () => {
+      const surface = surfaceRef.current;
+      if (surface) {
+        const rect = surface.getBoundingClientRect();
+        const dir = pointerY < rect.top + EDGE ? -1 : pointerY > rect.bottom - EDGE ? 1 : 0;
+        if (dir) {
+          const before = surface.scrollTop;
+          surface.scrollTop += dir * SPEED;
+          const applied = surface.scrollTop - before;
+          if (applied) { box.y0 -= applied; box.x1 = pointerX; box.y1 = pointerY; setMarquee({ ...box }); apply(); }
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    const onMove = (moveEvent: globalThis.PointerEvent) => { pointerX = moveEvent.clientX; pointerY = moveEvent.clientY; box.x1 = moveEvent.clientX; box.y1 = moveEvent.clientY; setMarquee({ ...box }); apply(); };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      cancelAnimationFrame(raf); apply(); setMarquee(null); document.body.classList.remove("marquee-active");
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    document.body.classList.add("marquee-active");
+  };
+
+  const orderedSelection = notebook.cells.filter((cell) => selected.has(cell.cellId)).map((cell) => cell.cellId);
+  return <main ref={surfaceRef} className="notebook-surface" aria-label="Notebook cells" onPointerDown={startMarquee} onKeyDown={(event) => {
     if (!event.altKey || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
     event.preventDefault();
     const index = notebook.cells.findIndex((cell) => cell.cellId === focused);
     const next = Math.max(0, Math.min(notebook.cells.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
     const id = notebook.cells[next]?.cellId ?? focused; setFocused(id); const node = refs.current.get(id); node?.focus(); node?.scrollIntoView({ block: "nearest" });
   }}>
-    {notebook.cells.map((cell) => <NotebookCell key={`${notebook.sessionId}:${cell.cellId}`} cell={cell} focused={focused === cell.cellId} selected={selected.has(cell.cellId)}
+    {notebook.cells.map((cell) => <NotebookCell key={`${notebook.sessionId}:${cell.cellId}`} cell={cell} focused={focused === cell.cellId} selected={selected.has(cell.cellId)} dragIds={selected.has(cell.cellId) && orderedSelection.length > 1 ? orderedSelection : [cell.cellId]}
       editable={scope.editableCellIds.includes(cell.cellId)} context={scope.contextCellIds.includes(cell.cellId)} disabled={disabled} sourceActionsDisabled={sourceActionsDisabled} autoSave={autoSave}
       cellRef={(node) => { if (node) refs.current.set(cell.cellId, node); else refs.current.delete(cell.cellId); }}
       change={turn?.changes.find((change) => change.cellId === cell.cellId)} onFocus={() => setFocused(cell.cellId)}
@@ -82,5 +136,6 @@ export default function NotebookView({ notebook, scope, turn, disabled, sourceAc
         <button role="menuitem" onClick={() => { setSelected(new Set()); setMenu(null); }}>Clear selection</button>
       </div>
     </div>}
+    {marquee && <div className="marquee-box" style={{ left: Math.min(marquee.x0, marquee.x1), top: Math.min(marquee.y0, marquee.y1), width: Math.abs(marquee.x1 - marquee.x0), height: Math.abs(marquee.y1 - marquee.y0) }} />}
   </main>;
 }

@@ -1,4 +1,4 @@
-import { BookOpen, Check, MessageSquarePlus, Pencil, Play, RotateCcw, Save, Send, Wand2, X } from "lucide-react";
+import { BookOpen, Bot, Check, MessageSquarePlus, Pencil, Play, RotateCcw, Save, Send, Wand2, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import type { AgentChange, NotebookCellData } from "../api/client";
@@ -70,7 +70,7 @@ function MarkdownPreview({ source, cellId, disabled, onAddSelectionToChat, onInl
     setMenu(null);
   };
 
-  return <div ref={ref} className="markdown-preview-wrap" onMouseEnter={() => onHoverChange(true)} onMouseLeave={() => onHoverChange(false)}>
+  return <div ref={ref} className="markdown-preview-wrap" onMouseMove={(event) => { const target = event.target as HTMLElement; onHoverChange(!(target === ref.current || target.classList.contains("markdown-preview"))); }} onMouseLeave={() => onHoverChange(false)}>
     <div className="markdown-preview"><ReactMarkdown>{source}</ReactMarkdown></div>
     {menu && !inline && <div className="selection-toolbar above" role="toolbar" aria-label="Selection actions" style={{ left: menu.left, top: menu.top }} onMouseDown={(event) => event.preventDefault()}>
       {onAddSelectionToChat && <button type="button" onClick={() => { onAddSelectionToChat(selectionOf(menu.text)); setMenu(null); window.getSelection()?.removeAllRanges(); }}><MessageSquarePlus /> Add to chat</button>}
@@ -111,8 +111,8 @@ export function Outputs({ outputs, disabled = false, onAddErrorToChat, onHoverCh
   })}</div>;
 }
 
-export default function NotebookCell({ cell, focused, selected, editable, context, change, disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
-  cell: NotebookCellData; focused: boolean; selected: boolean; editable: boolean; context: boolean; change?: AgentChange;
+export default function NotebookCell({ cell, focused, selected, dragIds, editable, context, change, disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
+  cell: NotebookCellData; focused: boolean; selected: boolean; dragIds: string[]; editable: boolean; context: boolean; change?: AgentChange;
   disabled: boolean; sourceActionsDisabled: boolean; autoSave: boolean; cellRef: (node: HTMLElement | null) => void;
   onFocus: () => void; onSelect: (event: MouseEvent) => void; onContextMenu: (event: MouseEvent) => void; onDirtyChange: (dirty: boolean) => void; onSave: (source: string) => void; onRun: () => void; onAddEditable: () => void; onAddContext: () => void; onRevert: () => void;
   onAddSelectionToChat?: (selection: CellSelection) => void; onInlineEdit?: (selection: CellSelection, instruction: string) => void; onAddErrorToChat?: (text: string) => void;
@@ -135,23 +135,29 @@ export default function NotebookCell({ cell, focused, selected, editable, contex
   const description = `${cell.cellType} cell ${cell.index + 1}`;
   const dependentDisabled = disabled || sourceActionsDisabled;
   return <article ref={cellRef} draggable={!dependentDisabled && !suppressDrag} onDragStart={(event) => {
-    // Belt-and-suspenders: never start a cell drag from within selectable text.
-    if ((event.target as HTMLElement).closest?.(".cell-outputs, .markdown-preview-wrap")) { event.preventDefault(); return; }
-    event.dataTransfer.setData("application/x-notebook-cell", cell.cellId); event.dataTransfer.effectAllowed = "copy";
+    const target = event.target as HTMLElement;
+    // Never start a cell drag from selectable output text.
+    if (target.closest?.(".cell-outputs")) { event.preventDefault(); return; }
+    // In a markdown block, allow dragging from blank space (the container/padding)
+    // but let presses on the rendered text select instead of dragging the cell.
+    const mdWrap = target.closest?.(".markdown-preview-wrap");
+    if (mdWrap && !(target === mdWrap || target.classList.contains("markdown-preview"))) { event.preventDefault(); return; }
+    const ids = dragIds.length ? dragIds : [cell.cellId];
+    event.dataTransfer.setData("application/x-notebook-cell", cell.cellId);
+    event.dataTransfer.setData("application/x-notebook-cells", JSON.stringify(ids));
+    event.dataTransfer.effectAllowed = "copy";
   }} className={`notebook-cell ${focused ? "is-focused" : ""} ${selected ? "is-selected" : ""}`} tabIndex={0} onFocus={onFocus} onContextMenu={onContextMenu} aria-label={description}>
-    <div className="cell-gutter" aria-label={`Select ${description}`} title="Click to select · Shift-click for a range · right-click for scope actions" onClick={onSelect}><span className="cell-number" title={`Cell ${cell.index + 1}`}>{cell.index + 1}</span><span className="execution-count">{cell.cellType === "code" ? `[${cell.executionCount ?? " "}]` : cell.cellType === "raw" ? "RAW" : "MD"}</span><div className="gutter-actions">
-
-      <button disabled={dependentDisabled || cell.cellType === "raw"} className={editable ? "selected" : ""} title="Allow agent edit" aria-label={`Allow agent edit ${description}`} onClick={(event) => { event.stopPropagation(); onAddEditable(); }}>{editable ? <Check /> : <Pencil />}</button>
-      <button disabled={dependentDisabled} className={context ? "selected context" : ""} title="Add as context" aria-label={`Add ${description} as context`} onClick={(event) => { event.stopPropagation(); onAddContext(); }}>{context ? <Check /> : <BookOpen />}</button>
-    </div></div>
+    <div className="cell-gutter" aria-label={`Select ${description}`} title="Click to select · Shift-click for a range · right-click for scope actions" onClick={onSelect}><span className="cell-number" title={`Cell ${cell.index + 1}`}>{cell.index + 1}</span><span className="execution-count">{cell.cellType === "code" ? `[${cell.executionCount ?? " "}]` : cell.cellType === "raw" ? "RAW" : "MD"}</span></div>
     <div className="cell-main">
       <div className="cell-actions">
+        <button disabled={dependentDisabled || cell.cellType === "raw"} className={editable ? "selected" : ""} title="Allow agent edit" aria-label={`Allow agent edit ${description}`} onClick={(event) => { event.stopPropagation(); onAddEditable(); }}>{editable ? <Check /> : <Bot />}</button>
+        <button disabled={dependentDisabled} className={context ? "selected context" : ""} title="Add as context" aria-label={`Add ${description} as context`} onClick={(event) => { event.stopPropagation(); onAddContext(); }}>{context ? <Check /> : <BookOpen />}</button>
         {cell.cellType === "code" && <button disabled={dependentDisabled} title="Run cell" aria-label={`Run ${description}`} onClick={onRun}><Play /></button>}
         {cell.cellType === "markdown" && <button disabled={disabled} title={editingMarkdown ? "Preview Markdown" : "Edit Markdown"} aria-label={`${editingMarkdown ? "Preview" : "Edit"} ${description}`} onClick={() => setEditingMarkdown(!editingMarkdown)}><Pencil /></button>}
         {dirty && <button disabled={disabled} title="Save source" aria-label={`Save ${description}`} onClick={() => onSave(source)}><Save /></button>}
         {change && <button disabled={dependentDisabled} title="Revert this agent change" aria-label={`Revert agent change to ${description}`} onClick={onRevert}><RotateCcw /></button>}
       </div>
-      {cell.cellType === "code" || cell.cellType === "raw" || editingMarkdown ? <CellEditor value={source} label={`Source for ${description}`} disabled={disabled} language={cell.cellType} change={change} cellId={cell.cellId} interactionsDisabled={dependentDisabled} onChange={setSource} onSave={() => dirty && onSave(source)} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} /> : <MarkdownPreview source={source} cellId={cell.cellId} disabled={dependentDisabled} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} onHoverChange={setSuppressDrag} />}
+      {cell.cellType === "code" || cell.cellType === "raw" || editingMarkdown ? <CellEditor value={source} label={`Source for ${description}`} disabled={disabled} language={cell.cellType} change={change} cellId={cell.cellId} interactionsDisabled={dependentDisabled} onChange={setSource} onSave={() => dirty && onSave(source)} onRun={onRun} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} /> : <MarkdownPreview source={source} cellId={cell.cellId} disabled={dependentDisabled} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} onHoverChange={setSuppressDrag} />}
       <Outputs outputs={cell.outputs} disabled={dependentDisabled} onAddErrorToChat={onAddErrorToChat} onHoverChange={setSuppressDrag} />
     </div>
   </article>;

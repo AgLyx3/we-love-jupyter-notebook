@@ -318,3 +318,182 @@ def test_oversized_source_returns_structured_error_without_revision_change(
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "notebook_too_large"
     assert client.get("/notebooks/current").json()["revision"] == created["revision"]
+
+
+def _write_notebook(tmp_path, notebook_payload, name="on-disk.ipynb"):
+    path = tmp_path / name
+    path.write_bytes(notebook_payload())
+    return path
+
+
+def test_open_notebook_from_path_serves_resolved_path(
+    client, notebook_payload, tmp_path
+):
+    from pathlib import Path
+
+    path = _write_notebook(tmp_path, notebook_payload)
+
+    response = client.post("/notebooks/open", json={"path": str(path)})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["notebookPath"] == str(Path(path).resolve())
+    assert body["revision"] == 0
+    assert body["dirty"] is False
+    assert [cell["cellId"] for cell in body["cells"]] == ["intro", "editable"]
+
+    current = client.get("/notebooks/current").json()
+    assert current["sessionId"] == body["sessionId"]
+    assert current["notebookPath"] == str(Path(path).resolve())
+
+
+def test_save_notebook_to_disk_clears_dirty_and_persists(
+    client, notebook_payload, tmp_path
+):
+    path = _write_notebook(tmp_path, notebook_payload)
+    opened = client.post("/notebooks/open", json={"path": str(path)}).json()
+
+    edited = client.post(
+        "/cells/editable/source",
+        json={
+            "sessionId": opened["sessionId"],
+            "expectedDocumentRevision": opened["revision"],
+            "source": "value = 99\n",
+        },
+    )
+    assert edited.status_code == 200
+    assert edited.json()["dirty"] is True
+
+    saved = client.post(
+        "/notebooks/save",
+        json={
+            "sessionId": opened["sessionId"],
+            "expectedDocumentRevision": edited.json()["revision"],
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["dirty"] is False
+
+    on_disk = client.get("/notebooks/download").content
+    assert path.read_bytes() == on_disk
+
+
+def test_save_notebook_reports_external_modification_conflict(
+    client, notebook_payload, tmp_path
+):
+    path = _write_notebook(tmp_path, notebook_payload)
+    opened = client.post("/notebooks/open", json={"path": str(path)}).json()
+
+    path.write_bytes(notebook_payload(cell_ids=("other-a", "other-b")))
+
+    response = client.post(
+        "/notebooks/save",
+        json={
+            "sessionId": opened["sessionId"],
+            "expectedDocumentRevision": opened["revision"],
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "external_modification_conflict"
+
+
+def test_open_rejects_non_ipynb_and_missing_path(client, tmp_path):
+    not_ipynb = tmp_path / "notes.txt"
+    not_ipynb.write_text("hello")
+    response = client.post("/notebooks/open", json={"path": str(not_ipynb)})
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "notebook_path_invalid"
+
+    missing = client.post(
+        "/notebooks/open", json={"path": str(tmp_path / "missing.ipynb")}
+    )
+    assert missing.status_code == 400
+    assert missing.json()["error"]["code"] == "notebook_path_invalid"
+
+
+def test_save_rejects_notebook_without_path(client, notebook_payload):
+    created = upload(client, notebook_payload()).json()
+
+    response = client.post(
+        "/notebooks/save",
+        json={
+            "sessionId": created["sessionId"],
+            "expectedDocumentRevision": created["revision"],
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "notebook_path_invalid"
+
+
+def test_save_as_notebook_rebinds_to_new_path(client, notebook_payload, tmp_path):
+    from pathlib import Path
+
+    source = _write_notebook(tmp_path, notebook_payload, name="src.ipynb")
+    opened = client.post("/notebooks/open", json={"path": str(source)}).json()
+    target = tmp_path / "renamed.ipynb"
+
+    response = client.post(
+        "/notebooks/save-as",
+        json={
+            "path": str(target),
+            "sessionId": opened["sessionId"],
+            "expectedDocumentRevision": opened["revision"],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["notebookPath"] == str(Path(target).resolve())
+    assert body["filename"] == "renamed.ipynb"
+    assert body["dirty"] is False
+    assert body["revision"] == opened["revision"]
+    assert target.exists()
+
+    current = client.get("/notebooks/current").json()
+    assert current["notebookPath"] == str(Path(target).resolve())
+
+
+def test_save_as_rejects_non_ipynb_target(client, notebook_payload, tmp_path):
+    source = _write_notebook(tmp_path, notebook_payload, name="src2.ipynb")
+    opened = client.post("/notebooks/open", json={"path": str(source)}).json()
+
+    response = client.post(
+        "/notebooks/save-as",
+        json={
+            "path": str(tmp_path / "bad.txt"),
+            "sessionId": opened["sessionId"],
+            "expectedDocumentRevision": opened["revision"],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "notebook_path_invalid"
+
+
+def test_open_replacement_requires_current_session_and_revision(
+    client, notebook_payload, tmp_path
+):
+    first = _write_notebook(tmp_path, notebook_payload, name="first.ipynb")
+    second = tmp_path / "second.ipynb"
+    second.write_bytes(notebook_payload(cell_ids=("new-intro", "new-code")))
+
+    opened = client.post("/notebooks/open", json={"path": str(first)}).json()
+
+    missing = client.post("/notebooks/open", json={"path": str(second)})
+    assert missing.status_code == 409
+    assert missing.json()["error"]["code"] == "replacement_precondition_required"
+
+    replaced = client.post(
+        "/notebooks/open",
+        json={
+            "path": str(second),
+            "sessionId": opened["sessionId"],
+            "expectedDocumentRevision": opened["revision"],
+        },
+    )
+    assert replaced.status_code == 200
+    assert replaced.json()["sessionId"] != opened["sessionId"]
+    assert [cell["cellId"] for cell in replaced.json()["cells"]] == [
+        "new-intro",
+        "new-code",
+    ]

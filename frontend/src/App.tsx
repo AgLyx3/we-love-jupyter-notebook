@@ -1,11 +1,12 @@
-import { AlertTriangle, BookOpen, FileUp, Save, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent, type PointerEvent } from "react";
-import { extractNotebookFiles } from "./fileOperations/dropUpload";
+import { AlertTriangle, BookOpen, PanelLeft, Save, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { ApiError, api, connectEvents, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type KernelStatus, type NotebookSnapshot, type TurnScope } from "./api/client";
 import AgentChatPanel from "./agentChat/AgentChatPanel";
 import type { TurnRecord } from "./agentChat/AgentChatPanel";
 import KernelControls from "./execution/KernelControls";
 import CloseNotebookDialog from "./fileOperations/CloseNotebookDialog";
+import FilePicker from "./fileOperations/FilePicker";
+import WorkspaceSidebar from "./fileOperations/WorkspaceSidebar";
 import FileToolbar from "./fileOperations/FileToolbar";
 import NotebookView from "./notebook/NotebookView";
 import { composeChatPrompt, composeInlineEditPrompt, makeAttachment, makeErrorAttachment, type CellSelection, type SelectionAttachment } from "./notebook/selectionEdit";
@@ -30,8 +31,6 @@ export default function App() {
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState<{ cellId: string; requestId: number } | null>(null);
   const [attachments, setAttachments] = useState<SelectionAttachment[]>([]);
-  const [fileDragging, setFileDragging] = useState(false);
-  const dragDepth = useRef(0);
   const [operation, setOperation] = useState<ExecutionOperation | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -39,6 +38,10 @@ export default function App() {
   const [dirtyCellIds, setDirtyCellIds] = useState<Set<string>>(() => new Set());
   const [polling, setPolling] = useState(false);
   const [closeTarget, setCloseTarget] = useState<{ sessionId: string; revision: number } | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [workspaceFolder, setWorkspaceFolder] = useState<string | null>(null);
+  const [sidebarHidden, setSidebarHidden] = useState(false);
   const [agentWidth, setAgentWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(AGENT_WIDTH_KEY));
     return Number.isFinite(saved) && saved > 0 ? clampAgentWidth(saved) : 360;
@@ -206,25 +209,34 @@ export default function App() {
     } finally { if (mutationGenerationRef.current === mutationGeneration) setBusy(false); }
   }
 
-  const handleUpload = async (file: File) => {
+  const handleOpen = async (path: string, workspaceRoot?: string) => {
     const current = snapshotRef.current;
-    const uploaded = await mutate(() => api.upload(file, current ?? undefined), { refreshAfter: false }, (next) => {
+    const opened = await mutate(() => api.open(path, current ?? undefined, workspaceRoot), { refreshAfter: false }, (next) => {
       setNotebook(next); setScope(emptyScope); setTurn(null); setHistory([]); setSelectedTurnId(null); setOperation(null); setKernel(emptyKernel); setDirtyCellIds(new Set());
+      setWorkspaceFolder(next.workspaceRoot ?? workspaceRoot ?? null);
     });
-    if (uploaded) await mutate(() => api.kernel(), { refreshAfter: false }, setKernel);
-    return Boolean(uploaded);
+    if (opened) await mutate(() => api.kernel(), { refreshAfter: false }, setKernel);
   };
+  const handleOpenFolder = (path: string) => { setWorkspaceFolder(path); setSidebarHidden(false); };
+  const handleSaveAs = (path: string) => { if (notebook) void mutate(() => api.saveAs(notebook, path, workspaceFolder ?? undefined), { refreshAfter: false }, (saved) => { setNotebook(saved); setWorkspaceFolder(saved.workspaceRoot ?? workspaceFolder); }); };
+  const handleSave = () => {
+    if (!notebook?.notebookPath || !notebook.dirty || busy || dirtyCellIds.size > 0) return;
+    const active = history.find((item) => !terminalTurns.has(item.turn.state)) ?? (turn && !terminalTurns.has(turn.state));
+    if (active || (operation && !terminalExecutions.has(operation.state))) return;
+    void mutate(() => api.save(notebook), { refreshAfter: false }, setNotebook);
+  };
+  const saveShortcutRef = useRef(handleSave);
+  saveShortcutRef.current = handleSave;
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (!((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s")) return;
+      event.preventDefault();
+      saveShortcutRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
-  const handleDownload = async () => {
-    setNotice(null);
-    let url: string | null = null;
-    try {
-      const blob = await api.download();
-      url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a"); anchor.href = url; anchor.download = notebook?.filename ?? "notebook.ipynb"; anchor.click();
-    } catch (error) { showError(error); }
-    finally { if (url) URL.revokeObjectURL(url); }
-  };
   const closeNotebook = (target: { sessionId: string; revision: number }) => {
     setCloseTarget(null);
     void mutate(() => api.close(target), { refreshAfter: false }, (result) => {
@@ -304,31 +316,15 @@ export default function App() {
     });
   };
 
-  const handleDrop = async (dataTransfer: DataTransfer) => {
-    let files: File[];
-    try { files = await extractNotebookFiles(dataTransfer); }
-    catch { setNotice({ tone: "error", text: "Could not read the dropped item." }); return; }
-    if (!files.length) { setNotice({ tone: "warning", text: "No .ipynb notebook was found in what you dropped." }); return; }
-    const opened = await handleUpload(files[0]);
-    if (opened && files.length > 1) setNotice({ tone: "warning", text: `Opened ${files[0].name}; ${files.length - 1} other notebook${files.length > 2 ? "s were" : " was"} ignored.` });
-  };
-  // Drag-and-drop upload (files or folders). Ignores cell drags (no "Files"
-  // type) so it never interferes with dragging a cell into the agent panel.
-  const dropZone = (accept: boolean) => ({
-    onDragEnter: (event: DragEvent) => { if (!event.dataTransfer.types.includes("Files")) return; event.preventDefault(); if (!accept) return; dragDepth.current += 1; setFileDragging(true); },
-    onDragOver: (event: DragEvent) => { if (!event.dataTransfer.types.includes("Files")) return; event.preventDefault(); event.dataTransfer.dropEffect = accept ? "copy" : "none"; },
-    onDragLeave: (event: DragEvent) => { if (!event.dataTransfer.types.includes("Files")) return; dragDepth.current = Math.max(0, dragDepth.current - 1); if (dragDepth.current === 0) setFileDragging(false); },
-    onDrop: (event: DragEvent) => { if (!event.dataTransfer.types.includes("Files")) return; event.preventDefault(); dragDepth.current = 0; setFileDragging(false); if (accept) void handleDrop(event.dataTransfer); },
-  });
-  const dropOverlay = fileDragging ? <div className="drop-overlay" aria-hidden="true"><div><FileUp /><p>Drop a notebook (.ipynb) file or folder to open</p></div></div> : null;
-
   if (loading) return <div className="loading-screen"><span className="spinner" />Loading notebook…</div>;
 
-  if (!notebook) return <div className="app-shell empty-shell" {...dropZone(!busy)}>
-    <header className="topbar"><div className="brand"><BookOpen /><strong>Notebook Agent</strong></div><FileToolbar notebook={null} onUpload={handleUpload} onDownload={() => void handleDownload()} onClose={handleClose} /></header>
-    <main className="upload-state"><BookOpen /><h1>Open a notebook to begin</h1><p>Upload a local <code>.ipynb</code> file, or drag one (or a folder) onto the window. Edits remain in this editor until downloaded.</p><label className="upload-button">Choose notebook<input type="file" accept=".ipynb,application/x-ipynb+json" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleUpload(file); }} /></label></main>
+  const openPicker = picking ? <FilePicker mode="open" onOpenNotebook={(path, root) => { setPicking(false); void handleOpen(path, root); }} onOpenFolder={(path) => { setPicking(false); handleOpenFolder(path); }} onClose={() => setPicking(false)} /> : null;
+
+  if (!notebook && !workspaceFolder) return <div className="app-shell empty-shell">
+    <header className="topbar"><div className="brand"><BookOpen /><strong>Notebook Agent</strong></div><FileToolbar notebook={null} onBrowse={() => setPicking(true)} onSave={handleSave} onSaveAs={() => setSaving(true)} onClose={handleClose} /></header>
+    <main className="upload-state"><BookOpen /><h1>Open a notebook or a folder to begin</h1><p>Open a local <code>.ipynb</code> file, or a project folder to browse and edit its notebooks in place.</p><button className="primary" onClick={() => setPicking(true)}>Open…</button></main>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
-    {dropOverlay}
+    {openPicker}
   </div>;
 
   const activeTurn = history.find((item) => !terminalTurns.has(item.turn.state))?.turn ?? (turn && !terminalTurns.has(turn.state) ? turn : null);
@@ -337,15 +333,19 @@ export default function App() {
   const hasDirtyDrafts = dirtyCellIds.size > 0;
   const selectedTurn = history.find((item) => item.turn.turnId === selectedTurnId)?.turn ?? turn;
 
-  return <div className="app-shell" {...dropZone(!(mutationsDisabled || busy || hasDirtyDrafts))}>
-    {dropOverlay}
+  const fileLocked = mutationsDisabled || busy || hasDirtyDrafts;
+  return <div className="app-shell">
     <header className="topbar">
-      <div className="brand"><BookOpen /><strong>{notebook.filename}</strong><span className={notebook.dirty ? "dirty" : ""}>{notebook.dirty ? "Unsaved" : "Clean"}</span><span>Revision {notebook.revision}</span></div>
-      <div className="toolbar-actions"><button className={`autosave-toggle ${autoSave ? "on" : ""}`} role="switch" aria-checked={autoSave} aria-label="Auto-save" title={autoSave ? "Auto-save is on — click to turn off" : "Auto-save is off — click to turn on"} onClick={() => setAutoSave((value) => !value)}><Save /> Auto-save {autoSave ? "on" : "off"}</button><KernelControls status={kernel} mutationDisabled={mutationsDisabled || busy || hasDirtyDrafts} onRunAll={() => void mutate(() => api.runAll(notebook), { refreshAfter: false }, setOperation)} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} /><FileToolbar notebook={notebook} uploadDisabled={mutationsDisabled || busy || hasDirtyDrafts} closeDisabled={mutationsDisabled || busy || hasDirtyDrafts} onUpload={handleUpload} onDownload={() => void handleDownload()} onClose={handleClose} /></div>
+      <div className="brand">{workspaceFolder && sidebarHidden && <button className="sidebar-reveal" title="Show files" aria-label="Show file tree" onClick={() => setSidebarHidden(false)}><PanelLeft /></button>}<BookOpen /><strong>{notebook?.filename ?? "Workspace"}</strong>{notebook && <span className={notebook.dirty ? "dirty" : ""}>{notebook.dirty ? "Unsaved" : "Clean"}</span>}{notebook && <span>Revision {notebook.revision}</span>}</div>
+      <div className="toolbar-actions">{notebook && <button className={`autosave-toggle ${autoSave ? "on" : ""}`} role="switch" aria-checked={autoSave} aria-label="Auto-save" title={autoSave ? "Auto-save is on — click to turn off" : "Auto-save is off — click to turn on"} onClick={() => setAutoSave((value) => !value)}><Save /> Auto-save {autoSave ? "on" : "off"}</button>}{notebook && <KernelControls status={kernel} mutationDisabled={fileLocked} onRunAll={() => void mutate(() => api.runAll(notebook), { refreshAfter: false }, setOperation)} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} />}<FileToolbar notebook={notebook} saveDisabled={fileLocked || !notebook?.notebookPath || !notebook?.dirty} saveAsDisabled={fileLocked} closeDisabled={fileLocked} onBrowse={() => setPicking(true)} onSave={handleSave} onSaveAs={() => setSaving(true)} onClose={handleClose} /></div>
     </header>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
+    {openPicker}
+    {saving && notebook && <FilePicker mode="save" defaultName={notebook.filename} initialPath={notebook.workspaceRoot ?? workspaceFolder ?? undefined} onSaveAs={(path) => { setSaving(false); handleSaveAs(path); }} onClose={() => setSaving(false)} />}
     {closeTarget && <CloseNotebookDialog busy={busy} onCancel={() => setCloseTarget(null)} onConfirm={confirmClose} />}
-    <div className="editor-layout" style={{ "--agent-width": `${agentWidth}px` } as CSSProperties}>
+    <div className="workspace-layout">
+      {workspaceFolder && !sidebarHidden && <WorkspaceSidebar root={workspaceFolder} activePath={notebook?.notebookPath ?? null} onOpenNotebook={(path) => void handleOpen(path, workspaceFolder)} onCollapse={() => setSidebarHidden(true)} />}
+      {notebook ? <div className="editor-layout" style={{ "--agent-width": `${agentWidth}px` } as CSSProperties}>
       <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} autoSave={autoSave} focusRequest={focusRequest}
         onDirtyChange={(cellId, dirty) => setDirtyCellIds((current) => {
           if (current.has(cellId) === dirty) return current;
@@ -387,7 +387,9 @@ export default function App() {
           setTurn((item) => item?.turnId === selectedTurn.turnId ? { ...item, undoEligible: false, changes: [] } : item);
         })}
         onDecision={(attempt: ExecutionAttempt, decision) => operation && void mutate(() => api.decide(operation, attempt, decision), { refreshAfter: false }, setOperation)}
-        onSelectTurn={setSelectedTurnId} onFocusCell={requestCellFocus} onDropCell={(cellId) => void mutate(() => api.addScope(notebook, cellId, true), { refreshAfter: false }, setScope)} />
+        onSelectTurn={setSelectedTurnId} onFocusCell={requestCellFocus} onDropCell={(cellId) => void mutate(() => api.addScope(notebook, cellId, true), { refreshAfter: false }, setScope)}
+        onDropCells={(cellIds) => { if (cellIds.length) void mutate(async () => { let latest: TurnScope | undefined; for (const cellId of cellIds) latest = await api.addScope(notebook, cellId, true); return latest as TurnScope; }, { refreshAfter: false }, setScope); }} />
+      </div> : <main className="workspace-placeholder"><BookOpen /><h2>Select a notebook</h2><p>Choose a <code>.ipynb</code> from the file tree to open it in place.</p></main>}
     </div>
   </div>;
 }

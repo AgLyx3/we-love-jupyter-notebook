@@ -1,10 +1,11 @@
-import { Download, FileUp, X } from "lucide-react";
+import { FolderOpen, Save, SaveAll, X } from "lucide-react";
 import type { NotebookSnapshot } from "../api/client";
 
-export default function FileToolbar({ notebook, uploadDisabled = false, closeDisabled = false, onUpload, onDownload, onClose }: { notebook: NotebookSnapshot | null; uploadDisabled?: boolean; closeDisabled?: boolean; onUpload: (file: File) => void; onDownload: () => void; onClose: () => void }) {
+export default function FileToolbar({ notebook, saveDisabled = false, saveAsDisabled = false, closeDisabled = false, onBrowse, onSave, onSaveAs, onClose }: { notebook: NotebookSnapshot | null; saveDisabled?: boolean; saveAsDisabled?: boolean; closeDisabled?: boolean; onBrowse: () => void; onSave: () => void; onSaveAs: () => void; onClose: () => void }) {
   return <div className="file-toolbar">
-    <label className={`icon-button ${uploadDisabled ? "disabled" : ""}`} title="Upload notebook" aria-label="Upload notebook"><FileUp /><input disabled={uploadDisabled} type="file" accept=".ipynb,application/x-ipynb+json" onChange={(event) => { const file = event.target.files?.[0]; if (file) onUpload(file); event.target.value = ""; }} /></label>
-    <button disabled={!notebook} title="Download notebook" aria-label="Download notebook" onClick={onDownload}><Download /></button>
+    <button title="Open a notebook or folder" aria-label="Open a notebook or folder" onClick={onBrowse}><FolderOpen /></button>
+    {notebook && <button disabled={saveDisabled} title="Save" aria-label="Save notebook" onClick={onSave}><Save /></button>}
+    {notebook && <button disabled={saveAsDisabled} title="Save as…" aria-label="Save notebook as" onClick={onSaveAs}><SaveAll /></button>}
     {notebook && <button disabled={closeDisabled} title="Close notebook" aria-label="Close notebook" onClick={onClose}><X /></button>}
   </div>;
 }

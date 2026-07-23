@@ -17,6 +17,8 @@ export interface NotebookCellData {
 export interface NotebookSnapshot {
   sessionId: string;
   filename: string;
+  notebookPath?: string | null;
+  workspaceRoot?: string | null;
   revision: number;
   dirty: boolean;
   metadata: Record<string, unknown>;
@@ -104,6 +106,8 @@ export interface NotebookCloseResult {
   cleanupErrors: string[];
 }
 
+export interface DirectoryEntry { name: string; path: string; kind: "directory" | "notebook" }
+export interface DirectoryListing { path: string; parent: string | null; entries: DirectoryEntry[] }
 export interface ApiErrorBody { code: string; message: string; details: Record<string, unknown> }
 
 export class ApiError extends Error {
@@ -125,31 +129,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-async function blobRequest(path: string): Promise<Blob> {
-  const response = await fetch(`${API}${path}`);
-  if (!response.ok) {
-    const payload = await response.json().catch(() => null) as { error?: ApiErrorBody } | null;
-    throw new ApiError(response.status, payload?.error ?? { code: "download_failed", message: "Notebook download failed", details: {} });
-  }
-  return response.blob();
-}
-
-const mutation = (snapshot: Pick<NotebookSnapshot, "sessionId" | "revision">) => ({ sessionId: snapshot.sessionId, expectedDocumentRevision: snapshot.revision });
+const mutation =(snapshot: Pick<NotebookSnapshot, "sessionId" | "revision">) => ({ sessionId: snapshot.sessionId, expectedDocumentRevision: snapshot.revision });
 
 export const api = {
   current: () => request<NotebookSnapshot>("/notebooks/current"),
   scope: () => request<TurnScope>("/turn-scope"),
   kernel: () => request<KernelStatus>("/kernel/status"),
   status: () => request<SessionStatus>("/session/status"),
-  download: () => blobRequest("/notebooks/download"),
   close: (snapshot: Pick<NotebookSnapshot, "sessionId" | "revision">) => request<NotebookCloseResult>("/notebooks/current", { method: "DELETE", body: JSON.stringify(mutation(snapshot)) }),
-  upload: (file: File, current?: NotebookSnapshot) => {
-    const body = new FormData();
-    body.append("file", file);
-    if (current) { body.append("sessionId", current.sessionId); body.append("expectedDocumentRevision", String(current.revision)); }
-    return request<NotebookSnapshot>("/notebooks/upload", { method: "POST", body });
-  },
-  saveSource: (snapshot: NotebookSnapshot, cellId: string, source: string) =>
+  open: (path: string, current?: NotebookSnapshot, workspaceRoot?: string) => request<NotebookSnapshot>("/notebooks/open", { method: "POST", body: JSON.stringify({ path, ...(workspaceRoot ? { workspaceRoot } : {}), ...(current ? mutation(current) : {}) }) }),
+  listFiles: (path?: string) => request<DirectoryListing>(`/files${path ? `?path=${encodeURIComponent(path)}` : ""}`),
+  save: (snapshot: NotebookSnapshot) => request<NotebookSnapshot>("/notebooks/save", { method: "POST", body: JSON.stringify(mutation(snapshot)) }),
+  saveAs: (snapshot: NotebookSnapshot, path: string, workspaceRoot?: string) => request<NotebookSnapshot>("/notebooks/save-as", { method: "POST", body: JSON.stringify({ path, ...(workspaceRoot ? { workspaceRoot } : {}), ...mutation(snapshot) }) }),
+  saveSource:(snapshot: NotebookSnapshot, cellId: string, source: string) =>
     request<{ sessionId: string; cellId: string; source: string; revision: number; dirty: boolean }>(`/cells/${encodeURIComponent(cellId)}/source`, { method: "POST", body: JSON.stringify({ ...mutation(snapshot), source }) }),
   addScope: (snapshot: NotebookSnapshot, cellId: string, editable: boolean) =>
     request<TurnScope>(`/turn-scope/${editable ? "editable-cells" : "context-cells"}`, { method: "POST", body: JSON.stringify({ ...mutation(snapshot), cellId }) }),

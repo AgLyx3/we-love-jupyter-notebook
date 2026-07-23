@@ -2,8 +2,8 @@ import { useRef, useState } from "react";
 import { MessageSquarePlus, Send, Wand2, X } from "lucide-react";
 import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
-import { StateField, type EditorState, type Extension, type Range } from "@codemirror/state";
-import { Decoration, EditorView, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
+import { Prec, StateField, type EditorState, type Extension, type Range } from "@codemirror/state";
+import { Decoration, EditorView, keymap, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { cellDiffRanges } from "./cellDiff";
 import type { CellSelection } from "./selectionEdit";
 
@@ -34,10 +34,10 @@ function diffField(change: { previousSource: string; nextSource: string }): Exte
   });
 }
 
-export default function CellEditor({ value, label, disabled, language, change, cellId, interactionsDisabled = false, onChange, onSave, onAddSelectionToChat, onInlineEdit }: {
+export default function CellEditor({ value, label, disabled, language, change, cellId, interactionsDisabled = false, onChange, onSave, onRun, onAddSelectionToChat, onInlineEdit }: {
   value: string; label: string; disabled: boolean; language: "code" | "markdown" | "raw"; change?: { previousSource: string; nextSource: string };
   cellId?: string; interactionsDisabled?: boolean;
-  onChange: (value: string) => void; onSave: () => void;
+  onChange: (value: string) => void; onSave: () => void; onRun?: () => void;
   onAddSelectionToChat?: (selection: CellSelection) => void; onInlineEdit?: (selection: CellSelection, instruction: string) => void;
 }) {
   const viewRef = useRef<EditorView | null>(null);
@@ -50,6 +50,10 @@ export default function CellEditor({ value, label, disabled, language, change, c
   const extensions = [
     ...(language === "code" ? [python()] : []),
     ...(change && change.previousSource !== change.nextSource ? [diffField(change)] : []),
+    ...(language === "code" && onRun ? [Prec.highest(keymap.of([
+      { key: "Shift-Enter", run: () => { onRun(); return true; } },
+      { key: "Mod-Enter", run: () => { onRun(); return true; } },
+    ]))] : []),
   ];
 
   const readSelection = (view: EditorView): CellSelection | null => {
