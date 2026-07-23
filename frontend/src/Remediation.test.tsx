@@ -38,6 +38,13 @@ function baseFetch(input: RequestInfo | URL, init?: RequestInit) {
 
 afterEach(() => vi.restoreAllMocks());
 
+// The App opens its EventSource in an effect that may not have run yet when a
+// test first reaches for it; wait for it instead of racing the render.
+async function firstEventSource() {
+  await waitFor(() => expect(EventSourceMock.instances.length).toBeGreaterThan(0));
+  return EventSourceMock.instances[0];
+}
+
 describe("remediation behaviors", () => {
   it("locks mutations during a recovered active operation and cancels it with immutable correlation", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(baseFetch);
@@ -101,7 +108,7 @@ describe("remediation behaviors", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => { if (String(input).endsWith("/notebooks/current")) currentCalls += 1; return baseFetch(input, init); });
     render(<App />);
     await screen.findByText("sample.ipynb");
-    expect(EventSourceMock.instances).toHaveLength(1);
+    await waitFor(() => expect(EventSourceMock.instances).toHaveLength(1));
     expect(EventSourceMock.instances[0].url).toContain("after=0");
     EventSourceMock.instances[0].emit("notebook.updated", { revision: 4 }, 4);
     EventSourceMock.instances[0].emit("notebook.updated", { revision: 3 }, 3);
@@ -209,7 +216,7 @@ describe("remediation behaviors", () => {
     render(<App />);
     expect(await screen.findByText("agent running")).toBeInTheDocument();
     completed = true;
-    EventSourceMock.instances[0].emit("notebook.updated", { revision: 3 }, 1);
+    (await firstEventSource()).emit("notebook.updated", { revision: 3 }, 1);
     expect(await screen.findByText("failed")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText((_, element) => element?.tagName === "P" && element.textContent?.endsWith("full outcome tail") === true)).toBeInTheDocument());
     expect(screen.getByText((_, element) => element?.classList.contains("error-text") === true && element.textContent?.endsWith("full error tail") === true)).toBeInTheDocument();
@@ -288,7 +295,7 @@ describe("remediation behaviors", () => {
     render(<App />);
     await screen.findByText("Revision 3");
     expect(screen.getByLabelText("Run code cell 1")).toBeDisabled();
-    const source = EventSourceMock.instances[0];
+    const source = await firstEventSource();
     source.emit("notebook.updated", { revision: 4 }, 1);
     source.emit("notebook.updated", { revision: 5 }, 2);
     resolveNewer(new Response(JSON.stringify({ ...notebook, revision: 5 }), { headers: { "Content-Type": "application/json" } }));
@@ -311,7 +318,7 @@ describe("remediation behaviors", () => {
     });
     render(<App />);
     await screen.findByText("Revision 3");
-    EventSourceMock.instances[0].emit("notebook.updated", { revision: 3 }, 1);
+    (await firstEventSource()).emit("notebook.updated", { revision: 3 }, 1);
     await userEvent.click(screen.getByLabelText("Run code cell 1"));
     expect(await screen.findByText("Execution: running")).toBeInTheDocument();
     resolveRefresh(new Response(JSON.stringify(notebook), { headers: { "Content-Type": "application/json" } }));
@@ -333,7 +340,7 @@ describe("remediation behaviors", () => {
     });
     render(<App />);
     await screen.findByText("Revision 3");
-    EventSourceMock.instances[0].emit("notebook.updated", { revision: 3 }, 1);
+    (await firstEventSource()).emit("notebook.updated", { revision: 3 }, 1);
     await userEvent.type(screen.getByLabelText("Agent instruction"), "Update selected cell");
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByText("agent running")).toBeInTheDocument();
@@ -355,7 +362,7 @@ describe("remediation behaviors", () => {
     });
     render(<App />);
     await screen.findByText("Revision 3");
-    const source = EventSourceMock.instances[0];
+    const source = await firstEventSource();
     source.emit("notebook.updated", { revision: 3 }, 1);
     source.emit("execution.updated", { operationId: "op-1" }, 2);
     expect(await screen.findByText("Execution: running")).toBeInTheDocument();
@@ -387,7 +394,7 @@ describe("remediation behaviors", () => {
     });
     render(<App />);
     expect(await screen.findByText("Kernel busy")).toBeInTheDocument();
-    const source = EventSourceMock.instances[0];
+    const source = await firstEventSource();
     source.emit("execution.updated", { operationId: "op-kernel-race" }, 1);
     await waitFor(() => expect(kernelCalls).toBe(2));
     source.emit("execution.updated", { operationId: "op-kernel-race" }, 2);
@@ -438,7 +445,7 @@ describe("remediation behaviors", () => {
     });
     render(<App />);
     expect(await screen.findByText("Cached applied turn")).toBeInTheDocument();
-    EventSourceMock.instances[0].emit("notebook.updated", { revision: 3 }, 1);
+    (await firstEventSource()).emit("notebook.updated", { revision: 3 }, 1);
     await waitFor(() => expect(statusCalls).toBeGreaterThanOrEqual(2));
     await userEvent.click(screen.getByText("Cached applied turn"));
     expect(screen.queryByRole("button", { name: "Undo turn" })).not.toBeInTheDocument();
@@ -486,7 +493,7 @@ describe("remediation behaviors", () => {
     });
     render(<App />);
     expect(await screen.findByText("Revision 3")).toBeInTheDocument();
-    const source = EventSourceMock.instances[0];
+    const source = await firstEventSource();
     source.emit("notebook.updated", { revision: 4 }, 1);
     source.emit("execution.updated", { operationId: "op-race" }, 2);
     source.emit("turn.updated", { turnId: "race" }, 3);
@@ -548,7 +555,7 @@ describe("remediation behaviors", () => {
     });
     render(<App />);
     expect(await screen.findByText("Revision 3")).toBeInTheDocument();
-    const source = EventSourceMock.instances[0];
+    const source = await firstEventSource();
     source.emit("turn.updated", { turnId: "ordered" }, 1);
     await waitFor(() => expect(currentCalls).toBe(2));
     source.emit("turn.updated", { turnId: "ordered" }, 2);
