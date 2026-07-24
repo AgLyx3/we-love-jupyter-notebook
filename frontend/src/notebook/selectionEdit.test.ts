@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attachmentLabel, composeChatPrompt, composeInlineEditPrompt, makeAttachment, makeErrorAttachment, type CellSelection } from "./selectionEdit";
+import { attachmentLabel, composeChatPrompt, composeInlineEditPrompt, defaultAttachmentInstruction, makeAttachment, makeErrorAttachment, type CellSelection } from "./selectionEdit";
 
 const selection = (over: Partial<CellSelection> = {}): CellSelection => ({
   cellId: "cell-a", text: "print(x)", startLine: 3, endLine: 3, ...over,
@@ -34,6 +34,19 @@ describe("selectionEdit", () => {
     const prompt = composeChatPrompt("fix this", [attachment]);
     expect(prompt).toContain("Cell 3 (error output):");
     expect(prompt).toContain("NameError: name 'x' is not defined");
+  });
+
+  it("falls back to a fix-the-error instruction when an error is sent with no typed text", () => {
+    const attachment = makeErrorAttachment("cell-a", "NameError: name 'x' is not defined", 2, "code");
+    expect(defaultAttachmentInstruction([attachment])).toBe("Fix the error shown below.");
+    const prompt = composeChatPrompt("", [attachment]);
+    // No leading blank line, and the default instruction leads the prompt.
+    expect(prompt.startsWith("Fix the error shown below.")).toBe(true);
+    expect(prompt).toContain("Cell 3 (error output):");
+  });
+
+  it("uses a generic default instruction for a non-error attachment sent with no text", () => {
+    expect(defaultAttachmentInstruction([makeAttachment(selection(), 2, "code")])).toBe("Address the referenced selection below.");
   });
 
   it("labels and quotes a rendered-markdown selection without line numbers", () => {

@@ -59,11 +59,22 @@ function attachmentQuote(attachment: SelectionAttachment): string {
   return `${heading}:\n${marker}\n${attachment.text}\n${marker}`;
 }
 
+// A default instruction used when the user sends attachments without typing
+// anything — e.g. adding a cell's error output and hitting Send directly.
+export function defaultAttachmentInstruction(attachments: SelectionAttachment[]): string {
+  return attachments.some((attachment) => attachment.kind === "error")
+    ? "Fix the error shown below."
+    : "Address the referenced selection below.";
+}
+
 // Builds the prompt actually sent to the agent: the user's typed instruction
-// followed by the quoted source of each attached selection.
+// (or a default when it is empty but selections are attached) followed by the
+// quoted source of each attached selection.
 export function composeChatPrompt(instruction: string, attachments: SelectionAttachment[]): string {
-  if (!attachments.length) return instruction.trim();
-  return [instruction.trim(), "", "Referenced selections:", ...attachments.map(attachmentQuote)].join("\n");
+  const trimmed = instruction.trim();
+  if (!attachments.length) return trimmed;
+  const lead = trimmed || defaultAttachmentInstruction(attachments);
+  return [lead, "", "Referenced selections:", ...attachments.map(attachmentQuote)].join("\n");
 }
 
 function selectionQuote(selection: CellSelection): string {
