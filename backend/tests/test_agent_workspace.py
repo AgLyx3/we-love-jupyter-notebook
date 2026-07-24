@@ -359,6 +359,24 @@ def test_editable_turn_instructions_frame_editing_as_optional(notebook_payload):
         builder.destroy(workspace)
 
 
+def test_turn_instructions_include_notebook_reasoning_context(notebook_payload):
+    """Both edit and read-only turns should tell the agent it is in a Jupyter
+    notebook and to diagnose undefined-name errors against the whole notebook
+    (an unrun upstream cell), not just the failing cell."""
+    for factory in (_workspace, _read_only_workspace):
+        builder, workspace = factory(notebook_payload)
+        try:
+            instructions = (workspace.root / "INSTRUCTIONS.md").read_text().lower()
+            assert "jupyter notebook" in instructions
+            assert "notebook.ipynb" in instructions
+            assert "nameerror" in instructions
+            assert "has not been run yet" in instructions
+            # The guidance must be actionable: how to spot the unrun defining cell.
+            assert "execution_count" in instructions
+        finally:
+            builder.destroy(workspace)
+
+
 def test_read_only_turn_uses_read_only_tools_and_writes_no_editable_files(notebook_payload, monkeypatch):
     builder, workspace = _read_only_workspace(notebook_payload)
     captured = {}

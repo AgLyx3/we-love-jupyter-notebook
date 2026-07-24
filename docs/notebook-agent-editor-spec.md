@@ -673,6 +673,15 @@ Editable cell files:
 - States that only listed editable files may be changed.
 - States that notebook structure, metadata, outputs, and cell types are out of scope.
 - States that the agent must not run shell commands in v1.
+- Carries a notebook-reasoning preamble (both edit and read-only turns) that frames
+  the runtime for error diagnosis: cells share one kernel namespace and may run out
+  of order, so an undefined-name/`NameError`/missing-import is often an unrun
+  upstream cell rather than a truly missing definition. It points the agent at the
+  read-only `notebook.ipynb` copy to locate the defining cell (an unrun code cell has
+  `execution_count: null`) and to prefer "run that earlier cell" over redefining the
+  name locally. It also restates that only the listed cells are editable this turn, so
+  a fix belonging in another cell is described in the final message, not attempted.
+  This is guidance only; it changes no tool grant, edit boundary, or turn scope.
 
 ### CLI Agent Execution Policy
 
@@ -1916,6 +1925,23 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
 - Rationale: Users split attention between reading cells and reading agent output
   differently; a persisted width is a small local-UI concern with no backend or
   permission impact.
+
+### Notebook-Reasoning Instruction Context
+
+- Decision: Add a notebook-reasoning preamble to every turn's `INSTRUCTIONS.md`
+  that frames the Jupyter runtime for error diagnosis — shared kernel namespace,
+  out-of-order/unrun cells, the read-only `notebook.ipynb` copy, and `NameError`/
+  missing-import usually meaning an unrun upstream cell rather than a missing
+  definition (an unrun code cell has `execution_count: null`).
+- Alternatives: Leave the agent to reason from the failing cell only (it redefines
+  names locally instead of pointing at the unrun cell); solve it structurally by
+  statically detecting the defining cell and injecting it (heavier, deferred);
+  auto-run upstream cells (would change execution semantics without user intent).
+- Rationale: The agent already receives the whole notebook read-only but was never
+  told to consult it or how the kernel model works, so it diagnosed errors at the
+  wrong altitude. This is guidance only: no change to tool grants, the edit
+  boundary, or turn scope — the agent still edits only the listed cells and only
+  describes fixes that belong elsewhere.
 
 ## Open Follow-Up Decisions
 

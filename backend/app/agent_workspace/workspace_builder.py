@@ -74,8 +74,31 @@ class AgentWorkspaceBuilder:
                 ],
             }
             (root / "AGENT_CELL_MANIFEST.json").write_text(json.dumps(manifest_copy, indent=2) + "\n", encoding="utf-8")
+            # Reasoning context every turn gets: this is a Jupyter notebook, so an
+            # undefined-name error is usually an out-of-order execution problem
+            # (the name is defined in another cell that has not run yet), not a
+            # missing definition. Point the agent at the whole-notebook copy so it
+            # diagnoses the error against the entire notebook, not just one cell.
+            notebook_context = [
+                "Notebook context:",
+                "- This is a Jupyter notebook. Every cell runs against one shared kernel",
+                "  namespace, and cells may be executed out of order or not at all, so a",
+                "  name can be defined in a different cell than the one that uses it.",
+                "- The whole notebook is available read-only as notebook.ipynb. Read it to",
+                "  see the other cells before deciding what an error means. A code cell that",
+                "  has not been run yet has \"execution_count\": null in that file.",
+                "- For a NameError, \"name '...' is not defined\", or a missing import, search",
+                "  the whole notebook for the cell whose source defines that name or import.",
+                "  If such a cell exists but has not been run yet (execution_count null), the",
+                "  real fix is to run that earlier cell. Only add a definition when the name",
+                "  appears nowhere else in the notebook.",
+                "- You may only edit the cells listed below; other cells are not part of this",
+                "  turn and cannot be edited. If the fix belongs in a different cell, describe",
+                "  it in your final message rather than redefining anything here.",
+                "",
+            ]
             if manifest.editable_cells:
-                instructions = [scope.prompt, "",
+                instructions = [scope.prompt, "", *notebook_context,
                                 "You have permission to edit the files listed below, but editing is",
                                 "optional — permission is a grant, not a requirement. First answer the",
                                 "request directly in your final message. Only change a listed file when the",
@@ -85,7 +108,7 @@ class AgentWorkspaceBuilder:
                                 "Do not run shell commands.", "", "Editable files:"]
                 instructions.extend(f"- {item.relative_path}" for item in manifest.editable_cells)
             else:
-                instructions = [scope.prompt, "",
+                instructions = [scope.prompt, "", *notebook_context,
                                 "This is a read-only turn. Do not modify any file.",
                                 "Answer in your final message.",
                                 "Do not run shell commands.", ""]
