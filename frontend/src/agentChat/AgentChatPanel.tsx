@@ -1,7 +1,7 @@
 import { AlertTriangle, BookOpen, Code2, File, RotateCcw, Send, Square, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, type AgentMode, type AgentModel, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type FileMatch, type NotebookSnapshot, type StructuralOp, type TurnOptions, type TurnScope, type WriteScope } from "../api/client";
+import { api, type AgentAdaptersResponse, type AgentMode, type AgentModel, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type FileMatch, type NotebookSnapshot, type StructuralOp, type TurnOptions, type TurnScope, type WriteScope } from "../api/client";
 import RiskyExecutionDialog from "../execution/RiskyExecutionDialog";
 import TurnScopePanel from "../turnScope/TurnScopePanel";
 import { attachmentLabel, type SelectionAttachment } from "../notebook/selectionEdit";
@@ -18,15 +18,16 @@ function structuralSummary(ops: StructuralOp[]): string {
 }
 export interface TurnRecord { turn: AgentTurn; editableCellIds: string[]; contextCellIds: string[]; prompt: string }
 
-export default function AgentChatPanel({ notebook, scope, turn, activeTurn, history, operation, busy, mutationsDisabled, writeScope: writeScopeProp, onWriteScopeChange, attachments = [], onSubmit, onCancel, onUndo, onClearScope, onDecision, onSelectTurn, onFocusCell, onDropCell, onDropCells, onRemoveAttachment, onRemoveScopeCell }: {
+export default function AgentChatPanel({ notebook, scope, turn, activeTurn, history, operation, busy, mutationsDisabled, writeScope: writeScopeProp, onWriteScopeChange, attachments = [], agentAdapters, onSubmit, onCancel, onUndo, onClearScope, onDecision, onSelectTurn, onFocusCell, onDropCell, onDropCells, onRemoveAttachment, onRemoveScopeCell }: {
   notebook: NotebookSnapshot; scope: TurnScope; turn: AgentTurn | null; activeTurn: AgentTurn | null; history: TurnRecord[]; operation: ExecutionOperation | null; busy: boolean; mutationsDisabled: boolean;
   writeScope?: WriteScope; onWriteScopeChange?: (next: WriteScope) => void;
-  attachments?: SelectionAttachment[];
+  attachments?: SelectionAttachment[]; agentAdapters?: AgentAdaptersResponse | null;
   onSubmit: (prompt: string, options: TurnOptions) => void; onCancel: () => void; onUndo: () => void; onClearScope: () => void; onDecision: (attempt: ExecutionAttempt, decision: "approve" | "skip" | "cancel") => void; onSelectTurn: (id: string) => void; onFocusCell: (id: string) => void; onDropCell: (id: string) => void; onDropCells?: (ids: string[]) => void;
   onRemoveAttachment?: (id: string) => void; onRemoveScopeCell?: (id: string) => void;
 }) {
   const keptCount = (turn?.operations ?? []).filter((item) => item.state === "accepted").length;
   const [prompt, setPrompt] = useState("");
+  const [agent, setAgent] = useState("default");
   const [model, setModel] = useState<AgentModel>("default");
   const [mode, setMode] = useState<AgentMode>("edit");
   // Write scope is STICKY and normally controlled by the parent (App), which
@@ -41,6 +42,15 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
     setInternalWriteScope(next);
     try { localStorage.setItem("agent.writeScope", next); } catch { /* storage unavailable */ }
   };
+  // The adapter list arrives from the backend, so treat a missing or malformed
+  // response the same as "no choice offered" rather than breaking the composer.
+  const agents = agentAdapters?.agents ?? [];
+  useEffect(() => {
+    const available = agentAdapters?.agents ?? [];
+    if (available.length && !available.some((a) => a.id === agent)) setAgent(agentAdapters!.defaultAgent);
+  }, [agentAdapters, agent]);
+  const agentInfo = agents.find((a) => a.id === agent) ?? null;
+  const modelOptions = agentInfo?.models ?? [{ value: "default", label: "Default" }];
 
   // "@"-mention: type "@" in the prompt to search workspace files and insert a
   // path as context. Purely a text-insertion aid — the agent still reads the
@@ -112,7 +122,7 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
   const submitPrompt = () => {
     if (!canSubmit) return;
     const value = prompt.trim();
-    onSubmit(value, { model, mode, writeScope });
+    onSubmit(value, { agent, model, mode, writeScope });
     setPrompt("");
     setMention(null);
     setMatches([]);
@@ -136,7 +146,7 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
       {activeTurn && activeTurn.turnId !== turn?.turnId && <button className="manual-cancel" onClick={onCancel}><Square /> Cancel active turn</button>}
       {!turn && <div className="empty-conversation"><p>No agent turn yet</p><span>Select cells to edit, or just ask a read-only question.</span></div>}
       {turn && <div className="turn-status">
-        <div className="turn-state"><span className={active ? "activity-dot" : ""} />{turn.state.replaceAll("_", " ")}</div>
+        <div className="turn-state"><span className={active ? "activity-dot" : ""} />{turn.state.replaceAll("_", " ")}{turn.agent && turn.agent !== "default" && <span className="turn-agent"> · {turn.agent}</span>}</div>
         {turn.finalOutput && <div className="turn-output"><ReactMarkdown>{turn.finalOutput}</ReactMarkdown></div>}
         {turn.error && <p className="error-text">{turn.error.message}</p>}
         {turn.changes.length > 0 && turn.writeScope !== "trusted" && <p>{turn.changes.length} cell{turn.changes.length === 1 ? "" : "s"} changed. Review the inline diff.</p>}
@@ -190,12 +200,18 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
       {mode === "plan" && <span className="prompt-mode" role="note">Plan mode — the agent proposes a plan and writes no changes.</span>}
       <div className="prompt-controls">
         <label className="prompt-select">
+          <span>Agent</span>
+          <select aria-label="Agent backend" value={agent} disabled={busy}
+            onChange={(event) => { setAgent(event.target.value); setModel("default"); }}>
+            {(agents.length ? agents : [{ id: "default", label: "Default" }]).map((a) => (
+              <option key={a.id} value={a.id}>{a.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="prompt-select">
           <span>Model</span>
           <select aria-label="Agent model" value={model} disabled={busy} onChange={(event) => setModel(event.target.value as AgentModel)}>
-            <option value="default">Default</option>
-            <option value="opus">Opus</option>
-            <option value="sonnet">Sonnet</option>
-            <option value="haiku">Haiku</option>
+            {modelOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </label>
         <label className="prompt-select">

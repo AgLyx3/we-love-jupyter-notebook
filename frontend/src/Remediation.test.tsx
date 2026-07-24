@@ -23,7 +23,8 @@ const operation: ExecutionOperation = {
   operationId: "op-1", sessionId: "session-1", baseRevision: 3, currentDocumentRevision: 7, kind: "manual", parentTurnId: null, state: "running", currentExecutionAttemptId: "attempt-1",
   attempts: [{ executionAttemptId: "attempt-1", cellId: "code-1", cellIndex: 0, sourcePreview: "print('preview')", state: "running", risk: { level: "safe", reasons: [], matchedPatterns: [] }, decision: null, outputs: [], outputsTruncated: false, executionCount: null, error: null }], error: null, createdAt: "", completedAt: null,
 };
-const turn = (id: string, state = "completed"): AgentTurn => ({ turnId: id, sessionId: "session-1", baseRevision: 3, prompt: `Prompt ${id}`, editableCellIds: ["code-1"], contextCellIds: [], undoEligible: state === "completed", state, attempts: 1, finalOutput: "Done", appliedRevision: state === "completed" ? 4 : null, executionOperationId: null, changes: [], error: null, createdAt: "", completedAt: state === "completed" ? "" : null });
+const turn = (id: string, state = "completed"): AgentTurn => ({ turnId: id, sessionId: "session-1", baseRevision: 3, prompt: `Prompt ${id}`, agent: "default", editableCellIds: ["code-1"], contextCellIds: [], undoEligible: state === "completed", state, attempts: 1, finalOutput: "Done", appliedRevision: state === "completed" ? 4 : null, executionOperationId: null, changes: [], error: null, createdAt: "", completedAt: state === "completed" ? "" : null });
+const agentAdapters = { defaultAgent: "default", agents: [{ id: "default", label: "Default", modes: ["edit", "plan"], models: [{ value: "default", label: "Default" }] }] };
 
 function json(value: unknown, status = 200) { return Promise.resolve(new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } })); }
 function baseFetch(input: RequestInfo | URL, init?: RequestInit) {
@@ -33,6 +34,7 @@ function baseFetch(input: RequestInfo | URL, init?: RequestInit) {
   if (path.endsWith("/kernel/status")) return json({ state: "busy", kernelSessionId: "kernel-1", executionAttemptId: "attempt-1" });
   if (path.endsWith("/session/status")) return json({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: operation });
   if (path.endsWith("/execution/attempt-1/cancel") && init?.method === "POST") return json({ ...operation, state: "cancelled" });
+  if (path.endsWith("/agent-adapters")) return json(agentAdapters);
   return json({});
 }
 
@@ -571,7 +573,7 @@ describe("remediation behaviors", () => {
     await userEvent.type(screen.getByLabelText("Agent instruction"), "explain these cells");
     expect(ask).toBeEnabled();
     await userEvent.click(ask);
-    expect(submit).toHaveBeenCalledWith("explain these cells", { model: "default", mode: "edit", writeScope: "blocking" });
+    expect(submit).toHaveBeenCalledWith("explain these cells", { agent: "default", model: "default", mode: "edit", writeScope: "blocking" });
   });
 
   it("shift-selects a range of cells and scopes them all via the context menu", async () => {

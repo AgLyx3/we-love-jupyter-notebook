@@ -25,6 +25,8 @@ function response(value: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } }));
 }
 
+const agentAdapters = { defaultAgent: "default", agents: [{ id: "default", label: "Default", modes: ["edit", "plan"], models: [{ value: "default", label: "Default" }] }] };
+
 afterEach(() => vi.restoreAllMocks());
 
 describe("Notebook editor", () => {
@@ -62,6 +64,7 @@ describe("Notebook editor", () => {
       if (path.endsWith("/turn-scope")) return response({ editableCellIds: ["code-1"], contextCellIds: [], sessionId: notebook.sessionId, notebookRevision: notebook.revision });
       if (path.endsWith("/kernel/status")) return response({ state: "idle", kernelSessionId: "kernel-1", executionAttemptId: null });
       if (path.endsWith("/session/status")) return response({ sessionId: notebook.sessionId, documentRevision: notebook.revision, activeTurn: null, activeExecution: null, turnHistory: [historical], turnHistoryTruncated: false });
+      if (path.endsWith("/agent-adapters")) return response(agentAdapters);
       return response({});
     });
     render(<App />);
@@ -87,6 +90,7 @@ describe("Notebook editor", () => {
       if (path.endsWith("/turn-scope")) return response({ editableCellIds: [], contextCellIds: [], sessionId: notebook.sessionId, notebookRevision: notebook.revision });
       if (path.endsWith("/kernel/status")) return response({ state: "not_started", kernelSessionId: null, executionAttemptId: null });
       if (path.endsWith("/session/status")) return response({ sessionId: notebook.sessionId, documentRevision: notebook.revision, activeTurn: null, activeExecution: null, turnHistory: [], turnHistoryTruncated: false });
+      if (path.endsWith("/agent-adapters")) return response(agentAdapters);
       return response({});
     });
     render(<App />);
@@ -117,6 +121,7 @@ describe("Notebook editor", () => {
       if (path.endsWith("/turn-scope")) return response({ editableCellIds: [], contextCellIds: [], sessionId: current.sessionId, notebookRevision: current.revision });
       if (path.endsWith("/kernel/status")) return response({ state: "not_started", kernelSessionId: null, executionAttemptId: null });
       if (path.endsWith("/session/status")) return response({ sessionId: current.sessionId, documentRevision: current.revision, activeTurn: null, activeExecution: null, turnHistory: [], turnHistoryTruncated: false });
+      if (path.endsWith("/agent-adapters")) return response(agentAdapters);
       return response({});
     });
     render(<App />);
@@ -139,6 +144,7 @@ describe("Notebook editor", () => {
       if (path.endsWith("/turn-scope")) return response({ editableCellIds: [], contextCellIds: [], sessionId: notebook.sessionId, notebookRevision: notebook.revision });
       if (path.endsWith("/kernel/status")) return response({ state: "idle", kernelSessionId: "kernel-1", executionAttemptId: null });
       if (path.endsWith("/session/status")) return response({ sessionId: notebook.sessionId, documentRevision: notebook.revision, activeTurn: null, activeExecution: null, turnHistory: [], turnHistoryTruncated: false });
+      if (path.endsWith("/agent-adapters")) return response(agentAdapters);
       return response({});
     });
     render(<App />);
@@ -159,6 +165,7 @@ describe("Notebook editor", () => {
       if (path.endsWith("/turn-scope")) return response({ editableCellIds: [], contextCellIds: [], sessionId: notebook.sessionId, notebookRevision: currentCalls === 1 ? 3 : 4 });
       if (path.endsWith("/kernel/status")) return response({ state: "not_started", kernelSessionId: null, executionAttemptId: null });
       if (path.endsWith("/session/status")) return response({ sessionId: notebook.sessionId, documentRevision: currentCalls === 1 ? 3 : 4, activeTurn: null, activeExecution: null, turnHistory: [], turnHistoryTruncated: false });
+      if (path.endsWith("/agent-adapters")) return response(agentAdapters);
       return response({});
     });
     render(<App />);
@@ -178,6 +185,7 @@ describe("Notebook editor", () => {
       if (path.endsWith("/editable-cells")) return response({ editableCellIds: ["code-1"], contextCellIds: [], sessionId: "session-1", notebookRevision: 3 });
       if (path.endsWith("/context-cells")) return response({ editableCellIds: ["code-1"], contextCellIds: ["intro"], sessionId: "session-1", notebookRevision: 3 });
       if (path.endsWith("/kernel/status")) return response({ state: "not_started", kernelSessionId: null });
+      if (path.endsWith("/agent-adapters")) return response(agentAdapters);
       return response({});
     });
     render(<App />);
@@ -196,6 +204,7 @@ describe("Notebook editor", () => {
       if (path.endsWith("/turn-scope")) return response({ editableCellIds: [], contextCellIds: [], sessionId: null, notebookRevision: null });
       if (path.endsWith("/kernel/status")) return response({ state: "not_started", kernelSessionId: null });
       if (path.includes("/source") && init?.method === "POST") return response({ error: { code: "revision_conflict", message: "Notebook revision does not match", details: { currentDocumentRevision: 4 } } }, 409);
+      if (path.endsWith("/agent-adapters")) return response(agentAdapters);
       return response({});
     });
     render(<App />);
@@ -227,6 +236,7 @@ describe("Notebook editor", () => {
         current = { ...current, revision: 4, dirty: true, cells: current.cells.map((cell) => cell.cellId === "code-a" ? { ...cell, source: "a = 2" } : cell) };
         return response({ sessionId: current.sessionId, cellId: "code-a", source: "a = 2", revision: 4, dirty: true });
       }
+      if (path.endsWith("/agent-adapters")) return response(agentAdapters);
       return response({});
     });
     render(<App />);
@@ -254,6 +264,7 @@ describe("Notebook editor", () => {
       if (path.endsWith("/kernel/status")) return response({ state: "idle", kernelSessionId: "kernel-1" });
       if (path.endsWith("/execution/run-all") && init?.method === "POST") return response(riskyOperation);
       if (path.includes("/execution/attempt-1/approve") && init?.method === "POST") return response({ ...riskyOperation, state: "running", attempts: [{ ...riskyOperation.attempts[0], state: "running", decision: "approve" }] });
+      if (path.endsWith("/agent-adapters")) return response(agentAdapters);
       return response({});
     });
     render(<App />);
@@ -270,6 +281,7 @@ describe("Notebook editor", () => {
       if (path.endsWith("/turn-scope")) return response({ editableCellIds: ["code-1"], contextCellIds: [], sessionId: "session-1", notebookRevision: 3 });
       if (path.endsWith("/kernel/status")) return response({ state: "idle", kernelSessionId: "kernel-1", executionAttemptId: null });
       if (path.endsWith("/session/status")) return response({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: null, turnHistory: [], turnHistoryTruncated: false });
+      if (path.endsWith("/agent-adapters")) return response(agentAdapters);
       return response({});
     });
     render(<App />);
@@ -298,6 +310,7 @@ describe("Notebook editor", () => {
       if (path.endsWith("/turn-scope")) return response({ editableCellIds: [], contextCellIds: [], sessionId: null, notebookRevision: null });
       if (path.endsWith("/kernel/status")) return response({ state: "not_started", kernelSessionId: null, executionAttemptId: null });
       if (path.endsWith("/session/status")) return response({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: null, turnHistory: [], turnHistoryTruncated: false });
+      if (path.endsWith("/agent-adapters")) return response(agentAdapters);
       return response({});
     });
     render(<App />);
@@ -319,7 +332,7 @@ describe("Notebook editor", () => {
 
     await userEvent.type(prompt, "  Update the selected cell{Enter}");
 
-    expect(onSubmit).toHaveBeenCalledWith("Update the selected cell", { model: "default", mode: "edit", writeScope: "blocking" });
+    expect(onSubmit).toHaveBeenCalledWith("Update the selected cell", { agent: "default", model: "default", mode: "edit", writeScope: "blocking" });
     expect(prompt).toHaveValue("");
   });
 
