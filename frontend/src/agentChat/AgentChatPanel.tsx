@@ -77,10 +77,14 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
   const manualCorrelated = Boolean(operation?.operationId && operation.sessionId && operation.currentDocumentRevision != null && operation.parentTurnId === null && manualAttempt?.executionAttemptId && manualAttempt.cellId);
   const active = turn && activeStates.has(turn.state);
   const readOnly = scope.editableCellIds.length === 0;
-  const canSubmit = !busy && !mutationsDisabled && Boolean(prompt.trim());
+  // An attached error output is enough to submit on its own — the user can add a
+  // cell's error and hit Send without typing (a default "fix the error" prompt
+  // is composed from the attachment).
+  const hasErrorAttachment = attachments.some((attachment) => attachment.kind === "error");
+  const canSubmit = !busy && !mutationsDisabled && (Boolean(prompt.trim()) || hasErrorAttachment);
   const submitPrompt = () => {
+    if (!canSubmit) return;
     const value = prompt.trim();
-    if (!canSubmit || !value) return;
     onSubmit(value, { model, mode });
     setPrompt("");
     setMention(null);
