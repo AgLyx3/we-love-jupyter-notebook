@@ -810,6 +810,20 @@ This separates agent editing from notebook validation. The agent proposes source
 changes; the app applies valid changes and runs notebook cells under the risky
 execution policy.
 
+Two production adapters exist: the Claude CLI and the Codex CLI. Each turn
+request selects one. The Codex adapter runs `codex exec` with `--ephemeral
+--ignore-user-config --skip-git-repo-check`, sets `--sandbox workspace-write`
+for editable turns and `--sandbox read-only` for read-only or plan turns, and
+disables network access for the sandboxed process. The agent's final message is
+captured through `--output-last-message` into a temp file outside the
+workspace rather than parsed from stdout. Supported Codex CLI versions are
+fail-closed at `>=0.133.0,<0.134.0`, checked before every turn, mirroring the
+Claude CLI version gate. Codex's write boundary is scoped to the sandbox
+directory rather than per tool, so unlike the tool-level denial described
+above for empty-editable-set turns, within-workspace protection on a Codex
+editable turn relies on the workspace audit rejecting out-of-scope or
+protected-file changes after the CLI exits, not on a per-tool write denial.
+
 ## Agent Turn Flow
 
 1. User adds editable/context cells for the next turn. The editable set may be
@@ -1498,12 +1512,16 @@ Chat panel:
   formatted rather than shown as raw text.
 - On a read-only turn (empty editable set) the composer indicates the agent can
   answer but not write, and the send control is labeled accordingly.
-- The composer exposes a **model** selector (Default, Opus, Sonnet, Haiku) and a
-  **mode** selector (Edit, Plan). Both are sent with the turn request and are
-  advisory hints to the adapter; the enforced edit boundary is unchanged by
-  either. Model maps to the adapter's model selection; the default defers to the
-  adapter's own default. In **Plan** mode the adapter runs read-only (proposes a
-  plan and writes no changes), and the send control is labeled "Plan".
+- The composer exposes an **agent** selector (Claude, Codex), populated from
+  `GET /agent-adapters`, alongside a **model** selector and a **mode** selector
+  (Edit, Plan). The model options depend on the selected agent: Claude offers
+  Default, Opus, Sonnet, and Haiku; Codex offers Default, GPT-5.5, GPT-5.4, and
+  GPT-5.4 Mini. Mode applies uniformly to whichever agent is selected. Agent,
+  model, and mode are all sent with the turn request and are advisory hints to
+  the adapter; the enforced edit boundary is unchanged by any of them. Model
+  maps to the adapter's model selection; the default defers to the adapter's
+  own default. In **Plan** mode the adapter runs read-only (proposes a plan and
+  writes no changes), and the send control is labeled "Plan".
 
 Diff display:
 
@@ -1559,7 +1577,10 @@ This is a conceptual API surface, not a final implementation contract.
 - `POST /turn-scope/editable-cells`
 - `POST /turn-scope/context-cells`
 - `DELETE /turn-scope`
-- `POST /agent-turns`
+- `GET /agent-adapters` (list registered agents with default agent, labels,
+  model options, and modes, see `CLI Agent Execution Policy`)
+- `POST /agent-turns` (accepts an `agent` field selecting the adapter for the
+  turn, in addition to `model` and `mode`)
 - `POST /agent-turns/{turnId}/cancel`
 - `POST /agent-turns/{turnId}/undo`
 - `POST /agent-turns/{turnId}/cells/{cellId}/revert`
