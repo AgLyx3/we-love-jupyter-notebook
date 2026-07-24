@@ -16,7 +16,7 @@ from backend.app.agent_workspace.adapters import (
     FakeAgentAdapter,
     FakeAttempt,
 )
-from backend.app.main import configured_agent_adapter
+from backend.app.main import configured_agent_adapters
 from backend.app.agent_workspace.models import AgentAdapterError, AgentTimedOut
 from backend.app.agent_workspace.models import AgentCancelled
 from backend.app.agent_workspace.runner import ProcessRunner
@@ -654,17 +654,30 @@ def test_process_runner_shutdown_rejects_new_runs(tmp_path):
         )
 
 
-def test_configured_adapter_defaults_to_claude(monkeypatch):
+def test_configured_adapters_default_to_claude(monkeypatch):
     monkeypatch.delenv("NOTEBOOK_AGENT_ADAPTER", raising=False)
-    assert isinstance(configured_agent_adapter(), ClaudeAgentAdapter)
+    adapters, default = configured_agent_adapters()
+    assert default == "claude"
+    assert isinstance(adapters["claude"], ClaudeAgentAdapter)
+    assert isinstance(adapters["codex"], CodexAgentAdapter)
 
 
-def test_configured_adapter_requires_explicit_fake_mode(monkeypatch):
+def test_configured_adapters_codex_mode_registers_both(monkeypatch):
+    monkeypatch.setenv("NOTEBOOK_AGENT_ADAPTER", "codex")
+    adapters, default = configured_agent_adapters()
+    assert default == "codex"
+    assert set(adapters) == {"claude", "codex"}
+
+
+def test_configured_adapters_fake_and_invalid(monkeypatch):
     monkeypatch.setenv("NOTEBOOK_AGENT_ADAPTER", "fake")
-    assert isinstance(configured_agent_adapter(), DevelopmentFakeAgentAdapter)
-    monkeypatch.setenv("NOTEBOOK_AGENT_ADAPTER", "unknown")
-    with pytest.raises(RuntimeError, match="must be either"):
-        configured_agent_adapter()
+    adapters, default = configured_agent_adapters()
+    assert default == "fake"
+    assert set(adapters) == {"fake"}
+    assert isinstance(adapters["fake"], DevelopmentFakeAgentAdapter)
+    monkeypatch.setenv("NOTEBOOK_AGENT_ADAPTER", "gemini")
+    with pytest.raises(RuntimeError, match="claude.*codex.*fake"):
+        configured_agent_adapters()
 
 
 def _codex_version_stub(version="codex-cli 0.133.0", returncode=0):

@@ -1223,3 +1223,13 @@ def test_unknown_agent_is_rejected_without_running(notebook_payload):
         expected_revision=snapshot.revision, background=False,
     )
     assert turn.agent == "default"
+
+
+def test_agent_adapters_endpoint_reflects_registry():
+    app = create_app(agent_adapter=FakeAgentAdapter())
+    client = TestClient(app)
+    body = client.get("/agent-adapters").json()
+    assert body["defaultAgent"] == "default"
+    assert [a["id"] for a in body["agents"]] == ["default"]
+    assert body["agents"][0]["modes"] == ["edit", "plan"]
+    assert body["agents"][0]["models"][0] == {"value": "default", "label": "Default"}

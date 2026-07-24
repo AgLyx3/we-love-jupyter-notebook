@@ -11,6 +11,7 @@ from ..notebook_document.models import NotebookDomainError
 from .notebook_routes import serialize_snapshot
 
 router = APIRouter(prefix="/agent-turns")
+adapters_router = APIRouter()
 MAX_TURN_SUMMARY_BYTES = 128 * 1024
 
 
@@ -215,6 +216,26 @@ def _serialize_current(service, turn: AgentTurn) -> dict[str, Any]:
         undo_eligible=service.is_undo_eligible(turn, snapshot),
         stale_cell_ids=service.stale_cell_ids(turn, snapshot),
     )
+
+
+@adapters_router.get("/agent-adapters")
+def list_agent_adapters(request: Request) -> dict[str, Any]:
+    service = request.app.state.agent_turn_service
+    return {
+        "defaultAgent": service.default_agent,
+        "agents": [
+            {
+                "id": agent_id,
+                "label": getattr(adapter, "display_label", agent_id.title()),
+                "models": list(getattr(
+                    adapter, "model_options",
+                    ({"value": "default", "label": "Default"},),
+                )),
+                "modes": ["edit", "plan"],
+            }
+            for agent_id, adapter in service.adapters.items()
+        ],
+    }
 
 
 @router.post("", status_code=202)

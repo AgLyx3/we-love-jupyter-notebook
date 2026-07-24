@@ -11,13 +11,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api.notebook_routes import router as notebook_router
 from .api.file_routes import router as file_router
-from .api.agent_turn_routes import router as agent_turn_router
+from .api.agent_turn_routes import adapters_router, router as agent_turn_router
 from .api.turn_scope_routes import router as turn_scope_router
 from .api.execution_routes import router as execution_router
 from .api.event_routes import router as event_router
 from .api.session_routes import router as session_router
 from .agent_turns.service import AgentTurnService
-from .agent_workspace.adapters import ClaudeAgentAdapter, DevelopmentFakeAgentAdapter, FakeAgentAdapter
+from .agent_workspace.adapters import (
+    ClaudeAgentAdapter, CodexAgentAdapter, DevelopmentFakeAgentAdapter, FakeAgentAdapter,
+)
 from .agent_workspace.models import AgentAdapter
 from .notebook_document.models import NotebookDomainError
 from .notebook_document.service import NotebookDocumentService
@@ -26,7 +28,12 @@ from .kernel_execution.service import KernelExecutionService
 from .session_events.service import SessionEventService
 
 
-def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
+def create_app(
+    *,
+    agent_adapter: AgentAdapter | None = None,
+    agent_adapters: dict[str, AgentAdapter] | None = None,
+    default_agent: str | None = None,
+) -> FastAPI:
     notebook_service = NotebookDocumentService()
     session_event_service = SessionEventService()
     kernel_execution_service = KernelExecutionService(
@@ -60,6 +67,8 @@ def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
         documents=app.state.notebook_service,
         scopes=app.state.turn_scope_service,
         adapter=agent_adapter or FakeAgentAdapter(),
+        adapters=agent_adapters,
+        default_agent=default_agent or "default",
         executions=app.state.kernel_execution_service,
         events=app.state.session_event_service,
     )
@@ -67,6 +76,7 @@ def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
     app.include_router(file_router)
     app.include_router(turn_scope_router)
     app.include_router(agent_turn_router)
+    app.include_router(adapters_router)
     app.include_router(execution_router)
     app.include_router(event_router)
     app.include_router(session_router)
@@ -108,13 +118,16 @@ def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
     return app
 
 
-def configured_agent_adapter() -> AgentAdapter:
+def configured_agent_adapters() -> tuple[dict[str, AgentAdapter], str]:
     mode = os.getenv("NOTEBOOK_AGENT_ADAPTER", "claude").strip().lower()
-    if mode == "claude":
-        return ClaudeAgentAdapter()
+    if mode in ("claude", "codex"):
+        return {"claude": ClaudeAgentAdapter(), "codex": CodexAgentAdapter()}, mode
     if mode == "fake":
-        return DevelopmentFakeAgentAdapter()
-    raise RuntimeError("NOTEBOOK_AGENT_ADAPTER must be either 'claude' or 'fake'")
+        return {"fake": DevelopmentFakeAgentAdapter()}, "fake"
+    raise RuntimeError(
+        "NOTEBOOK_AGENT_ADAPTER must be one of 'claude', 'codex', or 'fake'"
+    )
 
 
-app = create_app(agent_adapter=configured_agent_adapter())
+_adapters, _default_agent = configured_agent_adapters()
+app = create_app(agent_adapters=_adapters, default_agent=_default_agent)
