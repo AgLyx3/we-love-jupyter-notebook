@@ -151,6 +151,36 @@ describe("remediation behaviors", () => {
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/agent-turns/large"), expect.anything());
   });
 
+  // The revert control used to live in .cell-actions, which is opacity:0 until
+  // the cell is hovered — present in the DOM and clickable, but invisible. jsdom
+  // loads no stylesheet (styles.css is imported only by main.tsx), so
+  // toBeVisible() cannot catch that regression. Assert structurally instead:
+  // the control must sit in the persistent review bar, not the hover cluster.
+  it("puts the agent-change undo control in a persistent labelled bar, not the hover-only action cluster", async () => {
+    const nextSource = "print('agent wrote this')";
+    const changed = {
+      ...turn("persistent"),
+      appliedRevision: 3,
+      changes: [{ cellId: "code-1", previousSource: notebook.cells[0].source, nextSource }],
+    };
+    const current = { ...notebook, cells: [{ ...notebook.cells[0], source: nextSource }] };
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const path = String(input);
+      if (path.endsWith("/notebooks/current")) return json(current);
+      if (path.endsWith("/session/status")) return json({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: null, turnHistory: [changed] });
+      if (path.endsWith("/agent-turns/persistent")) return json(changed);
+      return baseFetch(input, init);
+    });
+    render(<App />);
+
+    const undo = await screen.findByLabelText("Revert agent change to code cell 1");
+    expect(undo.closest(".cell-actions")).toBeNull();
+    expect(undo.closest(".cell-review")).not.toBeNull();
+    // Labelled, not icon-only — the other reason it was unfindable.
+    expect(undo).toHaveTextContent("Undo");
+    expect(screen.getByText("Agent changed this cell")).toBeInTheDocument();
+  });
+
   it("rehydrates authoritative outcome and error after a truncated status advances", async () => {
     const prefix = Array.from({ length: 400 }, (_, index) => `shared line ${index}`).join("\n");
     const previousSource = `${prefix}\nold ending`;

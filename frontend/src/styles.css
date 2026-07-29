@@ -74,6 +74,16 @@ body.marquee-active iframe { pointer-events: none; }
 .gutter-actions button.selected { background: #dceef8; color: #0b6097; }.gutter-actions button.context { background: #dff2e8; color: var(--green); }
 .cell-main { min-width: 0; position: relative; }.cell-actions { position: absolute; right: 6px; top: 6px; z-index: 5; display: flex; gap: 4px; opacity: 0; }
 .notebook-cell:hover .cell-actions, .notebook-cell:focus-within .cell-actions, .cell-actions:has(.selected) { opacity: 1; }.cell-actions button { min-width: 28px; width: 28px; height: 28px; }.cell-actions button.selected { background: #dceef8; color: #0b6097; border-color: #92aec2; }.cell-actions button.context { background: #dff2e8; color: var(--green); border-color: #92aec2; }
+/* Agent-change review bar. Persistent by design — never hover-revealed and
+   never icon-only, so an applied agent change is always visible and always
+   reversible without hunting. Sits above the editor; the floating .cell-actions
+   cluster is pushed below it so the two never overlap. */
+.cell-review { display: flex; align-items: center; gap: 9px; padding: 6px 10px; background: #f2f7fb; border-bottom: 1px solid #d5e3ee; border-radius: 5px 5px 0 0; }
+.cell-review-label { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 650; color: #0b6097; }
+.cell-review-label svg { width: 14px; height: 14px; }
+.cell-review-undo { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; font-size: 12px; font-weight: 600; }
+.cell-review-undo svg { width: 14px; height: 14px; }
+.notebook-cell:has(.cell-review) .cell-actions { top: 40px; }
 .markdown-preview-wrap { position: relative; }
 .markdown-preview { padding: 14px 50px 14px 18px; min-height: 72px; line-height: 1.55; overflow-wrap: anywhere; user-select: text; }
 .markdown-preview > :first-child { margin-top: 0; }.markdown-preview > :last-child { margin-bottom: 0; }.markdown-preview h1 { font-size: 24px; letter-spacing: 0; }.markdown-preview h2 { font-size: 19px; letter-spacing: 0; }

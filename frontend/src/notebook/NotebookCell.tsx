@@ -155,8 +155,15 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
         {cell.cellType === "code" && <button disabled={dependentDisabled} title="Run cell" aria-label={`Run ${description}`} onClick={onRun}><Play /></button>}
         {cell.cellType === "markdown" && <button disabled={disabled} title={editingMarkdown ? "Preview Markdown" : "Edit Markdown"} aria-label={`${editingMarkdown ? "Preview" : "Edit"} ${description}`} onClick={() => setEditingMarkdown(!editingMarkdown)}><Pencil /></button>}
         {dirty && <button disabled={disabled} title="Save source" aria-label={`Save ${description}`} onClick={() => onSave(source)}><Save /></button>}
-        {change && <button disabled={dependentDisabled} title="Revert this agent change" aria-label={`Revert agent change to ${description}`} onClick={onRevert}><RotateCcw /></button>}
       </div>
+      {/* Agent changes are reviewed from a persistent, labelled bar rather than
+          the hover-revealed action cluster above: the cluster is invisible until
+          hover, unlabelled, and shared with scope/run actions, so the revert
+          control was there but effectively undiscoverable. */}
+      {change && <div className="cell-review">
+        <span className="cell-review-label"><Bot /> Agent changed this cell</span>
+        <button className="cell-review-undo" disabled={dependentDisabled} title="Undo this agent change" aria-label={`Revert agent change to ${description}`} onClick={onRevert}><RotateCcw /> Undo</button>
+      </div>}
       {cell.cellType === "code" || cell.cellType === "raw" || editingMarkdown ? <CellEditor value={source} label={`Source for ${description}`} disabled={disabled} language={cell.cellType} change={change} cellId={cell.cellId} interactionsDisabled={dependentDisabled} onChange={setSource} onSave={() => dirty && onSave(source)} onRun={onRun} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} /> : <MarkdownPreview source={source} cellId={cell.cellId} disabled={dependentDisabled} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} onHoverChange={setSuppressDrag} />}
       <Outputs outputs={cell.outputs} disabled={dependentDisabled} onAddErrorToChat={onAddErrorToChat} onHoverChange={setSuppressDrag} />
     </div>
