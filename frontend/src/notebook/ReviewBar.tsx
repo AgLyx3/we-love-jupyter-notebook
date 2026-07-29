@@ -15,14 +15,15 @@ import type { AgentOperation } from "../api/client";
 //   * undo-all asks for confirmation once anything has been kept, because that
 //     is the point where it starts discarding decisions rather than just
 //     undoing the agent.
-export default function ReviewBar({ total, reviewed, keptCount, disabled, onNext, onKeepAll, onUndoAll }: {
-  total: number; reviewed: number; keptCount: number; disabled: boolean;
+export default function ReviewBar({ total, reviewed, keptCount, undoableCount, disabled, onNext, onKeepAll, onUndoAll }: {
+  total: number; reviewed: number; keptCount: number; undoableCount: number; disabled: boolean;
   onNext: () => void; onKeepAll: () => void; onUndoAll: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   if (total === 0) return null;
   const undoAll = () => {
-    if (keptCount > 0 && !confirming) { setConfirming(true); return; }
+    if (disabled) return;
+    if (!confirming) { setConfirming(true); return; }
     setConfirming(false);
     onUndoAll();
   };
@@ -30,14 +31,17 @@ export default function ReviewBar({ total, reviewed, keptCount, disabled, onNext
     <span className="review-bar-count">{reviewed} of {total} change{total === 1 ? "" : "s"} reviewed</span>
     {confirming
       ? <div className="review-bar-confirm" role="alertdialog" aria-label="Confirm undo all">
-        <span>Undo all also reverses the {keptCount} change{keptCount === 1 ? "" : "s"} you kept.</span>
+        {/* State what it actually does. Undo all rejects the changes still
+            awaiting review; anything already kept stays, and reversing those
+            too is what the separate whole-turn undo is for. */}
+        <span>Undo {undoableCount} unreviewed change{undoableCount === 1 ? "" : "s"}?{keptCount > 0 ? ` The ${keptCount} you kept stay.` : ""}</span>
         <button type="button" onClick={() => setConfirming(false)}>Cancel</button>
-        <button type="button" className="review-bar-danger" onClick={undoAll}>Undo everything</button>
+        <button type="button" className="review-bar-danger" disabled={disabled} onClick={undoAll}>Undo them</button>
       </div>
       : <div className="review-bar-actions">
         <button type="button" disabled={disabled} onClick={onNext}><ChevronRight /> Next change</button>
         <button type="button" disabled={disabled} onClick={onKeepAll}><Check /> Keep all</button>
-        <button type="button" className="review-bar-danger" disabled={disabled} onClick={undoAll}><RotateCcw /> Undo all</button>
+        <button type="button" className="review-bar-danger" disabled={disabled || undoableCount === 0} onClick={undoAll}><RotateCcw /> Undo all</button>
       </div>}
   </div>;
 }

@@ -215,7 +215,7 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   await expect(diff.locator(".diff-removed")).toContainText("values = [2, 4, 6]");
   await expect(diff.locator(".diff-added")).toContainText("values = [3, 6, 9]");
   await expect(page.getByLabel("Cell output").filter({ hasText: "Total: 18" })).toBeVisible();
-  await page.getByRole("button", { name: "Undo turn" }).click();
+  await page.getByRole("button", { name: "Undo entire turn" }).click();
   await expect(page.getByLabel("Source for code cell 2")).toContainText("values = [2, 4, 6]");
 
   await page.getByLabel("Allow agent edit code cell 2").click();

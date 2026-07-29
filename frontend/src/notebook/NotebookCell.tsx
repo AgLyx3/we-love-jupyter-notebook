@@ -136,7 +136,15 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
   const description = `${cell.cellType} cell ${cell.index + 1}`;
   const dependentDisabled = disabled || sourceActionsDisabled;
   const stale = operations.some((item) => item.state === "stale");
+  // Outputs are suspect only until the cell is executed again. Deriving this
+  // from the ledger alone would pin the warning forever, since the operation
+  // stays rejected no matter how many times the user re-runs. Remember the
+  // execution count seen when the undo first appeared and clear once it moves.
   const undone = operations.some((item) => item.state === "rejected");
+  const undoneAt = useRef<number | null | undefined>(undefined);
+  if (!undone) undoneAt.current = undefined;
+  else if (undoneAt.current === undefined) undoneAt.current = cell.executionCount;
+  const outputsStale = undone && undoneAt.current === cell.executionCount;
   return <article ref={cellRef} draggable={!dependentDisabled && !suppressDrag} onDragStart={(event) => {
     const target = event.target as HTMLElement;
     // Never start a cell drag from selectable output text.
@@ -175,7 +183,7 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
             <button className="cell-review-undo" disabled={dependentDisabled} title="Undo this agent change" aria-label={`Revert agent change to ${description}`} onClick={onRevert}><RotateCcw /> Undo</button>
           </>}
       </div>}
-      {undone && cell.outputs.length > 0 && <p className="cell-stale-outputs" role="note">Outputs are from code you undid — re-run this cell.</p>}
+      {outputsStale && cell.outputs.length > 0 && <p className="cell-stale-outputs" role="note">Outputs are from code you undid — re-run this cell.</p>}
       {cell.cellType === "code" || cell.cellType === "raw" || editingMarkdown ? <CellEditor value={source} label={`Source for ${description}`} disabled={disabled} language={cell.cellType} change={change} cellId={cell.cellId} interactionsDisabled={dependentDisabled} onChange={setSource} onSave={() => dirty && onSave(source)} onRun={onRun} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} /> : <MarkdownPreview source={source} cellId={cell.cellId} disabled={dependentDisabled} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} onHoverChange={setSuppressDrag} />}
       <Outputs outputs={cell.outputs} disabled={dependentDisabled} onAddErrorToChat={onAddErrorToChat} onHoverChange={setSuppressDrag} />
     </div>

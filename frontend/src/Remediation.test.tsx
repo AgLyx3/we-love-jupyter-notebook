@@ -255,8 +255,8 @@ describe("remediation behaviors", () => {
       return baseFetch(input, init);
     });
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Undo turn" }));
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Undo turn" })).not.toBeInTheDocument());
+    await userEvent.click(await screen.findByRole("button", { name: "Undo entire turn" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Undo entire turn" })).not.toBeInTheDocument());
     expect(screen.queryByLabelText("Revert agent change to code cell 1")).not.toBeInTheDocument();
     expect(screen.getByText("Revision 4")).toBeInTheDocument();
     expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(applied.changes[0].previousSource);
@@ -436,10 +436,10 @@ describe("remediation behaviors", () => {
     (await firstEventSource()).emit("notebook.updated", { revision: 3 }, 1);
     await waitFor(() => expect(statusCalls).toBeGreaterThanOrEqual(2));
     await userEvent.click(screen.getByText("Cached applied turn"));
-    expect(screen.queryByRole("button", { name: "Undo turn" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Undo entire turn" })).not.toBeInTheDocument();
     await waitFor(() => expect(detailCalls).toBe(1));
     resolveDetail(new Response(JSON.stringify({ ...older, historyTruncated: false, undoEligible: true }), { headers: { "Content-Type": "application/json" } }));
-    expect(await screen.findByRole("button", { name: "Undo turn" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Undo entire turn" })).toBeEnabled();
   });
 
   it("reconciles terminal turn detail after earlier notebook and execution refreshes", async () => {

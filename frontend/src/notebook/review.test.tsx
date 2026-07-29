@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import type { AgentOperation, AgentTurn, NotebookSnapshot } from "../api/client";
+import { EventSourceMock } from "../test/setup";
 
 vi.mock("@uiw/react-codemirror", () => ({
   default: ({ value, onChange, "aria-label": label, readOnly }: { value: string; onChange: (value: string) => void; "aria-label": string; readOnly: boolean }) =>
@@ -51,7 +52,15 @@ function turnWith(operations: AgentOperation[]): AgentTurn {
 function json(value: unknown) { return Promise.resolve(new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } })); }
 
 function mount(turn: AgentTurn, snapshot: NotebookSnapshot = notebook) {
+  return renderApp(turn, snapshot).calls;
+}
+
+// Serves a mutable snapshot so a test can advance the document the way the app
+// really sees it — swap what the API returns, then push the SSE event that
+// makes the app refetch.
+function renderApp(turn: AgentTurn, initial: NotebookSnapshot = notebook) {
   const calls: { path: string; body: unknown }[] = [];
+  let snapshot = initial;
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
     const path = String(input);
     if (init?.method === "POST") calls.push({ path, body: init.body ? JSON.parse(String(init.body)) : null });
@@ -65,7 +74,12 @@ function mount(turn: AgentTurn, snapshot: NotebookSnapshot = notebook) {
     return json({});
   });
   render(<App />);
-  return calls;
+  const rerender = async (next: NotebookSnapshot) => {
+    snapshot = { ...next, revision: next.revision + 1 };
+    await waitFor(() => expect(EventSourceMock.instances.length).toBeGreaterThan(0));
+    EventSourceMock.instances[0].emit("notebook.updated", { revision: snapshot.revision }, 1);
+  };
+  return { calls, rerender };
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -113,9 +127,10 @@ describe("per-operation review", () => {
     expect(accept.body).toEqual({ sessionId: "session-1" });
   });
 
-  it("sends reject-all with the expected revision", async () => {
+  it("sends reject-all with the expected revision after confirming", async () => {
     const calls = mount(turnWith([operation(0, "pending"), operation(1, "pending")]));
     await userEvent.click(await screen.findByRole("button", { name: /Undo all/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Undo them" }));
     const reject = await waitFor(() => {
       const found = calls.find((item) => item.path.includes("/operations/reject-all"));
       expect(found).toBeDefined();
@@ -124,22 +139,44 @@ describe("per-operation review", () => {
     expect(reject.body).toEqual({ sessionId: "session-1", expectedDocumentRevision: 4 });
   });
 
-  it("confirms before undoing everything when changes have been kept", async () => {
+  it("confirms before undoing, and says kept changes are preserved", async () => {
     const calls = mount(turnWith([operation(0, "accepted"), operation(1, "pending")]));
     await userEvent.click(await screen.findByRole("button", { name: /Undo all/ }));
 
-    // Undo-all also reverses kept work, so it must say so rather than fire.
-    expect(await screen.findByText(/also reverses the 1 change you kept/)).toBeInTheDocument();
+    // Reject-all only undoes what is still unreviewed. Claiming it also
+    // reverses kept work would be false — that is whole-turn undo's job.
+    expect(await screen.findByText(/Undo 1 unreviewed change\? The 1 you kept stay\./)).toBeInTheDocument();
     expect(calls.some((item) => item.path.includes("/reject"))).toBe(false);
 
-    await userEvent.click(screen.getByRole("button", { name: "Undo everything" }));
+    await userEvent.click(screen.getByRole("button", { name: "Undo them" }));
     await waitFor(() => expect(calls.some((item) => item.path.includes("/operations/reject-all"))).toBe(true));
   });
 
-  it("does not confirm when nothing has been kept", async () => {
+  it("can be cancelled from the confirmation without undoing anything", async () => {
     const calls = mount(turnWith([operation(0, "pending"), operation(1, "pending")]));
     await userEvent.click(await screen.findByRole("button", { name: /Undo all/ }));
-    await waitFor(() => expect(calls.some((item) => item.path.includes("/operations/reject-all"))).toBe(true));
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("button", { name: "Undo them" })).not.toBeInTheDocument();
+    expect(calls.some((item) => item.path.includes("/reject"))).toBe(false);
+  });
+
+  it("hides the review bar once every change is settled", async () => {
+    // The counter used to include settled operations, so the bar stayed on
+    // screen at "2 of 2 reviewed" with a live no-op Undo all.
+    const operations = [operation(0, "accepted"), operation(1, "accepted")];
+    mount(turnWith(operations), notebookFor(operations));
+    await screen.findByLabelText("Source for code cell 1");
+    expect(screen.queryByRole("region", { name: "Review agent changes" })).not.toBeInTheDocument();
+  });
+
+  it("counts a stale change as unreviewed so the bar and the cell agree", async () => {
+    const operations = [operation(0, "stale"), operation(1, "accepted")];
+    mount(turnWith(operations), notebookFor(operations));
+    expect(await screen.findByText("1 of 2 changes reviewed")).toBeInTheDocument();
+    // Stale cannot be undone, so Undo all has nothing to do — but Keep all can
+    // still settle it, which is why the bar is still shown.
+    expect(screen.getByRole("button", { name: /Undo all/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Keep all/ })).toBeEnabled();
   });
 
   it("replaces per-cell controls with an explanation when the cell went stale", async () => {
@@ -153,6 +190,18 @@ describe("per-operation review", () => {
     const operations = [operation(0, "rejected"), operation(1, "pending")];
     mount(turnWith(operations), notebookFor(operations, [{ output_type: "stream", text: "stale result" }]));
     expect(await screen.findByText(/Outputs are from code you undid/)).toBeInTheDocument();
+  });
+
+  it("stops warning about outputs once the cell is re-run", async () => {
+    // Derived from the ledger alone the warning would never clear: the
+    // operation stays rejected however many times the user re-runs.
+    const operations = [operation(0, "rejected"), operation(1, "pending")];
+    const executed = { ...notebookFor(operations, [{ output_type: "stream", text: "fresh" }]) };
+    executed.cells = [{ ...executed.cells[0], executionCount: 7 }];
+    const { rerender } = renderApp(turnWith(operations), notebookFor(operations, [{ output_type: "stream", text: "old" }]));
+    expect(await screen.findByText(/Outputs are from code you undid/)).toBeInTheDocument();
+    await rerender(executed);
+    await waitFor(() => expect(screen.queryByText(/Outputs are from code you undid/)).not.toBeInTheDocument());
   });
 
   it("does not warn about outputs when nothing was undone", async () => {

@@ -28,7 +28,7 @@ def session_status(request: Request) -> dict[str, Any]:
         summary = serialize_turn_summary(
             item,
             undo_eligible=request.app.state.agent_turn_service.is_undo_eligible(item),
-            stale_cell_ids=request.app.state.agent_turn_service.stale_cell_ids(item),
+            stale_cell_ids=request.app.state.agent_turn_service.stale_cell_ids(item, snapshot),
         )
         size = len(json.dumps(summary, separators=(",", ":")).encode()) + 1
         if summary_bytes + size > MAX_TURN_HISTORY_RESPONSE_BYTES:
@@ -42,7 +42,7 @@ def session_status(request: Request) -> dict[str, Any]:
             serialize_turn_summary(
                 turn,
                 undo_eligible=request.app.state.agent_turn_service.is_undo_eligible(turn),
-                stale_cell_ids=request.app.state.agent_turn_service.stale_cell_ids(turn),
+                stale_cell_ids=request.app.state.agent_turn_service.stale_cell_ids(turn, snapshot),
             ) if turn is not None else None
         ),
         "turnHistory": summaries,

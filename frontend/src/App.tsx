@@ -348,14 +348,19 @@ export default function App() {
 
   const fileLocked = mutationsDisabled || busy || hasDirtyDrafts;
   const reviewOperations = selectedTurn?.operations ?? [];
-  const reviewPending = reviewOperations.filter((item) => item.state === "pending");
+  // "Unsettled" must mean the same thing everywhere: here, in
+  // reconcileTurnChanges, and in Next-change navigation. Stale counts as
+  // unsettled — the user has not decided about it — and stays settleable,
+  // because Keep needs no composition guard even when Undo can no longer apply.
+  const reviewUnsettled = reviewOperations.filter((item) => item.state === "pending" || item.state === "stale");
   const reviewKept = reviewOperations.filter((item) => item.state === "accepted").length;
   // Walk to the next cell that still has something unreviewed, wrapping around.
   // Reuses the existing chat-to-cell focus plumbing rather than adding a second
-  // way to scroll the notebook.
+  // way to scroll the notebook. Stale cells are included: landing on one is how
+  // the user finds out why it can no longer be undone.
   const focusNextChange = () => {
-    if (!notebook || !reviewPending.length) return;
-    const order = notebook.cells.map((cell) => cell.cellId).filter((cellId) => reviewPending.some((item) => item.cellId === cellId));
+    if (!notebook || !reviewUnsettled.length) return;
+    const order = notebook.cells.map((cell) => cell.cellId).filter((cellId) => reviewUnsettled.some((item) => item.cellId === cellId));
     if (!order.length) return;
     const from = order.indexOf(focusRequest?.cellId ?? "");
     requestCellFocus(order[(from + 1) % order.length]);
@@ -373,8 +378,13 @@ export default function App() {
       {workspaceFolder && !sidebarHidden && <WorkspaceSidebar root={workspaceFolder} activePath={notebook?.notebookPath ?? null} onOpenNotebook={(path) => void handleOpen(path, workspaceFolder)} onCollapse={() => setSidebarHidden(true)} />}
       {notebook ? <div className="editor-layout" style={{ "--agent-width": `${agentWidth}px` } as CSSProperties}>
       <div className="notebook-pane">
-      {selectedTurn && reviewOperations.length > 0 && <ReviewBar
-        total={reviewOperations.length} reviewed={reviewOperations.length - reviewPending.length} keptCount={reviewKept}
+      {/* Gated on unsettled work, so finishing a review clears the bar rather
+          than leaving a live "Undo all" behind a "2 of 2 reviewed" counter.
+          Keyed by turn so no confirmation survives a switch to another turn. */}
+      {selectedTurn && reviewUnsettled.length > 0 && <ReviewBar
+        key={selectedTurn.turnId}
+        total={reviewOperations.length} reviewed={reviewOperations.length - reviewUnsettled.length} keptCount={reviewKept}
+        undoableCount={reviewUnsettled.filter((item) => item.state === "pending").length}
         disabled={mutationsDisabled || busy || hasDirtyDrafts}
         onNext={focusNextChange}
         onKeepAll={() => acceptOperations(notebook, selectedTurn.turnId)}

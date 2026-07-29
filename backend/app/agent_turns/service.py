@@ -238,6 +238,11 @@ class AgentTurnService:
         caller's copy, because callers routinely pass a copy taken before a
         concurrent mutation and this method has a destructive side effect.
         """
+        # Cheap rejection first: get_snapshot deep-copies the notebook, and the
+        # session-status endpoint calls this once per turn in history.
+        with self._lock:
+            if self._latest_applied_turn_id != turn.turn_id:
+                return False
         try:
             snapshot = self.documents.get_snapshot()
         except NotebookDomainError:
@@ -505,6 +510,12 @@ class AgentTurnService:
                 stored = self._turns.get(turn_id)
                 if stored is not None:
                     stored.checkpoint = None
+                    # Restoring the checkpoint reverses every change the turn
+                    # made, so its ledger is settled by definition. Leaving the
+                    # operations pending would strand them: they no longer match
+                    # the document, so they serialize as stale and the cell keeps
+                    # advertising an undoable change that is already gone.
+                    stored.operations = self._settle_all(stored.operations, REJECTED)
                 self._prune_history_locked()
             if self.events is not None:
                 self.events.publish("notebook.updated", {"sessionId": restored.session_id, "revision": restored.revision, "ownerId": f"undo:{turn_id}"})
@@ -512,18 +523,22 @@ class AgentTurnService:
         finally:
             self.documents.coordinator.release(lease)
 
-    def stale_cell_ids(self, turn: AgentTurn) -> frozenset[str]:
+    def stale_cell_ids(self, turn: AgentTurn, snapshot=None) -> frozenset[str]:
         """Cells whose ledger no longer describes the document.
 
         Derived on read rather than stored. A manual edit reaches the document
         through a path with no ledger awareness, so a stored flag would only
         become true the next time someone attempted a reject — leaving
         live-looking controls on operations that are already dead.
+
+        Callers serializing several turns should pass a snapshot they already
+        hold: taking one deep-copies the notebook, and the session-status
+        endpoint would otherwise do that once per turn in history.
         """
         if not turn.operations:
             return frozenset()
         try:
-            snapshot = self.documents.get_snapshot()
+            snapshot = snapshot if snapshot is not None else self.documents.get_snapshot()
         except NotebookDomainError:
             return frozenset()
         if snapshot.session_id != turn.session_id:
@@ -602,6 +617,20 @@ class AgentTurnService:
                         operations, target.operation_id, REJECTED
                     )
                 sources = {change.cell_id: change for change in turn.changes}
+                if operation_ids is None:
+                    # "Undo all" should undo everything it still can. One cell
+                    # the user has since hand-edited must not block the rest;
+                    # those cells keep their operations and go on explaining
+                    # themselves as stale, so nothing is dropped silently.
+                    stale = self.stale_cell_ids(turn, snapshot)
+                    targets = tuple(
+                        item for item in targets if item.cell_id not in stale
+                    )
+                    operations = turn.operations
+                    for target in targets:
+                        operations = with_state(
+                            operations, target.operation_id, REJECTED
+                        )
                 changes = self._recompose_locked(
                     snapshot, sources, turn.operations, operations,
                     {target.cell_id for target in targets}, conflict,
@@ -613,7 +642,16 @@ class AgentTurnService:
             with self._lock:
                 stored = self._turns.get(turn_id)
                 if stored is not None:
-                    stored.operations = operations
+                    # Re-apply the reject transitions to whatever the ledger
+                    # holds *now*, rather than writing back the tuple captured
+                    # before the commit. Accept takes no lease, so an accept
+                    # landing mid-reject would otherwise be silently rolled back.
+                    current = stored.operations
+                    for target in targets:
+                        current = with_state(
+                            current, target.operation_id, REJECTED
+                        )
+                    stored.operations = current
                     # Keep the checkpoint alive across the turn's own review:
                     # undoing part of a turn is reviewing it, not unrelated work.
                     if self._latest_applied_turn_id == turn_id:
@@ -882,14 +920,16 @@ class AgentTurnService:
         return keep
 
     @staticmethod
-    def _force_settle_locked(turn: AgentTurn) -> None:
-        operations = turn.operations
-        for operation in turn.operations:
+    def _settle_all(
+        operations: tuple[TurnOperation, ...], state: str,
+    ) -> tuple[TurnOperation, ...]:
+        for operation in operations:
             if operation.state == PENDING:
-                operations = with_state(
-                    operations, operation.operation_id, ACCEPTED
-                )
-        turn.operations = operations
+                operations = with_state(operations, operation.operation_id, state)
+        return operations
+
+    def _force_settle_locked(self, turn: AgentTurn) -> None:
+        turn.operations = self._settle_all(turn.operations, ACCEPTED)
         logger.info(
             "Auto-kept unreviewed agent changes for turn %s: review backlog "
             "exceeded the retained history budget", turn.turn_id,

@@ -365,6 +365,102 @@ class TestUndoSurvivesItsOwnRejections:
         assert source_of(restored) == THREE_LINE
 
 
+class TestUndoSettlesTheLedger:
+    def test_whole_turn_undo_settles_every_operation(self, notebook_payload):
+        """Otherwise the cell keeps advertising a change that is already gone.
+
+        Leaving operations pending after a checkpoint restore strands them: they
+        no longer match the document, so they serialize as stale and the cell
+        shows a permanent "can no longer be undone" banner for work that was
+        already reverted.
+        """
+        _documents, turns, snapshot, turn = two_operation_turn(notebook_payload)
+        turns.undo(
+            turn.turn_id, session_id=snapshot.session_id,
+            expected_revision=turn.applied_revision,
+        )
+        settled = turns.get(turn.turn_id)
+        assert all(item.state == REJECTED for item in settled.operations)
+        assert turns.stale_cell_ids(settled) == frozenset()
+
+
+class TestConcurrentReview:
+    def test_reject_does_not_clobber_an_accept_of_another_operation(
+        self, notebook_payload,
+    ):
+        """Accept takes no lease, so it can land while a reject is committing.
+
+        Rejecting used to write back the whole ledger tuple it captured before
+        the document commit, silently rolling any such accept back to pending.
+        """
+        documents, turns, snapshot, turn = two_operation_turn(notebook_payload)
+        first, second = turn.operations
+
+        original = documents.apply_source_changes_under_lease
+
+        def accept_during_commit(**kwargs):
+            turns.accept_operations(
+                turn.turn_id, [second.operation_id],
+                session_id=snapshot.session_id,
+            )
+            return original(**kwargs)
+
+        documents.apply_source_changes_under_lease = accept_during_commit
+        try:
+            turns.reject_operations(
+                turn.turn_id, [first.operation_id],
+                session_id=snapshot.session_id,
+                expected_revision=turn.applied_revision,
+            )
+        finally:
+            documents.apply_source_changes_under_lease = original
+
+        states = {item.operation_id: item.state for item in turns.get(turn.turn_id).operations}
+        assert states[first.operation_id] == REJECTED
+        assert states[second.operation_id] == ACCEPTED
+
+
+class TestRejectAllWithStaleCells:
+    def test_a_stale_cell_does_not_block_undoing_the_rest(self, notebook_payload):
+        documents = NotebookDocumentService()
+        snapshot = documents.import_notebook(notebook_payload())
+        snapshot = documents.update_cell_source(
+            cell_id="editable", source=THREE_LINE,
+            expected_revision=snapshot.revision,
+            expected_session_id=snapshot.session_id, owner="manual",
+        )
+        scopes = TurnScopeService(documents)
+        scopes.add("editable", editable=True)
+        scopes.add("intro", editable=True)
+        turns = AgentTurnService(
+            documents=documents, scopes=scopes,
+            adapter=FakeAgentAdapter([FakeAttempt(edits={
+                "editable/cell_editable.py": THREE_LINE_BOTH_EDITED,
+                "editable/cell_intro.md": "# agent wrote this\n",
+            })]), timeout=1,
+        )
+        turn = turns.start(
+            prompt="edit", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision, background=False,
+        )
+        edited = documents.update_cell_source(
+            cell_id="editable", source="hand written\n",
+            expected_revision=turn.applied_revision,
+            expected_session_id=snapshot.session_id, owner="manual",
+        )
+
+        updated = turns.reject_operations(
+            turn.turn_id, None, session_id=snapshot.session_id,
+            expected_revision=edited.revision,
+        )
+
+        # The untouched cell is undone; the hand-edited one keeps both its
+        # content and its operations so it can still explain itself.
+        assert source_of(updated, "intro") == "# Example notebook\n"
+        assert source_of(updated, "editable") == "hand written\n"
+        assert turns.stale_cell_ids(turns.get(turn.turn_id)) == frozenset({"editable"})
+
+
 class TestStalenessIsDerived:
     def test_a_manual_edit_marks_the_cell_stale_with_no_reject_attempted(
         self, notebook_payload,
