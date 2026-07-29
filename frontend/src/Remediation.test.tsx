@@ -78,7 +78,7 @@ describe("remediation behaviors", () => {
     ];
     const select = vi.fn();
     render(<AgentChatPanel notebook={notebook} scope={scope} turn={history[0].turn} activeTurn={null} history={history} operation={null} busy={false} mutationsDisabled={false} onSubmit={vi.fn()} onCancel={vi.fn()} onUndo={vi.fn()} onClearScope={vi.fn()} onDecision={vi.fn()} onSelectTurn={select} onFocusCell={vi.fn()} onDropCell={vi.fn()} />);
-    expect(screen.getByText("1 editable · 0 context · failed")).toBeInTheDocument();
+    expect(screen.getByText("1 editable · failed")).toBeInTheDocument();
     await userEvent.click(screen.getByText("First prompt"));
     expect(select).toHaveBeenCalledWith("one");
   });
@@ -571,7 +571,7 @@ describe("remediation behaviors", () => {
     await userEvent.type(screen.getByLabelText("Agent instruction"), "explain these cells");
     expect(ask).toBeEnabled();
     await userEvent.click(ask);
-    expect(submit).toHaveBeenCalledWith("explain these cells", { model: "default", mode: "edit" });
+    expect(submit).toHaveBeenCalledWith("explain these cells", { model: "default", mode: "edit", writeScope: "blocking" });
   });
 
   it("shift-selects a range of cells and scopes them all via the context menu", async () => {

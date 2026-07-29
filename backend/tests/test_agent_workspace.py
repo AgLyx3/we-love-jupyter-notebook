@@ -50,6 +50,145 @@ def test_builds_plain_source_manifest_and_protected_context(notebook_payload):
         builder.destroy(workspace)
 
 
+def _trusted_workspace(notebook_payload):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scope = FrozenTurnScope.create(
+        turn_id="turn", session_id=snapshot.session_id,
+        notebook_revision=snapshot.revision,
+        selection=ScopeSelection((), ("intro",)), prompt="restructure",
+    )
+    builder = AgentWorkspaceBuilder()
+    return builder, builder.build(snapshot, scope, write_scope="trusted")
+
+
+def test_trusted_build_materializes_all_cells_and_writable_structure(notebook_payload):
+    import json as _json
+
+    builder, workspace = _trusted_workspace(notebook_payload)
+    try:
+        assert workspace.is_trusted
+        # Every cell gets a writable source file under cells/.
+        assert (workspace.root / "cells/cell_intro.md").read_text() == "# Example notebook\n"
+        assert (workspace.root / "cells/cell_editable.py").read_text() == "value = 1\n"
+        # Ordered, agent-writable structure.json mirrors notebook order.
+        structure = _json.loads((workspace.root / "structure.json").read_text())
+        assert [entry["cellId"] for entry in structure["cells"]] == ["intro", "editable"]
+        assert structure["cells"][1]["source"] == "cells/cell_editable.py"
+        # Manifest is the frozen original the backend diffs against.
+        assert [cell.cell_id for cell in workspace.manifest.cells] == ["intro", "editable"]
+        assert workspace.manifest.context_cell_ids == ("intro",)
+        assert "Trusted turn" in (workspace.root / "INSTRUCTIONS.md").read_text()
+    finally:
+        builder.destroy(workspace)
+
+
+def test_trusted_build_protects_only_readonly_notebook_and_instructions(notebook_payload):
+    builder, workspace = _trusted_workspace(notebook_payload)
+    try:
+        # structure.json and cells/ are agent-writable → NOT in the protected baseline.
+        assert workspace.baseline_hashes.keys() == {
+            "notebook.readonly.ipynb", "INSTRUCTIONS.md"
+        }
+        # The read-only whole-notebook copy is chmod 444; structure.json is writable.
+        assert not (os.stat(workspace.root / "notebook.readonly.ipynb").st_mode & 0o222)
+        assert os.stat(workspace.root / "structure.json").st_mode & 0o200
+    finally:
+        builder.destroy(workspace)
+
+
+def _rewrite_structure(workspace, cells):
+    import json as _json
+
+    (workspace.root / "structure.json").write_text(
+        _json.dumps({"cells": cells}) + "\n", encoding="utf-8"
+    )
+
+
+def test_collect_trusted_returns_existing_entries_unchanged(notebook_payload):
+    builder, workspace = _trusted_workspace(notebook_payload)
+    try:
+        entries = WorkspaceAuditor().collect_trusted(workspace)
+        assert [e.cell_id for e in entries] == ["intro", "editable"]
+        assert all(e.is_add is False for e in entries)
+        assert entries[1].content == "value = 1\n"
+    finally:
+        builder.destroy(workspace)
+
+
+def test_collect_trusted_accepts_add_entry_with_new_file(notebook_payload):
+    builder, workspace = _trusted_workspace(notebook_payload)
+    try:
+        (workspace.root / "cells/new_1.py").write_text("print('hi')\n", encoding="utf-8")
+        _rewrite_structure(workspace, [
+            {"cellId": "intro", "cellType": "markdown", "source": "cells/cell_intro.md"},
+            {"cellId": "editable", "cellType": "code", "source": "cells/cell_editable.py"},
+            {"op": "add", "cellType": "code", "source": "cells/new_1.py"},
+        ])
+        entries = WorkspaceAuditor().collect_trusted(workspace)
+        assert len(entries) == 3
+        assert entries[2].is_add is True and entries[2].cell_id is None
+        assert entries[2].content == "print('hi')\n"
+    finally:
+        builder.destroy(workspace)
+
+
+def test_collect_trusted_rejects_source_escaping_cells_dir(notebook_payload):
+    builder, workspace = _trusted_workspace(notebook_payload)
+    try:
+        _rewrite_structure(workspace, [
+            {"cellId": "intro", "cellType": "markdown",
+             "source": "cells/../notebook.readonly.ipynb"},
+        ])
+        with pytest.raises(WorkspaceBoundaryError):
+            WorkspaceAuditor().collect_trusted(workspace)
+    finally:
+        builder.destroy(workspace)
+
+
+def test_collect_trusted_rejects_hardlink_under_cells(notebook_payload, tmp_path):
+    builder, workspace = _trusted_workspace(notebook_payload)
+    try:
+        external = tmp_path / "outside.txt"
+        external.write_text("secret\n", encoding="utf-8")
+        os.link(external, workspace.root / "cells/hard.py")
+        _rewrite_structure(workspace, [
+            {"op": "add", "cellType": "code", "source": "cells/hard.py"},
+        ])
+        with pytest.raises(WorkspaceBoundaryError):
+            WorkspaceAuditor().collect_trusted(workspace)
+    finally:
+        builder.destroy(workspace)
+
+
+def test_collect_trusted_rejects_symlink_under_cells(notebook_payload, tmp_path):
+    builder, workspace = _trusted_workspace(notebook_payload)
+    try:
+        external = tmp_path / "outside.txt"
+        external.write_text("secret\n", encoding="utf-8")
+        os.symlink(external, workspace.root / "cells/link.py")
+        _rewrite_structure(workspace, [
+            {"op": "add", "cellType": "code", "source": "cells/link.py"},
+        ])
+        with pytest.raises(WorkspaceBoundaryError):
+            WorkspaceAuditor().collect_trusted(workspace)
+    finally:
+        builder.destroy(workspace)
+
+
+def test_collect_trusted_rejects_duplicate_source(notebook_payload):
+    builder, workspace = _trusted_workspace(notebook_payload)
+    try:
+        _rewrite_structure(workspace, [
+            {"cellId": "intro", "cellType": "markdown", "source": "cells/cell_intro.md"},
+            {"op": "add", "cellType": "markdown", "source": "cells/cell_intro.md"},
+        ])
+        with pytest.raises(WorkspaceBoundaryError):
+            WorkspaceAuditor().collect_trusted(workspace)
+    finally:
+        builder.destroy(workspace)
+
+
 @pytest.mark.parametrize("failure_stage", ["write", "hash", "chmod"])
 def test_build_failure_removes_partial_workspace(
     monkeypatch, notebook_payload, tmp_path, failure_stage,
@@ -375,6 +514,36 @@ def test_turn_instructions_include_notebook_reasoning_context(notebook_payload):
             assert "execution_count" in instructions
         finally:
             builder.destroy(workspace)
+
+
+def test_claude_adapter_grants_write_tools_for_trusted_workspace(
+    monkeypatch, notebook_payload,
+):
+    # Regression: the real adapter read workspace.manifest.editable_cells, which a
+    # Trusted (TrustedWorkspaceManifest) workspace does not have, so a Trusted turn
+    # crashed with AttributeError. It must grant edit/write tools (whole notebook
+    # is editable). The fake test adapter never hit this path.
+    builder, workspace = _trusted_workspace(notebook_payload)
+    captured = {}
+
+    class StubRunner:
+        def run(self, args, **kwargs):
+            captured["args"] = args
+            return "finished", ""
+
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="2.1.203", stderr=""),
+    )
+    try:
+        result = ClaudeAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event()
+        )
+        assert result.final_output == "finished"
+        tools = captured["args"][captured["args"].index("--tools") + 1].split(",")
+        assert set(tools) == {"Read", "Edit", "Write"}
+    finally:
+        builder.destroy(workspace)
 
 
 def test_read_only_turn_uses_read_only_tools_and_writes_no_editable_files(notebook_payload, monkeypatch):

@@ -157,14 +157,28 @@ class TurnScopeService:
             )
             return self._frozen
 
-    def expire(self, scope: FrozenTurnScope, outcome: str) -> None:
+    def expire(
+        self, scope: FrozenTurnScope, outcome: str, *,
+        preserve_selection: bool = False,
+    ) -> None:
         with self._lock:
             if self._frozen is not None and self._frozen.turn_id == scope.turn_id:
                 self._frozen = None
-            self._editable.clear()
-            self._context.clear()
-            self._selection_session_id = None
-            self._selection_revision = None
+            # When a turn applied nothing (e.g. the agent asked a clarifying
+            # question), keep the editable/context selection so the user can reply
+            # without re-scoping. The document revision is unchanged, so the
+            # selection remains valid for the next freeze. Only preserve a
+            # selection that still matches the current session and revision.
+            keep = (
+                preserve_selection
+                and self._selection_session_id == scope.session_id
+                and self._selection_revision == scope.notebook_revision
+            )
+            if not keep:
+                self._editable.clear()
+                self._context.clear()
+                self._selection_session_id = None
+                self._selection_revision = None
             record = TerminalScopeRecord(
                 scope=scope, outcome=outcome, completed_at=datetime.now(timezone.utc)
             )

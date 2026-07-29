@@ -72,6 +72,8 @@ class DevelopmentFakeAgentAdapter:
             raise AgentCancelled()
         instructions = (workspace.root / "INSTRUCTIONS.md").read_text(encoding="utf-8")
         prompt = instructions.splitlines()[0].lower() if instructions else ""
+        if workspace.is_trusted:
+            return AdapterResult("The development fake adapter does not perform Trusted structural edits.")
         editable = workspace.manifest.editable_cells
         if not editable:
             return AdapterResult("No editable cell was selected.")
@@ -130,9 +132,14 @@ class ClaudeAgentAdapter:
         # agent answers with a plan instead of attempting an edit.
         if permission_mode == "plan":
             prompt = self._PLAN_PREAMBLE + prompt
-        # A read-only turn (no editable cells) gets no edit/write tools, so the
-        # boundary is enforced at the tool level as well as by the workspace audit.
-        tools = "Read,Edit,Write" if workspace.manifest.editable_cells else "Read"
+        # A Trusted turn makes the whole notebook editable, so it always gets
+        # edit/write tools. A Blocking read-only turn (no editable cells) gets no
+        # edit/write tools, so the boundary is enforced at the tool level as well
+        # as by the workspace audit.
+        if workspace.is_trusted:
+            tools = "Read,Edit,Write"
+        else:
+            tools = "Read,Edit,Write" if workspace.manifest.editable_cells else "Read"
         args = [
             self.executable, "-p", prompt, "--no-session-persistence",
             "--safe-mode", "--disable-slash-commands", "--no-chrome",

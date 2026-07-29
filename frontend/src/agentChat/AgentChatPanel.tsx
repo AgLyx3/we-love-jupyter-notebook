@@ -1,17 +1,26 @@
 import { AlertTriangle, BookOpen, Code2, File, RotateCcw, Send, Square, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, type AgentMode, type AgentModel, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type FileMatch, type NotebookSnapshot, type TurnOptions, type TurnScope } from "../api/client";
+import { api, type AgentMode, type AgentModel, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type FileMatch, type NotebookSnapshot, type StructuralOp, type TurnOptions, type TurnScope, type WriteScope } from "../api/client";
 import RiskyExecutionDialog from "../execution/RiskyExecutionDialog";
 import TurnScopePanel from "../turnScope/TurnScopePanel";
 import { attachmentLabel, type SelectionAttachment } from "../notebook/selectionEdit";
 import { applyMention, detectMention, mentionKey, type MentionToken } from "./fileMention";
 
 const activeStates = new Set(["created", "agent_running", "validating", "applying", "executing", "cleaning_up"]);
+
+function structuralSummary(ops: StructuralOp[]): string {
+  const counts: Record<string, number> = {};
+  for (const op of ops) counts[op.op] = (counts[op.op] ?? 0) + 1;
+  const order: StructuralOp["op"][] = ["add", "delete", "move", "retype", "edit"];
+  const parts = order.filter((kind) => counts[kind]).map((kind) => `${counts[kind]} ${kind}`);
+  return parts.length ? parts.join(" · ") : "no change";
+}
 export interface TurnRecord { turn: AgentTurn; editableCellIds: string[]; contextCellIds: string[]; prompt: string }
 
-export default function AgentChatPanel({ notebook, scope, turn, activeTurn, history, operation, busy, mutationsDisabled, attachments = [], onSubmit, onCancel, onUndo, onClearScope, onDecision, onSelectTurn, onFocusCell, onDropCell, onDropCells, onRemoveAttachment, onRemoveScopeCell }: {
+export default function AgentChatPanel({ notebook, scope, turn, activeTurn, history, operation, busy, mutationsDisabled, writeScope: writeScopeProp, onWriteScopeChange, attachments = [], onSubmit, onCancel, onUndo, onClearScope, onDecision, onSelectTurn, onFocusCell, onDropCell, onDropCells, onRemoveAttachment, onRemoveScopeCell }: {
   notebook: NotebookSnapshot; scope: TurnScope; turn: AgentTurn | null; activeTurn: AgentTurn | null; history: TurnRecord[]; operation: ExecutionOperation | null; busy: boolean; mutationsDisabled: boolean;
+  writeScope?: WriteScope; onWriteScopeChange?: (next: WriteScope) => void;
   attachments?: SelectionAttachment[];
   onSubmit: (prompt: string, options: TurnOptions) => void; onCancel: () => void; onUndo: () => void; onClearScope: () => void; onDecision: (attempt: ExecutionAttempt, decision: "approve" | "skip" | "cancel") => void; onSelectTurn: (id: string) => void; onFocusCell: (id: string) => void; onDropCell: (id: string) => void; onDropCells?: (ids: string[]) => void;
   onRemoveAttachment?: (id: string) => void; onRemoveScopeCell?: (id: string) => void;
@@ -20,6 +29,18 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState<AgentModel>("default");
   const [mode, setMode] = useState<AgentMode>("edit");
+  // Write scope is STICKY and normally controlled by the parent (App), which
+  // shares it with the notebook gutter and drop routing. When rendered standalone
+  // (tests) it falls back to internal sticky state persisted to localStorage.
+  const [internalWriteScope, setInternalWriteScope] = useState<WriteScope>(() => {
+    try { return localStorage.getItem("agent.writeScope") === "trusted" ? "trusted" : "blocking"; } catch { return "blocking"; }
+  });
+  const writeScope = writeScopeProp ?? internalWriteScope;
+  const updateWriteScope = (next: WriteScope) => {
+    if (onWriteScopeChange) { onWriteScopeChange(next); return; }
+    setInternalWriteScope(next);
+    try { localStorage.setItem("agent.writeScope", next); } catch { /* storage unavailable */ }
+  };
 
   // "@"-mention: type "@" in the prompt to search workspace files and insert a
   // path as context. Purely a text-insertion aid — the agent still reads the
@@ -77,7 +98,12 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
   const manualAttempt = operation?.attempts.find((item) => item.executionAttemptId === operation.currentExecutionAttemptId);
   const manualCorrelated = Boolean(operation?.operationId && operation.sessionId && operation.currentDocumentRevision != null && operation.parentTurnId === null && manualAttempt?.executionAttemptId && manualAttempt.cellId);
   const active = turn && activeStates.has(turn.state);
-  const readOnly = scope.editableCellIds.length === 0;
+  // "editable" is removed under Trusted (structural): the gutter edit button is
+  // blocked, drops default to context, and the scope panel shows attention-only.
+  // The composer note/label additionally require Edit mode (Plan writes nothing).
+  const trustedScope = writeScope === "trusted";
+  const trusted = trustedScope && mode === "edit";
+  const readOnly = scope.editableCellIds.length === 0 && !trusted;
   // An attached error output is enough to submit on its own — the user can add a
   // cell's error and hit Send without typing (a default "fix the error" prompt
   // is composed from the attachment).
@@ -86,23 +112,35 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
   const submitPrompt = () => {
     if (!canSubmit) return;
     const value = prompt.trim();
-    onSubmit(value, { model, mode });
+    onSubmit(value, { model, mode, writeScope });
     setPrompt("");
     setMention(null);
     setMatches([]);
   };
   return <aside className="agent-panel" aria-label="Agent workspace" onDragOver={(event) => { if (!mutationsDisabled) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }} onDrop={(event) => { event.preventDefault(); if (mutationsDisabled) return; const many = event.dataTransfer.getData("application/x-notebook-cells"); if (many) { try { const ids = JSON.parse(many) as string[]; if (ids?.length) { if (onDropCells) onDropCells(ids); else ids.forEach(onDropCell); return; } } catch { /* fall through to single */ } } const id = event.dataTransfer.getData("application/x-notebook-cell"); if (id) onDropCell(id); }}>
-    <header><h1>Notebook Agent</h1><span>Scoped local edits</span></header>
-    <TurnScopePanel notebook={notebook} scope={scope} disabled={mutationsDisabled} onClear={onClearScope} onFocusCell={onFocusCell} onDropCell={onDropCell} onRemoveCell={onRemoveScopeCell} />
+    <header>
+      <div className="agent-panel-title"><h1>Notebook Agent</h1><span>Scoped local edits</span></div>
+      <label className="prompt-select scope-header">
+        <span>Scope</span>
+        <select aria-label="Write scope" value={writeScope} disabled={busy || mode === "plan"}
+          title={mode === "plan" ? "Plan mode writes nothing, so write scope has no effect." : "Blocking: the agent may only edit cells you mark editable. Trusted: the agent may add, delete, reorder, and edit any cell in the notebook."}
+          onChange={(event) => updateWriteScope(event.target.value as WriteScope)}>
+          <option value="blocking">Blocking</option>
+          <option value="trusted">Trusted</option>
+        </select>
+      </label>
+    </header>
+    <TurnScopePanel notebook={notebook} scope={scope} disabled={mutationsDisabled} trusted={trustedScope} onClear={onClearScope} onFocusCell={onFocusCell} onDropCell={onDropCell} onRemoveCell={onRemoveScopeCell} />
     <section className="conversation" aria-live="polite">
-      {history.length > 0 && <div className="turn-history" aria-label="Turn history">{history.map((record) => <button className={record.turn.turnId === turn?.turnId ? "selected" : ""} key={record.turn.turnId} onClick={() => onSelectTurn(record.turn.turnId)}><span>{record.prompt}</span><small>{record.editableCellIds.length} editable · {record.contextCellIds.length} context · {record.turn.state.replaceAll("_", " ")}</small></button>)}</div>}
+      {history.length > 0 && <div className="turn-history" aria-label="Turn history">{history.map((record) => <button className={record.turn.turnId === turn?.turnId ? "selected" : ""} key={record.turn.turnId} onClick={() => onSelectTurn(record.turn.turnId)}><span>{record.prompt}</span><small>{(record.turn.writeScope === "trusted" ? "all editable" : `${record.editableCellIds.length} editable`) + " · " + record.turn.state.replaceAll("_", " ")}</small></button>)}</div>}
       {activeTurn && activeTurn.turnId !== turn?.turnId && <button className="manual-cancel" onClick={onCancel}><Square /> Cancel active turn</button>}
       {!turn && <div className="empty-conversation"><p>No agent turn yet</p><span>Select cells to edit, or just ask a read-only question.</span></div>}
       {turn && <div className="turn-status">
         <div className="turn-state"><span className={active ? "activity-dot" : ""} />{turn.state.replaceAll("_", " ")}</div>
         {turn.finalOutput && <div className="turn-output"><ReactMarkdown>{turn.finalOutput}</ReactMarkdown></div>}
         {turn.error && <p className="error-text">{turn.error.message}</p>}
-        {turn.changes.length > 0 && <p>{turn.changes.length} cell{turn.changes.length === 1 ? "" : "s"} changed. Review the inline diff.</p>}
+        {turn.changes.length > 0 && turn.writeScope !== "trusted" && <p>{turn.changes.length} cell{turn.changes.length === 1 ? "" : "s"} changed. Review the inline diff.</p>}
+        {turn.structuralOps && turn.structuralOps.length > 0 && <p className="structural-summary">Structural changes: {structuralSummary(turn.structuralOps)}. Review the inline diff — undo reverts the whole turn.</p>}
         {/* Unlike "Undo all" in the review bar, restoring the checkpoint also
             reverses changes the user explicitly kept, so say so rather than
             letting the label imply it only undoes outstanding work. */}
@@ -145,9 +183,10 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
             if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
             event.preventDefault();
             submitPrompt();
-          }} placeholder={readOnly ? "Ask about the notebook, or select cells to edit…" : "Change the selected cells…"} rows={3} />
+          }} placeholder={trusted ? "Ask the agent to change the notebook…" : readOnly ? "Ask about the notebook, or select cells to edit…" : "Change the selected cells…"} rows={3} />
       </div>
       {readOnly && mode === "edit" && <span className="prompt-mode" role="note">Read-only turn — the agent can answer but not write.</span>}
+      {trusted && <span className="prompt-mode trusted" role="note">Trusted turn — the agent may add, delete, reorder, and edit any cell. Review the diff before keeping.</span>}
       {mode === "plan" && <span className="prompt-mode" role="note">Plan mode — the agent proposes a plan and writes no changes.</span>}
       <div className="prompt-controls">
         <label className="prompt-select">
@@ -166,7 +205,7 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
             <option value="plan">Plan</option>
           </select>
         </label>
-        <button className="primary" disabled={!canSubmit} type="submit"><Send /> {mode === "plan" ? "Plan" : readOnly ? "Ask" : "Send"}</button>
+        <button className={`primary ${trusted ? "trusted" : ""}`} disabled={!canSubmit} type="submit"><Send /> {mode === "plan" ? "Plan" : trusted ? "Send · Trusted" : readOnly ? "Ask" : "Send"}</button>
       </div>
     </form>
   </aside>;

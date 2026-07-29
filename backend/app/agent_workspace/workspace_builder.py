@@ -13,7 +13,8 @@ from ..notebook_document.models import NotebookSnapshot
 from ..turn_scope.models import FrozenTurnScope
 from .models import (
     AgentWorkspace, ContextCellManifest, EditableCellManifest,
-    WorkspaceCleanupError, WorkspaceManifest,
+    StructuralCellManifest, TrustedWorkspaceManifest, WorkspaceCleanupError,
+    WorkspaceManifest,
 )
 
 
@@ -36,8 +37,10 @@ class AgentWorkspaceBuilder:
 
     def build(
         self, snapshot: NotebookSnapshot, scope: FrozenTurnScope,
-        *, correction: str | None = None,
+        *, write_scope: str = "blocking", correction: str | None = None,
     ) -> AgentWorkspace:
+        if write_scope == "trusted":
+            return self._build_trusted(snapshot, scope, correction=correction)
         root = Path(tempfile.mkdtemp(prefix=f"notebook-turn-{scope.turn_id[:8]}-"))
         try:
             editable_dir = root / "editable"
@@ -113,7 +116,11 @@ class AgentWorkspaceBuilder:
                                 "Answer in your final message.",
                                 "Do not run shell commands.", ""]
             if context:
-                instructions.extend(["", "Explicit context cells:"])
+                instructions.extend([
+                    "",
+                    "Focus cells — most relevant to this request (read-only unless also "
+                    "listed as editable above):",
+                ])
                 instructions.extend(
                     f"- {item.cell_id} (cell {item.index}, {item.cell_type}): {item.preview}"
                     for item in context
@@ -134,6 +141,107 @@ class AgentWorkspaceBuilder:
                 )
                 error.add_note(str(cleanup_error))
             raise
+
+    def _build_trusted(
+        self, snapshot: NotebookSnapshot, scope: FrozenTurnScope,
+        *, correction: str | None = None,
+    ) -> AgentWorkspace:
+        """Trusted turn: every cell is writable; structure.json is agent-owned.
+
+        The whole notebook is materialized under ``cells/`` and the ordered
+        ``structure.json`` is left agent-writable (NOT protected). Only
+        ``notebook.readonly.ipynb`` and ``INSTRUCTIONS.md`` are protected. The
+        returned manifest is the frozen original the backend diffs against — the
+        on-disk structure file is never trusted for the original order.
+        """
+        root = Path(tempfile.mkdtemp(prefix=f"notebook-turn-{scope.turn_id[:8]}-"))
+        try:
+            cells_dir = root / "cells"
+            cells_dir.mkdir()
+            cells: list[StructuralCellManifest] = []
+            structure_entries: list[dict] = []
+            for index, cell in enumerate(snapshot.notebook["cells"]):
+                cell_id = cell["id"]
+                suffix = ".py" if cell["cell_type"] == "code" else ".md"
+                relative = f"cells/cell_{cell_id}{suffix}"
+                source = _source(cell)
+                (root / relative).write_text(source, encoding="utf-8")
+                cells.append(
+                    StructuralCellManifest(cell_id, index, cell["cell_type"], relative, source)
+                )
+                structure_entries.append(
+                    {"cellId": cell_id, "cellType": cell["cell_type"], "source": relative}
+                )
+            manifest = TrustedWorkspaceManifest(
+                notebook_path="notebook.readonly.ipynb",
+                structure_path="structure.json",
+                cells=tuple(cells),
+                # In a Trusted turn editable and context collapse into a single
+                # attention hint (the whole notebook is editable regardless), so
+                # both sets are forwarded as attention, editable first, deduped.
+                context_cell_ids=tuple(
+                    dict.fromkeys((*scope.editable_cell_ids, *scope.context_cell_ids))
+                ),
+            )
+            # Agent-writable ordered structure. The agent edits this to
+            # add/delete/reorder/retype; the backend re-derives ops from it.
+            (root / "structure.json").write_text(
+                json.dumps({"cells": structure_entries}, indent=2) + "\n", encoding="utf-8"
+            )
+            notebook_path = root / "notebook.readonly.ipynb"
+            notebook_path.write_text(
+                json.dumps(snapshot.notebook, ensure_ascii=False, indent=1) + "\n",
+                encoding="utf-8",
+            )
+            instructions = self._trusted_instructions(scope, manifest, correction)
+            (root / "INSTRUCTIONS.md").write_text("\n".join(instructions) + "\n", encoding="utf-8")
+            protected = ["notebook.readonly.ipynb", "INSTRUCTIONS.md"]
+            baseline = {name: _hash(root / name) for name in protected}
+            os.chmod(notebook_path, 0o444)
+            return AgentWorkspace(root=root, manifest=manifest, baseline_hashes=baseline)
+        except BaseException as error:
+            try:
+                self._remove_root(root)
+            except WorkspaceCleanupError as cleanup_error:
+                logger.exception(
+                    "Failed to remove partially built trusted workspace %s", root,
+                )
+                error.add_note(str(cleanup_error))
+            raise
+
+    @staticmethod
+    def _trusted_instructions(
+        scope: FrozenTurnScope, manifest: TrustedWorkspaceManifest,
+        correction: str | None,
+    ) -> list[str]:
+        lines = [
+            scope.prompt,
+            "",
+            "Trusted turn: the WHOLE notebook is editable.",
+            "- Every cell has a writable source file under cells/. The read-only whole",
+            "  notebook is notebook.readonly.ipynb (do not edit it).",
+            "- structure.json is the ordered list of cells. Edit it to change structure:",
+            "  * Edit source: change the referenced file under cells/.",
+            '  * Add a cell: insert an entry {"op": "add", "cellType": "code"|"markdown"|"raw",',
+            '    "source": "cells/<new-file>"} with NO cellId, and create that source file.',
+            "  * Delete a cell: remove its entry from the list.",
+            "  * Reorder: change entry order in the list.",
+            '  * Change type: change an existing entry\'s "cellType".',
+            "- Editing is optional — permission is a grant, not a requirement. Answer the",
+            "  request in your final message; only change files when the request calls for it.",
+            "- Do not run shell commands. Do not edit notebook.readonly.ipynb or INSTRUCTIONS.md.",
+            "- Each entry's source must be a distinct file directly under cells/.",
+            "",
+        ]
+        if manifest.context_cell_ids:
+            lines.append(
+                "Focus cells — most relevant to this request (you may edit any cell): "
+                + ", ".join(manifest.context_cell_ids)
+            )
+            lines.append("")
+        if correction:
+            lines.extend(["Previous structure.json error to correct:", correction, ""])
+        return lines
 
     def destroy(self, workspace: AgentWorkspace) -> None:
         self._remove_root(workspace.root)

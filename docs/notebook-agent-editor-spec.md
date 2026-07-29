@@ -168,13 +168,22 @@ Responsibilities:
 
 - Track editable cells for the next agent request.
 - Track read-only context cells for the next agent request.
-- Expire scope after each terminal agent turn, including failure and cancellation.
+- Expire scope after a terminal turn that applied changes; preserve the selection
+  after a terminal turn that applied nothing (see the no-op preservation rule below).
 - Preserve terminal turn scope and outcome in visible in-session history for audit/debugging.
 
 Rules:
 
 - Permissions are turn-level, not thread-level.
-- A cell mentioned as editable in one turn is not editable in the next turn unless explicitly added again.
+- A cell mentioned as editable in one turn is not editable in the next turn unless
+  explicitly added again — **except** when the intervening turn applied no changes.
+- **No-op scope preservation.** When a turn ends without applying any change (for
+  example the agent asks a clarifying question, or a read-only answer), the notebook
+  revision is unchanged, so the editable/context selection is kept for the follow-up
+  turn instead of being cleared. The user can reply to the clarification without
+  re-scoping. The selection expires as usual once a turn applies an edit, on session
+  replacement, or when the user clears it. Preservation only applies while the kept
+  selection still matches the current session and revision.
 - Drag/drop into chat adds a cell to the editable set by default.
 - Cell gutter controls expose both "Add as context" and "Add to edit".
 - Cells can also be selected in bulk (click, shift-click for a range) and scoped
@@ -583,6 +592,66 @@ Edit permission is a grant, not an obligation:
   immediately and made reviewable through the diff, per-cell revert, and
   whole-turn undo. There is no separate un-applied proposal state in v1; a held
   "pending change the user must accept" model is deferred.
+
+## Trusted Mode (per-turn, whole-notebook structural editing)
+
+Each turn carries a `writeScope` of `blocking` (the default, above) or `trusted`.
+The toggle is **sticky** in the UI: it persists the last-selected scope across
+turns until changed. Trusted has effect only in Edit mode (Plan writes nothing).
+
+In a **Trusted** turn the editable set is implicitly the **whole notebook** and the
+agent may perform full structural edits — **add, delete, reorder, and change the
+type of** any cell, in addition to editing source. This deliberately widens the
+otherwise-forbidden v1 operations for trusted turns only; Blocking turns keep the
+scoped, source-only boundary unchanged.
+
+The gate is kept, not dropped. The backend still owns mutation:
+
+- The agent edits an agent-writable `structure.json` (ordered cell list) plus a
+  per-cell source file under `cells/`; **adds carry no cell id** (`{"op":"add", …}`)
+  so no id string is ever a sentinel.
+- The backend diffs the returned structure against the frozen original (held
+  immutably in memory) to **derive** ordered ops, then **validates** them:
+  well-formed JSON, supported `cellType`, resolvable non-duplicate ids, containment
+  under `cells/`, and a **zero-cell floor** (a turn may not empty the notebook).
+- Structural apply is **atomic** and guarded on **session id + revision** (a mid-turn
+  session replacement cannot cause a wrong-notebook apply). Whole-turn undo restores
+  the pre-turn checkpoint verbatim.
+- Malformed-structure errors are **retryable** (bounded, fed back as a correction);
+  scope violations remain non-retryable but cannot occur in Trusted.
+- Trusted turns **apply structure only and do not auto-execute**; the user runs cells
+  after review. Newly added cells are marked `metadata.agent_authored` and shown with
+  a persistent provenance badge, because they can introduce executable code the user
+  never scoped — review-before-run is load-bearing. The risky-cell execution approval
+  flow is unchanged.
+
+Attention only: in a Trusted turn the editable/context distinction is removed. The
+whole notebook is writable, so the per-cell "allow agent edit" affordance is hidden and
+any pinned cell — however it was added, including drag-and-drop, which defaults to a
+Focus pin in Trusted — is a **Focus** cell: an attention hint, not a permission grant.
+Both the editable and context sets collapse into a single Focus/attention list that is
+forwarded to the agent (editable first, deduped). The scope panel renders every pin the
+same, and the turn-history entry reads "all editable" rather than per-set counts. Revert
+granularity is **whole-turn undo**; per-operation structural revert is deferred.
+
+Full design and review: `docs/plans/2026-07-28-trusted-mode-structural-editing.md`.
+
+## Focus (attention) vs. editability
+
+The turn-scope pins carry two independent axes that earlier UI wording ("context")
+conflated:
+
+- **Focus / attention** — *which cells are most relevant to this request.* User-facing
+  label and the agent prompt both call this **Focus**. True in both modes.
+- **Editability** — *may the agent edit this cell.* A per-cell grant in Blocking (the
+  "allow agent edit" gutter control); implicit (whole notebook) in Trusted.
+
+The pin never encodes permission. The agent learns edit-vs-read-only only from the
+editable grant, so the Focus label and prompt line are permission-neutral: Blocking says
+"Focus cells … (read-only unless also listed as editable above)", Trusted says "Focus
+cells … (you may edit any cell)". (Internally the data model still names the attention set
+`context` — API fields and CSS classes are unchanged; only the user-facing label and prompt
+wording are "Focus".)
 
 ## Cell Identity
 
@@ -1586,6 +1655,58 @@ Mitigation: Use bounded timeouts, process groups, escalation to forced cleanup,
 kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
 
 ## Decision Log
+
+### Per-Turn Trusted Mode (whole-notebook structural editing)
+
+- Decision: Add a per-turn `writeScope: blocking | trusted`. Trusted makes the whole
+  notebook editable and allows structural ops (add/delete/reorder/retype), while the
+  backend keeps deriving/validating/applying every change (gate kept, allow-list widened).
+- Alternatives: (a) source-only wider set; (b) drop the gate and trust the agent's
+  output with only human diff review; (c) session-wide or global trusted persistence.
+- Rationale: Removes the per-turn scoping burden when the user trusts the agent, without
+  surrendering the core invariant "agent integration must not own notebook mutation."
+  Rejected dropping the gate (loses precise validation) and non-per-turn persistence
+  (breaks the turn-level permission invariant; the toggle is sticky in the UI only).
+- Guards (from adversarial review): adds carry no id sentinel; `structure.json` and all
+  `cells/` reads go through one hardened reader (`O_NOFOLLOW`, regular-file, `st_nlink==1`,
+  size) with `resolve()`-based containment; session+revision-guarded atomic apply; bounded
+  structural-format retry; no auto-execution; `agent_authored` provenance marker.
+- Deferred: per-operation structural revert; injecting ghost-tombstone rows for deleted
+  cells into the live notebook view (deletes are surfaced in the turn's structural summary
+  instead, which avoids reconciling live-cell and ghost-cell indices during review).
+- Governance: this weakens the "only editable-set cells may receive agent writes" guarantee
+  and was made with explicit user approval, per AGENTS.md.
+
+### No-Op Turn Scope Preservation
+
+- Decision: Preserve the editable/context selection after a terminal turn that applied no
+  changes (e.g. the agent asks a clarifying question); expire it only once a turn applies an
+  edit, on session replacement, or when the user clears it.
+- Alternatives: (a) always expire after any terminal turn (prior behavior); (b) make scope
+  fully thread-level/persistent.
+- Rationale: A clarifying-question turn completes without touching the notebook, so the
+  document revision is unchanged and the frozen selection is still valid. Expiring it forced
+  the user to re-scope the same cells just to answer the agent's question (the follow-up
+  became a read-only turn). Preserving on no-op keeps the turn-level model intact — the
+  selection is only kept while it still matches the current session and revision, and any
+  applied edit expires it as before — while removing the re-scoping friction. Applies to both
+  Blocking and Trusted turns.
+
+### "Focus" Terminology and Trusted Scope UI
+
+- Decision: Rename the user-facing "context" pin to **Focus** (salience — "these cells are
+  most relevant"), and separate it cleanly from editability (permission). In Trusted, remove
+  the "editable" affordance entirely: hide the per-cell "allow agent edit" button, default
+  drag-and-drop to a Focus pin, render every pin the same, and hide per-set counts.
+- Alternatives: keep "context" (carries a read-only connotation that is wrong in Trusted,
+  where a pin usually marks the edit target); keep a per-cell editable control in Trusted
+  (meaningless — the whole notebook is editable); rename the internal data model too
+  (invasive contract change with no user benefit).
+- Rationale: "context" conflated salience with permission, so the same pin meant "read-only
+  reference" in Blocking but "the thing to edit" in Trusted. Splitting the axes — Focus =
+  salience, editability = permission — makes the pin mean one thing in both modes, with the
+  prompt stating the permission explicitly. Internal names (`contextCellIds`, `/turn-scope/
+  context-cells`, CSS classes) are left unchanged to avoid a large, risk-heavy rename.
 
 ### Product Shape
 

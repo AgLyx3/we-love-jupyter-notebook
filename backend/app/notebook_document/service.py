@@ -330,6 +330,100 @@ class NotebookDocumentService:
             self._last_mutation_owner = owner
             return self._snapshot_unlocked()
 
+    def apply_structural_changes_under_lease(
+        self, *, next_cells: list[dict[str, Any]], expected_session_id: str,
+        expected_revision: int, owner: str, lease: MutationLease,
+    ) -> NotebookSnapshot:
+        """Replace the whole ordered cell list atomically for a Trusted turn.
+
+        ``next_cells`` is an ordered list of ``{"origin_id", "cell_type",
+        "source"}``. Cells with an ``origin_id`` inherit that existing cell's
+        outputs/metadata (outputs dropped only when retyped away from code); cells
+        with ``origin_id is None`` are new (fresh id, ``metadata.agent_authored``,
+        empty outputs). Guarded on BOTH session id and revision so a session
+        replacement mid-turn cannot cause a wrong-notebook apply.
+        """
+        self.assert_lease(lease)
+        with self._lock:
+            self._require_notebook()
+            if expected_session_id != self._session_id:
+                raise SessionConflict(self._session_id or "")
+            if expected_revision != self._revision:
+                raise RevisionConflict(self._revision)
+            # Defensive: the validator (derive_structural_plan) already guarantees a
+            # non-empty, duplicate-free cell list, but this is a public method — keep
+            # the invariants local so a future caller cannot commit a zero-cell or
+            # duplicate-id (corrupt) notebook. nbformat.validate does not reliably
+            # reject duplicate cell ids.
+            if not next_cells:
+                raise NotebookImportError("a notebook must retain at least one cell")
+            origin_ids = [
+                spec["origin_id"] for spec in next_cells
+                if spec.get("origin_id") is not None
+            ]
+            if len(origin_ids) != len(set(origin_ids)):
+                raise NotebookImportError("structural apply received duplicate origin cell ids")
+            current_by_id = {cell["id"]: cell for cell in self._notebook["cells"]}
+            used_ids = set(current_by_id)
+            built: list[dict[str, Any]] = []
+            for spec in next_cells:
+                origin_id = spec.get("origin_id")
+                cell_type = spec["cell_type"]
+                source = spec["source"]
+                if origin_id is not None:
+                    base = current_by_id.get(origin_id)
+                    if base is None:
+                        raise CellNotFound(origin_id)
+                    cell = copy.deepcopy(base)
+                    cell["source"] = source
+                    built.append(self._shape_cell(cell, cell_type))
+                else:
+                    built.append(self._make_added_cell(cell_type, source, used_ids))
+            # Copy only the notebook envelope (metadata/nbformat); the cells in
+            # `built` are already independent deep copies, so re-copying every
+            # existing cell (and its outputs) via a whole-notebook deepcopy is waste.
+            candidate = {key: copy.deepcopy(value) for key, value in self._notebook.items() if key != "cells"}
+            candidate["cells"] = built
+            try:
+                nbformat.validate(nbformat.from_dict(candidate))
+            except (NotebookValidationError, AttributeError, TypeError, ValueError) as error:
+                raise NotebookImportError() from error
+            if len(self._serialize_notebook(candidate)) > MAX_NOTEBOOK_BYTES:
+                raise NotebookSizeError(MAX_NOTEBOOK_BYTES)
+            self._notebook = candidate
+            self._revision += 1
+            self._dirty = True
+            self._last_mutation_owner = owner
+            return self._snapshot_unlocked()
+
+    @staticmethod
+    def _shape_cell(cell: dict[str, Any], cell_type: str) -> dict[str, Any]:
+        """Coerce a cell dict to the nbformat shape for ``cell_type``.
+
+        Same-type cells keep their outputs (a source edit does not clear them,
+        matching the source-only applier); a change TO code adds empty
+        outputs/exec-count; a change AWAY from code drops them.
+        """
+        cell["cell_type"] = cell_type
+        cell.setdefault("metadata", {})
+        if cell_type == "code":
+            cell.setdefault("execution_count", None)
+            cell.setdefault("outputs", [])
+        else:
+            cell.pop("execution_count", None)
+            cell.pop("outputs", None)
+        return cell
+
+    def _make_added_cell(
+        self, cell_type: str, source: str, used_ids: set[str],
+    ) -> dict[str, Any]:
+        cell_id = _new_cell_id()
+        while cell_id in used_ids:
+            cell_id = _new_cell_id()
+        used_ids.add(cell_id)
+        cell = {"id": cell_id, "source": source, "metadata": {"agent_authored": True}}
+        return self._shape_cell(cell, cell_type)
+
     def export_notebook(self) -> tuple[str, bytes]:
         snapshot = self.get_snapshot()
         content = self._serialize_notebook(snapshot.notebook)

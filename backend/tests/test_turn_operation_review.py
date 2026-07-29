@@ -6,6 +6,8 @@ The pure diff/compose layer is tested in test_turn_operations.py.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from backend.app.agent_turns.operations import ACCEPTED, PENDING, REJECTED
@@ -459,6 +461,83 @@ class TestRejectAllWithStaleCells:
         assert source_of(updated, "intro") == "# Example notebook\n"
         assert source_of(updated, "editable") == "hand written\n"
         assert turns.stale_cell_ids(turns.get(turn.turn_id)) == frozenset({"editable"})
+
+
+class TestTrustedTurnsHaveNoLedger:
+    """Per-operation review covers source hunks against stable cell ids.
+
+    A Trusted turn rewrites the whole notebook — it may add, delete, reorder and
+    retype cells — so a per-hunk recompose against a cell id is not well defined.
+    Those turns stay whole-turn undo only, and the ledger must stay empty rather
+    than half-describing a structural change.
+    """
+
+    def trusted_turn(self, notebook_payload):
+        documents = NotebookDocumentService()
+        snapshot = documents.import_notebook(notebook_payload())
+        scopes = TurnScopeService(documents)
+        structure = json.dumps({"cells": [
+            {"cellId": "intro", "cellType": "markdown", "source": "cells/cell_intro.md"},
+            {"cellId": "editable", "cellType": "code", "source": "cells/cell_editable.py"},
+            {"op": "add", "cellType": "markdown", "source": "cells/new_1.md"},
+        ]})
+        turns = AgentTurnService(
+            documents=documents, scopes=scopes,
+            adapter=FakeAgentAdapter([FakeAttempt(edits={
+                "structure.json": structure,
+                "cells/cell_editable.py": "value = 99\n",
+                "cells/new_1.md": "## summary\n",
+            })]), timeout=1,
+        )
+        turn = turns.start(
+            prompt="restructure", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision, write_scope="trusted",
+            background=False,
+        )
+        assert turn.state == "completed", turn.error
+        return documents, turns, snapshot, turn
+
+    def test_a_trusted_turn_records_changes_but_no_operations(
+        self, notebook_payload,
+    ):
+        _documents, _turns, _snapshot, turn = self.trusted_turn(notebook_payload)
+        # changes are populated for the inline diff, deliberately display-only.
+        assert turn.changes
+        assert turn.operations == ()
+        assert turn.structural_ops
+
+    def test_per_cell_revert_is_refused_on_a_trusted_turn(self, notebook_payload):
+        _documents, turns, snapshot, turn = self.trusted_turn(notebook_payload)
+        with pytest.raises(RevertConflict):
+            turns.revert_cell(
+                turn.turn_id, "editable", session_id=snapshot.session_id,
+                expected_revision=turn.applied_revision,
+            )
+
+    def test_reject_all_is_a_no_op_on_a_trusted_turn(self, notebook_payload):
+        documents, turns, snapshot, turn = self.trusted_turn(notebook_payload)
+        before = documents.get_snapshot()
+        updated = turns.reject_operations(
+            turn.turn_id, None, session_id=snapshot.session_id,
+            expected_revision=turn.applied_revision,
+        )
+        assert updated.revision == before.revision
+
+    def test_a_trusted_turn_reports_no_stale_cells(self, notebook_payload):
+        _documents, turns, _snapshot, turn = self.trusted_turn(notebook_payload)
+        # An empty ledger must not be read as "everything drifted", which would
+        # put a "can no longer be undone" banner on every changed cell.
+        assert turns.stale_cell_ids(turns.get(turn.turn_id)) == frozenset()
+
+    def test_whole_turn_undo_still_works(self, notebook_payload):
+        documents, turns, snapshot, turn = self.trusted_turn(notebook_payload)
+        assert turns.is_undo_eligible(turns.get(turn.turn_id))
+        restored = turns.undo(
+            turn.turn_id, session_id=snapshot.session_id,
+            expected_revision=turn.applied_revision,
+        )
+        assert len(restored.notebook["cells"]) == 2
+        assert source_of(restored) == "value = 1\n"
 
 
 class TestStalenessIsDerived:
