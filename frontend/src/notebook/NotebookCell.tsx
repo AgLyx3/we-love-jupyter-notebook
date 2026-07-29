@@ -136,6 +136,11 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
   const description = `${cell.cellType} cell ${cell.index + 1}`;
   const dependentDisabled = disabled || sourceActionsDisabled;
   const stale = operations.some((item) => item.state === "stale");
+  // T1: an added cell carries a structural_add operation and no `change`
+  // (it has no previous source to diff), so the review bar keys off either.
+  const added = operations.some((item) => item.kind === "structural_add");
+  const reviewable = Boolean(change)
+    || operations.some((item) => item.state === "pending" || item.state === "stale");
   // Outputs are suspect only until the cell is executed again. Deriving this
   // from the ledger alone would pin the warning forever, since the operation
   // stays rejected no matter how many times the user re-runs. Remember the
@@ -171,8 +176,8 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
           the hover-revealed action cluster above: the cluster is invisible until
           hover, unlabelled, and shared with scope/run actions, so the revert
           control was there but effectively undiscoverable. */}
-      {change && <div className="cell-review">
-        <span className="cell-review-label"><Bot /> {stale ? "Agent change can no longer be undone" : "Agent changed this cell"}</span>
+      {reviewable && <div className="cell-review">
+        <span className="cell-review-label"><Bot /> {stale ? "Agent change can no longer be undone" : added ? "Agent added this cell" : "Agent changed this cell"}</span>
         {!revertable
           // A Trusted turn rewrote the whole notebook, so this cell's change
           // cannot be separated from the adds, deletes and moves around it.

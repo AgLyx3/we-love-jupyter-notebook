@@ -39,6 +39,11 @@ REJECTED = "rejected"
 APPLIED_STATES = frozenset({PENDING, ACCEPTED})
 
 KIND_SOURCE_HUNK = "source_hunk"
+# A whole cell the turn added. Position-independent to undo: rejecting removes
+# that one cell by id, guarded only by the cell itself still holding the source
+# the turn wrote. delete/move/retype are NOT ledger kinds — undoing those needs
+# anchor math over an ordering other ops also changed (design doc §12.4).
+KIND_STRUCTURAL_ADD = "structural_add"
 
 
 @dataclass(frozen=True)
@@ -62,9 +67,26 @@ class TurnOperation:
     operation_id: str
     cell_id: str
     ordinal: int
-    hunk: SourceHunk
+    # Present for source hunks, None for structural kinds.
+    hunk: SourceHunk | None = None
     kind: str = KIND_SOURCE_HUNK
     state: str = PENDING
+    # For structural_add only: sha256 of the source the turn wrote into the
+    # added cell. A fixed-size guard, not retained text — undoing the add is
+    # allowed only while the cell still hashes to this, because deleting a cell
+    # the user has since edited would destroy their work.
+    source_hash: str | None = None
+
+
+def build_add_operation(
+    *, turn_id: str, cell_id: str, source: str,
+) -> TurnOperation:
+    """One reviewable operation for a whole cell the turn added."""
+    return TurnOperation(
+        operation_id=operation_id(turn_id, cell_id, 0),
+        cell_id=cell_id, ordinal=0, kind=KIND_STRUCTURAL_ADD,
+        source_hash=source_hash(source),
+    )
 
 
 def operation_id(turn_id: str, cell_id: str, ordinal: int) -> str:
@@ -194,7 +216,12 @@ def compose(
     """
     previous = split_lines(previous_source)
     following = split_lines(next_source)
-    ordered = sorted(operations, key=lambda item: item.ordinal)
+    # Structural operations have no hunk and do not participate in source
+    # composition; callers pass a cell's full operation list for convenience.
+    ordered = sorted(
+        (item for item in operations if item.hunk is not None),
+        key=lambda item: item.ordinal,
+    )
     composed: list[str] = []
     cursor = 0
     for operation in ordered:

@@ -53,8 +53,13 @@ def serialize_operations(
             "state": "stale" if (
                 item.state == "pending" and item.cell_id in stale_cell_ids
             ) else item.state,
-            "previousRange": [item.hunk.prev_start, item.hunk.prev_end],
-            "nextRange": [item.hunk.next_start, item.hunk.next_end],
+            # Structural operations (whole added cells) have no line ranges.
+            "previousRange": (
+                [item.hunk.prev_start, item.hunk.prev_end] if item.hunk else None
+            ),
+            "nextRange": (
+                [item.hunk.next_start, item.hunk.next_end] if item.hunk else None
+            ),
         }
         for item in turn.operations
     ]

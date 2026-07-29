@@ -124,7 +124,11 @@ export default function NotebookView({ notebook, scope, turn, trusted = false, d
       cellRef={(node) => { if (node) refs.current.set(cell.cellId, node); else refs.current.delete(cell.cellId); }}
       change={turn?.changes.find((change) => change.cellId === cell.cellId)}
       operations={(turn?.operations ?? []).filter((item) => item.cellId === cell.cellId)}
-      revertable={turn?.writeScope !== "trusted"}
+      // T1: on a Trusted turn a cell is individually revertible exactly when it
+      // carries ledger operations (edit on a surviving same-type cell, or an
+      // add). Cells involved in delete/move/retype have none and stay
+      // whole-turn-undo only, with the explanatory note instead of controls.
+      revertable={turn?.writeScope !== "trusted" || (turn?.operations ?? []).some((item) => item.cellId === cell.cellId)}
       onFocus={() => setFocused(cell.cellId)}
       onSelect={(event) => selectCell(cell.cellId, event)} onContextMenu={(event) => openMenu(cell.cellId, event)}
       onDirtyChange={(dirty) => onDirtyChange(cell.cellId, dirty)}

@@ -18,13 +18,14 @@ from ..agent_workspace.workspace_builder import AgentWorkspaceBuilder
 from ..boundary_validation.validator import BoundaryValidator, CandidateCellSourceChange
 from ..boundary_validation.structural_validator import StructuralOp, derive_structural_plan
 from ..notebook_document.models import (
-    CellNotFound, MutationConflict, NotebookDomainError, RevisionConflict,
-    SessionConflict,
+    CellNotFound, MutationConflict, NotebookDomainError, NotebookImportError,
+    RevisionConflict, SessionConflict,
 )
 from ..notebook_document.service import NotebookDocumentService
 from .operations import (
-    ACCEPTED, APPLIED_STATES, PENDING, REJECTED, TurnOperation, build_operations,
-    compose, is_stale, with_state,
+    ACCEPTED, APPLIED_STATES, KIND_STRUCTURAL_ADD, PENDING, REJECTED,
+    TurnOperation, build_add_operation, build_operations, compose, is_stale,
+    source_hash, with_state,
 )
 from ..turn_scope.models import FrozenTurnScope
 from ..turn_scope.service import TurnScopeService
@@ -610,17 +611,43 @@ class AgentTurnService:
             for cell in plan.next_cells
             if cell.origin_id is not None and cell.source != frozen_source.get(cell.origin_id, "")
         )
+        # T1 ledger for structural turns: only the position-independent op kinds
+        # are individually reviewable (design doc §12.2-12.3).
+        # - `edit` on a surviving, same-type cell: source recompose, apply, and
+        #   the stale guard all key off the cell id, never its index, so the
+        #   ordinary hunk ledger applies unchanged even if the cell was moved.
+        # - `add`: undoing means deleting that one cell by its realized id,
+        #   guarded only by the cell itself; needs no anchor math.
+        # - `delete` / `move` / `retype` stay whole-turn: rejecting them needs a
+        #   notebook-level compose (T2), and retype additionally drops outputs
+        #   that only the checkpoint can restore. Cells they touch get no
+        #   operations, which is what keeps their per-cell controls hidden.
+        retyped = {
+            op.cell_id for op in plan.ops if op.op == "retype" and op.cell_id
+        }
+        # apply_structural_changes_under_lease builds the committed cell list in
+        # next_cells order, so the returned snapshot aligns positionally with
+        # plan.next_cells; that is how an add's realized id is recovered.
+        applied_cells = updated.notebook["cells"]
+        if len(applied_cells) != len(plan.next_cells):
+            raise RuntimeError("structural apply returned a misaligned cell list")
+        operations: list[TurnOperation] = []
+        for planned, applied in zip(plan.next_cells, applied_cells):
+            if planned.origin_id is None:
+                operations.append(build_add_operation(
+                    turn_id=turn.turn_id, cell_id=applied["id"],
+                    source=planned.source,
+                ))
+            elif planned.origin_id not in retyped:
+                operations.extend(build_operations(
+                    turn_id=turn.turn_id, cell_id=planned.origin_id,
+                    previous_source=frozen_source.get(planned.origin_id, ""),
+                    next_source=planned.source,
+                ))
         with self._lock:
             turn.structural_ops = tuple(plan.ops)
             turn.changes = edits
-            # Deliberately no source-hunk ledger for Trusted turns. `edits` is
-            # display-only: the same turn may have added, deleted or reordered
-            # cells, so a per-hunk recompose against a stable cell id is not
-            # well defined. Leaving operations empty is what makes the review
-            # bar and per-cell Keep/Undo stay hidden, and what makes the client
-            # fall back to comparing sources for the inline diff. Trusted turns
-            # are whole-turn undo only until structural ops join the ledger.
-            turn.operations = ()
+            turn.operations = tuple(operations)
             turn.applied_revision = updated.revision
             self._latest_applied_turn_id = turn.turn_id
         if self.events is not None:
@@ -698,22 +725,41 @@ class AgentTurnService:
         sources = {change.cell_id: change for change in turn.changes}
         stale: set[str] = set()
         for cell_id in {item.cell_id for item in turn.operations}:
-            change = sources.get(cell_id)
+            for_cell = [
+                item for item in turn.operations if item.cell_id == cell_id
+            ]
             cell = cells.get(cell_id)
+            add = next(
+                (item for item in for_cell if item.kind == KIND_STRUCTURAL_ADD),
+                None,
+            )
+            if add is not None:
+                # An added cell has no entry in `changes`; its expected content
+                # is whatever the turn wrote. A rejected add is *supposed* to be
+                # missing from the document, so only judge applied states.
+                if add.state in APPLIED_STATES and (
+                    cell is None
+                    or source_hash(self._cell_source(cell)) != add.source_hash
+                ):
+                    stale.add(cell_id)
+                continue
+            change = sources.get(cell_id)
             if change is None or cell is None:
                 stale.add(cell_id)
                 continue
-            source = cell.get("source", "")
-            source = "".join(source) if isinstance(source, list) else source
             if is_stale(
-                current_source=source, previous_source=change.previous_source,
+                current_source=self._cell_source(cell),
+                previous_source=change.previous_source,
                 next_source=change.next_source,
-                operations=[
-                    item for item in turn.operations if item.cell_id == cell_id
-                ],
+                operations=for_cell,
             ):
                 stale.add(cell_id)
         return frozenset(stale)
+
+    @staticmethod
+    def _cell_source(cell: dict[str, Any]) -> str:
+        source = cell.get("source", "")
+        return "".join(source) if isinstance(source, list) else source
 
     def accept_operations(
         self, turn_id: str, operation_ids: Sequence[str] | None, *, session_id: str,
@@ -782,14 +828,52 @@ class AgentTurnService:
                         operations = with_state(
                             operations, target.operation_id, REJECTED
                         )
+                add_targets = tuple(
+                    item for item in targets
+                    if item.kind == KIND_STRUCTURAL_ADD
+                )
+                hunk_cell_ids = {
+                    item.cell_id for item in targets
+                    if item.kind != KIND_STRUCTURAL_ADD
+                }
+                self._guard_add_targets_locked(snapshot, add_targets, conflict)
                 changes = self._recompose_locked(
                     snapshot, sources, turn.operations, operations,
-                    {target.cell_id for target in targets}, conflict,
+                    hunk_cell_ids, conflict,
                 )
-            updated = self.documents.apply_source_changes_under_lease(
-                changes=changes, expected_revision=expected_revision,
-                owner=f"reject:{turn_id}", lease=lease,
-            )
+            if add_targets:
+                # Undoing an add removes a whole cell, so the commit goes
+                # through the hardened structural path — one atomic apply for
+                # the dropped cells and any recomposed sources together, and the
+                # zero-cell floor / duplicate-id checks come with it.
+                dropped = {item.cell_id for item in add_targets}
+                next_cells = [
+                    {
+                        "origin_id": cell["id"],
+                        "cell_type": cell.get("cell_type", "code"),
+                        "source": changes.get(
+                            cell["id"], self._cell_source(cell)
+                        ),
+                    }
+                    for cell in snapshot.notebook["cells"]
+                    if cell["id"] not in dropped
+                ]
+                try:
+                    updated = self.documents.apply_structural_changes_under_lease(
+                        next_cells=next_cells, expected_session_id=session_id,
+                        expected_revision=expected_revision,
+                        owner=f"reject:{turn_id}", lease=lease,
+                    )
+                except NotebookImportError as error:
+                    # e.g. undoing the only remaining cell: a notebook must
+                    # keep at least one. A review action must not 400 as if the
+                    # request were malformed.
+                    raise conflict() from error
+            else:
+                updated = self.documents.apply_source_changes_under_lease(
+                    changes=changes, expected_revision=expected_revision,
+                    owner=f"reject:{turn_id}", lease=lease,
+                )
             with self._lock:
                 stored = self._turns.get(turn_id)
                 if stored is not None:
@@ -827,6 +911,24 @@ class AgentTurnService:
         if missing:
             raise OperationNotFound(missing[0])
         return tuple(known[item] for item in operation_ids)
+
+    def _guard_add_targets_locked(
+        self, snapshot, add_targets: tuple[TurnOperation, ...],
+        conflict: type[NotebookDomainError],
+    ) -> None:
+        """Refuse to delete an added cell the user has since touched.
+
+        Per-op-local by design: undoing an add needs nothing from the rest of
+        the notebook, only that this one cell still holds exactly the source the
+        turn wrote. Missing (already deleted by hand) or drifted → conflict.
+        """
+        cells = {cell["id"]: cell for cell in snapshot.notebook["cells"]}
+        for target in add_targets:
+            cell = cells.get(target.cell_id)
+            if cell is None or source_hash(
+                self._cell_source(cell)
+            ) != target.source_hash:
+                raise conflict()
 
     def _recompose_locked(
         self, snapshot, sources, current: tuple[TurnOperation, ...],
@@ -871,19 +973,21 @@ class AgentTurnService:
         so there is a single reject path rather than a parallel hash-guarded one.
         """
         turn = self._require_revertible(turn_id)
-        # Trusted turns are whole-turn undo only; per-cell source diffs are shown
-        # for review but per-cell revert is not offered (R20). The operation
-        # ledger does not change this: it records source hunks against stable
-        # cell ids, and a Trusted turn may have added, deleted or reordered the
-        # cells around them, so a per-cell recompose is not well defined.
-        if turn.write_scope == "trusted":
-            raise RevertConflict()
-        if not any(item.cell_id == cell_id for item in turn.changes):
-            raise CellNotFound(cell_id)
         operation_ids = [
             item.operation_id for item in turn.operations
             if item.cell_id == cell_id and item.state in APPLIED_STATES
         ]
+        # T1 narrows main's R20 rather than removing it: on a Trusted turn, a
+        # cell is individually revertible exactly when it has ledger operations
+        # (an `edit` on a surviving same-type cell, or an `add`). Cells caught
+        # up in delete/move/retype have none — undoing those needs the
+        # notebook-level compose (design doc §12.4) — so they keep the hard 409.
+        if turn.write_scope == "trusted" and not operation_ids:
+            raise RevertConflict()
+        if not operation_ids and not any(
+            item.cell_id == cell_id for item in turn.changes
+        ):
+            raise CellNotFound(cell_id)
         return self.reject_operations(
             turn_id, operation_ids, session_id=session_id,
             expected_revision=expected_revision, conflict=RevertConflict,
@@ -1104,10 +1208,10 @@ class AgentTurnService:
             values.extend((op.op, op.cell_id or "", str(op.detail)))
         if turn.error is not None:
             values.append(str(turn.error))
-        # Operations are index ranges over sources already counted above, so
-        # they add a fixed cost per hunk rather than duplicating any text.
+        # Operations are index ranges (or a fixed-size source hash for adds)
+        # over sources already counted above — a fixed per-op cost, no text.
         return (
             sum(len(value.encode("utf-8")) for value in values)
-            + 64 * len(turn.operations)
+            + 192 * len(turn.operations)
             + 512
         )

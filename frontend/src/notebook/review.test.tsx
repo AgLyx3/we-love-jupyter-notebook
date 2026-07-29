@@ -217,6 +217,27 @@ describe("per-operation review", () => {
     await waitFor(() => expect(calls.filter((item) => /operations\/.+\/accept$/.test(item.path))).toHaveLength(2));
   });
 
+  it("offers Keep/Undo on a trusted turn's added cell", async () => {
+    // T1: an added cell has no `change` (nothing to diff against) but carries a
+    // structural_add operation, which is what the review bar keys off.
+    const addOp: AgentOperation = { operationId: "turn-1:added-1:0", cellId: "added-1", kind: "structural_add", ordinal: 0, state: "pending", previousRange: null, nextRange: null };
+    const trusted = { ...turnWith([addOp]), writeScope: "trusted" as const, changes: [] };
+    const withAdded = { ...notebook, cells: [notebook.cells[0], { cellId: "added-1", index: 1, cellType: "markdown" as const, source: "## summary", metadata: { agent_authored: true }, outputs: [], executionCount: null }] };
+    mount(trusted, withAdded);
+    expect(await screen.findByText("Agent added this cell")).toBeInTheDocument();
+    expect(screen.getByLabelText("Keep agent change to markdown cell 2")).toBeEnabled();
+    expect(screen.getByLabelText("Revert agent change to markdown cell 2")).toBeEnabled();
+  });
+
+  it("explains instead of offering Undo on a trusted cell without operations", async () => {
+    // A moved/retyped/deleted-adjacent cell has no ledger operations; only
+    // whole-turn undo applies, and the cell must say so, not just go quiet.
+    const trusted = { ...turnWith([]), writeScope: "trusted" as const, changes: [{ cellId: "code-1", previousSource: PREVIOUS, nextSource: NEXT }] };
+    mount(trusted);
+    expect(await screen.findByText(/Part of a whole-notebook edit/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Revert agent change to code cell 1")).not.toBeInTheDocument();
+  });
+
   it("falls back to source comparison for turns served without a ledger", async () => {
     const legacy = turnWith([]);
     delete (legacy as { operations?: unknown }).operations;

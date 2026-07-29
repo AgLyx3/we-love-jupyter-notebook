@@ -50,8 +50,9 @@ export interface AgentOperation {
   kind: string;
   ordinal: number;
   state: OperationState;
-  previousRange: [number, number];
-  nextRange: [number, number];
+  // null for structural kinds (a whole added cell has no line ranges).
+  previousRange: [number, number] | null;
+  nextRange: [number, number] | null;
 }
 export interface AgentTurn {
   turnId: string;

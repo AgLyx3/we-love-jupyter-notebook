@@ -463,13 +463,14 @@ class TestRejectAllWithStaleCells:
         assert turns.stale_cell_ids(turns.get(turn.turn_id)) == frozenset({"editable"})
 
 
-class TestTrustedTurnsHaveNoLedger:
-    """Per-operation review covers source hunks against stable cell ids.
+class TestTrustedTurnLedger:
+    """T1: the position-independent structural op kinds are reviewable per op.
 
-    A Trusted turn rewrites the whole notebook — it may add, delete, reorder and
-    retype cells — so a per-hunk recompose against a cell id is not well defined.
-    Those turns stay whole-turn undo only, and the ledger must stay empty rather
-    than half-describing a structural change.
+    `edit` ops on surviving same-type cells use the ordinary hunk ledger —
+    recompose, apply and the stale guard all key off the cell id, never its
+    index. `add` ops get one structural_add operation whose undo deletes that
+    cell by its realized id, guarded per-op-locally. delete/move/retype stay
+    whole-turn (§12.4) and their cells carry no operations.
     """
 
     def trusted_turn(self, notebook_payload):
@@ -497,31 +498,156 @@ class TestTrustedTurnsHaveNoLedger:
         assert turn.state == "completed", turn.error
         return documents, turns, snapshot, turn
 
-    def test_a_trusted_turn_records_changes_but_no_operations(
+    def added_cell_id(self, turn) -> str:
+        add = next(
+            item for item in turn.operations if item.kind == "structural_add"
+        )
+        return add.cell_id
+
+    def test_a_trusted_turn_builds_operations_for_edits_and_adds(
         self, notebook_payload,
     ):
         _documents, _turns, _snapshot, turn = self.trusted_turn(notebook_payload)
-        # changes are populated for the inline diff, deliberately display-only.
         assert turn.changes
-        assert turn.operations == ()
         assert turn.structural_ops
+        kinds = {(item.cell_id, item.kind) for item in turn.operations}
+        assert ("editable", "source_hunk") in kinds
+        assert any(kind == "structural_add" for _cell, kind in kinds)
+        add = next(i for i in turn.operations if i.kind == "structural_add")
+        assert add.hunk is None and add.source_hash is not None
 
-    def test_per_cell_revert_is_refused_on_a_trusted_turn(self, notebook_payload):
+    def test_per_cell_revert_now_works_on_a_trusted_edited_cell(
+        self, notebook_payload,
+    ):
+        """The R20 blanket 409 narrows to cells without ledger operations."""
         _documents, turns, snapshot, turn = self.trusted_turn(notebook_payload)
+        updated = turns.revert_cell(
+            turn.turn_id, "editable", session_id=snapshot.session_id,
+            expected_revision=turn.applied_revision,
+        )
+        assert source_of(updated) == "value = 1\n"
+        # The added cell is untouched by reverting a different cell.
+        assert any(
+            cell["id"] == self.added_cell_id(turn)
+            for cell in updated.notebook["cells"]
+        )
+
+    def test_undoing_an_add_deletes_exactly_that_cell(self, notebook_payload):
+        _documents, turns, snapshot, turn = self.trusted_turn(notebook_payload)
+        added = self.added_cell_id(turn)
+        updated = turns.revert_cell(
+            turn.turn_id, added, session_id=snapshot.session_id,
+            expected_revision=turn.applied_revision,
+        )
+        assert [cell["id"] for cell in updated.notebook["cells"]] == [
+            "intro", "editable",
+        ]
+        # The turn's edit to the surviving cell stays applied.
+        assert source_of(updated) == "value = 99\n"
+
+    def test_undoing_an_add_is_refused_once_the_user_edited_it(
+        self, notebook_payload,
+    ):
+        """Deleting a cell the user has since worked in would destroy work."""
+        documents, turns, snapshot, turn = self.trusted_turn(notebook_payload)
+        added = self.added_cell_id(turn)
+        edited = documents.update_cell_source(
+            cell_id=added, source="## my own notes now\n",
+            expected_revision=turn.applied_revision,
+            expected_session_id=snapshot.session_id, owner="manual",
+        )
+        with pytest.raises(RevertConflict):
+            turns.revert_cell(
+                turn.turn_id, added, session_id=snapshot.session_id,
+                expected_revision=edited.revision,
+            )
+        assert turns.stale_cell_ids(turns.get(turn.turn_id)) == frozenset({added})
+
+    def test_reject_all_undoes_edits_and_adds_in_one_mutation(
+        self, notebook_payload,
+    ):
+        documents, turns, snapshot, turn = self.trusted_turn(notebook_payload)
+        updated = turns.reject_operations(
+            turn.turn_id, None, session_id=snapshot.session_id,
+            expected_revision=turn.applied_revision,
+        )
+        assert updated.revision == turn.applied_revision + 1
+        assert [cell["id"] for cell in updated.notebook["cells"]] == [
+            "intro", "editable",
+        ]
+        assert source_of(updated) == "value = 1\n"
+
+    def test_accepting_an_add_settles_it_without_touching_the_document(
+        self, notebook_payload,
+    ):
+        documents, turns, snapshot, turn = self.trusted_turn(notebook_payload)
+        added = self.added_cell_id(turn)
+        before = documents.get_snapshot()
+        updated = turns.accept_operations(
+            turn.turn_id,
+            [item.operation_id for item in turn.operations if item.cell_id == added],
+            session_id=snapshot.session_id,
+        )
+        assert documents.get_snapshot().revision == before.revision
+        assert all(
+            item.state == ACCEPTED
+            for item in updated.operations if item.cell_id == added
+        )
+
+    def trusted_turn_with_structure(self, notebook_payload, structure, edits):
+        documents = NotebookDocumentService()
+        snapshot = documents.import_notebook(notebook_payload())
+        scopes = TurnScopeService(documents)
+        turns = AgentTurnService(
+            documents=documents, scopes=scopes,
+            adapter=FakeAgentAdapter([FakeAttempt(edits={
+                "structure.json": json.dumps(structure), **edits,
+            })]), timeout=1,
+        )
+        turn = turns.start(
+            prompt="restructure", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision, write_scope="trusted",
+            background=False,
+        )
+        assert turn.state == "completed", turn.error
+        return documents, turns, snapshot, turn
+
+    def test_cells_involved_in_moves_carry_no_operations_and_keep_the_409(
+        self, notebook_payload,
+    ):
+        """§12.4: reordering entangles the global cell order, so a reorder-only
+        turn is whole-turn undo only — exactly main's original R20 behaviour."""
+        _documents, turns, snapshot, turn = self.trusted_turn_with_structure(
+            notebook_payload,
+            {"cells": [
+                {"cellId": "editable", "cellType": "code", "source": "cells/cell_editable.py"},
+                {"cellId": "intro", "cellType": "markdown", "source": "cells/cell_intro.md"},
+            ]},
+            {},
+        )
+        assert {op.op for op in turn.structural_ops} == {"move"}
+        assert turn.operations == ()
         with pytest.raises(RevertConflict):
             turns.revert_cell(
                 turn.turn_id, "editable", session_id=snapshot.session_id,
                 expected_revision=turn.applied_revision,
             )
 
-    def test_reject_all_is_a_no_op_on_a_trusted_turn(self, notebook_payload):
-        documents, turns, snapshot, turn = self.trusted_turn(notebook_payload)
-        before = documents.get_snapshot()
-        updated = turns.reject_operations(
-            turn.turn_id, None, session_id=snapshot.session_id,
-            expected_revision=turn.applied_revision,
+    def test_undoing_the_only_remaining_cell_conflicts_cleanly(
+        self, notebook_payload,
+    ):
+        """A notebook must keep one cell; a review action must not 400."""
+        _documents, turns, snapshot, turn = self.trusted_turn_with_structure(
+            notebook_payload,
+            {"cells": [{"op": "add", "cellType": "markdown", "source": "cells/new_1.md"}]},
+            {"cells/new_1.md": "# the only cell left\n"},
         )
-        assert updated.revision == before.revision
+        (add,) = [i for i in turn.operations if i.kind == "structural_add"]
+        with pytest.raises(RevertConflict):
+            turns.revert_cell(
+                turn.turn_id, add.cell_id, session_id=snapshot.session_id,
+                expected_revision=turn.applied_revision,
+            )
 
     def test_a_trusted_turn_reports_no_stale_cells(self, notebook_payload):
         _documents, turns, _snapshot, turn = self.trusted_turn(notebook_payload)
