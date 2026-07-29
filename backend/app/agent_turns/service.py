@@ -318,7 +318,11 @@ class AgentTurnService:
                 self._workers.pop(current_thread(), None)
 
     def _run(self, turn: AgentTurn, scope: FrozenTurnScope, lease, frozen_snapshot):
-        if turn.write_scope == "trusted":
+        # A Plan turn writes nothing regardless of scope, so it must never reach the
+        # structural apply path. Only dispatch to the Trusted path in Edit mode; a
+        # Trusted+Plan turn (possible via the sticky writeScope) falls through to the
+        # Blocking path here, which runs the adapter with permission_mode="plan".
+        if turn.write_scope == "trusted" and turn.mode != "plan":
             return self._run_trusted(turn, scope, lease, frozen_snapshot)
         correction = None
         last_violation: WorkspaceBoundaryError | None = None

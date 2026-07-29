@@ -1139,3 +1139,33 @@ def test_trusted_turn_malformed_structure_retries_then_fails_with_salvage(notebo
     assert documents.get_snapshot().revision == snapshot.revision  # nothing applied
     # Salvage: the agent's attempted structure is captured before workspace destroy (R2).
     assert turn.error["details"].get("attemptedStructure") == "{ this is not json"
+
+
+def test_trusted_plan_turn_writes_nothing_and_is_not_structural(notebook_payload):
+    # Regression: a Trusted+Plan turn (possible via sticky writeScope) must NOT
+    # reach the structural apply path — Plan writes nothing regardless of scope.
+    captured = {}
+
+    class SpyAdapter:
+        auxiliary_paths = frozenset()
+
+        def run(self, workspace, *, timeout, cancel_event, model=None, permission_mode="acceptEdits"):
+            captured["is_trusted"] = workspace.is_trusted
+            captured["permission_mode"] = permission_mode
+            return AdapterResult("Here is the plan; nothing was changed.")
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    turns = AgentTurnService(documents=documents, scopes=scopes, adapter=SpyAdapter(), timeout=1)
+    turn = turns.start(
+        prompt="plan a whole-notebook refactor", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, write_scope="trusted", mode="plan",
+        background=False,
+    )
+    assert turn.state == "completed"
+    assert captured["is_trusted"] is False       # routed to the Blocking (read-only) path
+    assert captured["permission_mode"] == "plan"  # CLI is told to write nothing
+    assert turn.structural_ops == ()
+    assert turn.applied_revision is None
+    assert documents.get_snapshot().revision == snapshot.revision  # nothing applied
