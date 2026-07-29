@@ -7,10 +7,12 @@ https://github.com/user-attachments/assets/e52a4ee7-3bb2-4953-a515-4c32f8742c6f
 
 A local FastAPI + React editor for working on Jupyter notebooks with scoped AI
 agent editing. You open a local `.ipynb` file (or a project folder), edit and
-execute cells, and save in place. When you ask the agent to make a change, it
-can only rewrite the source of the cells you explicitly mark editable — the
-backend applies or rejects its proposed edits; the agent never mutates your
-notebook directly.
+execute cells, and save in place. Each agent turn has a **scope**: in
+**Blocking** mode the agent may only rewrite the source of cells you explicitly
+mark editable; in **Trusted** mode the whole notebook is editable and the agent
+may add, delete, reorder, and retype cells. Either way the backend validates and
+applies (or rejects) every change — the agent never mutates your notebook
+directly — and every change is reviewable as a diff and undoable.
 
 Everything runs on your machine and binds to loopback only. Read
 [Security Limits](#security-limits) before using it with untrusted notebooks.
@@ -83,8 +85,9 @@ works — only agent turns are blocked.
 
 > **Just want to try the UI without Claude?** Start the app with
 > `--test-agent` (see [Run](#run)) to use a built-in deterministic adapter.
-> It produces canned edits for demoing the flow and never calls the real CLI —
-> it is not a substitute for a real agent.
+> It produces canned Blocking-mode edits for demoing the flow and never calls
+> the real CLI — it does not perform Trusted structural edits, and it is not a
+> substitute for a real agent.
 
 ## Run
 
@@ -115,17 +118,25 @@ Useful flags:
 2. **Edit and run cells.** Edit cell source directly and run cells against the
    local kernel. Toggle **Auto-save** or use **Save** / **Save As** to write
    back to disk.
-3. **Scope cells for the agent.** Mark cells **editable** (the agent may
-   rewrite their source) and/or add cells as **context** (attention only — see
-   the security note). Sending a prompt with no editable cells is a valid
+3. **Scope cells for the agent.** Two independent axes: mark cells **editable**
+   (permission — the agent may rewrite their source) and/or pin cells as
+   **Focus** (salience — the cells most relevant to your request; attention only,
+   see the security note). Sending a prompt with no editable cells is a valid
    read-only turn: the agent answers but writes nothing.
-4. **Pick a model and mode** in the agent composer:
+4. **Pick a scope, model, and mode** in the agent composer:
+   - **Scope** (top of the panel) — **Blocking** (default) lets the agent edit
+     only the cells you marked editable; **Trusted** makes the whole notebook
+     editable and lets it add/delete/reorder/retype cells. In Trusted the
+     per-cell "allow agent edit" control is hidden and every pin is a Focus hint.
    - **Model** — Default, Opus, Sonnet, or Haiku. Default defers to the CLI's
      own default; otherwise it is passed as `--model`.
    - **Mode** — **Edit** applies scoped changes; **Plan** returns a
      step-by-step plan and writes nothing.
-5. **Send.** Review the agent's answer and any inline diffs on the cells it
-   changed; you can undo an applied turn.
+5. **Send.** Review the agent's answer and the inline diffs on changed cells. A
+   Trusted turn also shows a summary of structural changes (added / deleted /
+   reordered / retyped) and marks agent-added cells with a provenance badge;
+   Trusted turns apply structure only and do **not** auto-run cells — you run
+   them after reviewing. You can undo an applied turn (whole-turn undo).
 
 ## Verify
 
@@ -144,11 +155,23 @@ mobile workflows. Screenshots and failure traces are written under
 
 The editor binds to loopback and keeps one active notebook in process memory.
 The agent workspace contains the full notebook, so the agent can read every
-cell. Context selection is an attention signal in the manifest and prompt, not
-a confidentiality control. Writes are imported only from manifest-listed
-editable-cell source files; notebook structure, metadata, outputs, and
-unselected-cell writes are rejected at the workspace boundary. Risk
+cell. Focus (attention) selection is an attention signal in the manifest and
+prompt, not a confidentiality control. In **Blocking** turns, writes are imported
+only from manifest-listed editable-cell source files; notebook structure,
+metadata, outputs, and unselected-cell writes are rejected at the workspace
+boundary. **Trusted** turns widen this to the whole notebook (see below). Risk
 classification pauses selected downstream operations for explicit approval.
+
+**Trusted turns** (the per-turn Blocking/Trusted toggle) widen the write boundary to
+the whole notebook and let the agent **add, delete, reorder, and change the type of**
+cells — including introducing **new executable code cells** you never scoped, and
+changing execution order. The backend still derives, validates, and applies every
+change (the agent never edits the notebook directly), and OS posture is unchanged (no
+shell, loopback only). But this makes **review-before-run load-bearing**: agent-added
+cells are marked with a provenance badge and are not auto-executed, yet once accepted
+they are ordinary cells a later Run-All will run. Review the diff before running, and
+use Trusted only with agents and instructions you trust. The risky-cell execution
+approval flow still gates execution.
 
 This is not an operating-system sandbox. The CLI and executed notebook code run
 with the current user's permissions. Risk classification is heuristic, approval

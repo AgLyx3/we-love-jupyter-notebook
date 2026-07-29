@@ -2,7 +2,8 @@ export type CellOutput = Record<string, unknown>;
 
 export type AgentModel = "default" | "opus" | "sonnet" | "haiku";
 export type AgentMode = "edit" | "plan";
-export interface TurnOptions { model: AgentModel; mode: AgentMode }
+export type WriteScope = "blocking" | "trusted";
+export interface TurnOptions { model: AgentModel; mode: AgentMode; writeScope?: WriteScope }
 
 export interface NotebookCellData {
   cellId: string;
@@ -35,6 +36,8 @@ export interface TurnScope {
 }
 
 export interface AgentChange { cellId: string; previousSource: string; nextSource: string }
+export type StructuralOpKind = "add" | "delete" | "edit" | "retype" | "move";
+export interface StructuralOp { op: StructuralOpKind; cellId: string | null; detail: Record<string, unknown> }
 export interface AgentTurn {
   turnId: string;
   sessionId: string;
@@ -42,6 +45,7 @@ export interface AgentTurn {
   prompt: string;
   model?: string;
   mode?: string;
+  writeScope?: WriteScope;
   editableCellIds: string[];
   contextCellIds: string[];
   undoEligible: boolean;
@@ -51,6 +55,7 @@ export interface AgentTurn {
   appliedRevision: number | null;
   executionOperationId: string | null;
   changes: AgentChange[];
+  structuralOps?: StructuralOp[];
   error: ApiErrorBody | null;
   createdAt: string;
   completedAt: string | null;
@@ -156,7 +161,7 @@ export const api = {
   execution: (id: string) => request<ExecutionOperation>(`/execution/${encodeURIComponent(id)}`),
   interrupt: (snapshot: NotebookSnapshot, status: KernelStatus) => request<KernelStatus>(`/kernel/${encodeURIComponent(status.kernelSessionId ?? "")}/interrupt`, { method: "POST", body: JSON.stringify({ ...mutation(snapshot), executionAttemptId: status.executionAttemptId }) }),
   restart: (snapshot: NotebookSnapshot, status: KernelStatus) => request<KernelStatus>(`/kernel/${encodeURIComponent(status.kernelSessionId ?? "")}/restart`, { method: "POST", body: JSON.stringify({ ...mutation(snapshot), executionAttemptId: status.executionAttemptId }) }),
-  startTurn: (snapshot: NotebookSnapshot, prompt: string, options?: TurnOptions) => request<AgentTurn>("/agent-turns", { method: "POST", body: JSON.stringify({ ...mutation(snapshot), prompt, model: options?.model ?? "default", mode: options?.mode ?? "edit" }) }),
+  startTurn: (snapshot: NotebookSnapshot, prompt: string, options?: TurnOptions) => request<AgentTurn>("/agent-turns", { method: "POST", body: JSON.stringify({ ...mutation(snapshot), prompt, model: options?.model ?? "default", mode: options?.mode ?? "edit", writeScope: options?.writeScope ?? "blocking" }) }),
   turn: (id: string) => request<AgentTurn>(`/agent-turns/${encodeURIComponent(id)}`),
   cancelTurn: (snapshot: NotebookSnapshot, id: string) => request<AgentTurn>(`/agent-turns/${encodeURIComponent(id)}/cancel`, { method: "POST", body: JSON.stringify(mutation(snapshot)) }),
   undoTurn: (snapshot: NotebookSnapshot, id: string) => request<NotebookSnapshot>(`/agent-turns/${encodeURIComponent(id)}/undo`, { method: "POST", body: JSON.stringify(mutation(snapshot)) }),

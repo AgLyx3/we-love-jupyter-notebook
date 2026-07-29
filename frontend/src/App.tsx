@@ -1,6 +1,6 @@
 import { AlertTriangle, BookOpen, PanelLeft, Save, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
-import { ApiError, api, connectEvents, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type KernelStatus, type NotebookSnapshot, type TurnScope } from "./api/client";
+import { ApiError, api, connectEvents, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type KernelStatus, type NotebookSnapshot, type TurnScope, type WriteScope } from "./api/client";
 import AgentChatPanel from "./agentChat/AgentChatPanel";
 import type { TurnRecord } from "./agentChat/AgentChatPanel";
 import KernelControls from "./execution/KernelControls";
@@ -49,6 +49,15 @@ export default function App() {
   useEffect(() => { localStorage.setItem(AGENT_WIDTH_KEY, String(agentWidth)); }, [agentWidth]);
   const [autoSave, setAutoSave] = useState<boolean>(() => localStorage.getItem(AUTO_SAVE_KEY) === "on");
   useEffect(() => { localStorage.setItem(AUTO_SAVE_KEY, autoSave ? "on" : "off"); }, [autoSave]);
+  // Write scope (Blocking/Trusted) is sticky and lifted here because it changes
+  // several sibling views: the composer, the notebook gutter (Trusted blocks the
+  // "allow agent edit" button), the scope panel, and how a dropped cell is scoped
+  // (Trusted defaults a drop to context, since "editable" is removed in Trusted).
+  const [writeScope, setWriteScope] = useState<WriteScope>(() => {
+    try { return localStorage.getItem("agent.writeScope") === "trusted" ? "trusted" : "blocking"; } catch { return "blocking"; }
+  });
+  useEffect(() => { try { localStorage.setItem("agent.writeScope", writeScope); } catch { /* storage unavailable */ } }, [writeScope]);
+  const trustedScope = writeScope === "trusted";
   const startAgentResize = useCallback((event: PointerEvent) => {
     event.preventDefault();
     const onMove = (moveEvent: globalThis.PointerEvent) => setAgentWidth(clampAgentWidth(window.innerWidth - moveEvent.clientX));
@@ -346,7 +355,7 @@ export default function App() {
     <div className="workspace-layout">
       {workspaceFolder && !sidebarHidden && <WorkspaceSidebar root={workspaceFolder} activePath={notebook?.notebookPath ?? null} onOpenNotebook={(path) => void handleOpen(path, workspaceFolder)} onCollapse={() => setSidebarHidden(true)} />}
       {notebook ? <div className="editor-layout" style={{ "--agent-width": `${agentWidth}px` } as CSSProperties}>
-      <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} autoSave={autoSave} focusRequest={focusRequest}
+      <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} trusted={trustedScope} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} autoSave={autoSave} focusRequest={focusRequest}
         onDirtyChange={(cellId, dirty) => setDirtyCellIds((current) => {
           if (current.has(cellId) === dirty) return current;
           const next = new Set(current); if (dirty) next.add(cellId); else next.delete(cellId); return next;
@@ -387,8 +396,9 @@ export default function App() {
           setTurn((item) => item?.turnId === selectedTurn.turnId ? { ...item, undoEligible: false, changes: [] } : item);
         })}
         onDecision={(attempt: ExecutionAttempt, decision) => operation && void mutate(() => api.decide(operation, attempt, decision), { refreshAfter: false }, setOperation)}
-        onSelectTurn={setSelectedTurnId} onFocusCell={requestCellFocus} onDropCell={(cellId) => void mutate(() => api.addScope(notebook, cellId, true), { refreshAfter: false }, setScope)}
-        onDropCells={(cellIds) => { if (cellIds.length) void mutate(async () => { let latest: TurnScope | undefined; for (const cellId of cellIds) latest = await api.addScope(notebook, cellId, true); return latest as TurnScope; }, { refreshAfter: false }, setScope); }} />
+        writeScope={writeScope} onWriteScopeChange={setWriteScope}
+        onSelectTurn={setSelectedTurnId} onFocusCell={requestCellFocus} onDropCell={(cellId) => void mutate(() => api.addScope(notebook, cellId, !trustedScope), { refreshAfter: false }, setScope)}
+        onDropCells={(cellIds) => { if (cellIds.length) void mutate(async () => { let latest: TurnScope | undefined; for (const cellId of cellIds) latest = await api.addScope(notebook, cellId, !trustedScope); return latest as TurnScope; }, { refreshAfter: false }, setScope); }} />
       </div> : <main className="workspace-placeholder"><BookOpen /><h2>Select a notebook</h2><p>Choose a <code>.ipynb</code> from the file tree to open it in place.</p></main>}
     </div>
   </div>;

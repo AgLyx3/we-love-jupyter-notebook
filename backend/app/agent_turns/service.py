@@ -16,6 +16,7 @@ from ..agent_workspace.models import (
 from ..agent_workspace.workspace_auditor import WorkspaceAuditor
 from ..agent_workspace.workspace_builder import AgentWorkspaceBuilder
 from ..boundary_validation.validator import BoundaryValidator, CandidateCellSourceChange
+from ..boundary_validation.structural_validator import StructuralOp, derive_structural_plan
 from ..notebook_document.models import (
     CellNotFound, MutationConflict, NotebookDomainError, RevisionConflict,
     SessionConflict,
@@ -73,12 +74,14 @@ class AgentTurn:
     prompt: str
     model: str = "default"
     mode: str = "edit"
+    write_scope: str = "blocking"
     editable_cell_ids: tuple[str, ...] = ()
     context_cell_ids: tuple[str, ...] = ()
     state: str = "created"
     attempts: int = 0
     final_output: str = ""
     changes: tuple[CandidateCellSourceChange, ...] = ()
+    structural_ops: tuple[StructuralOp, ...] = ()
     applied_revision: int | None = None
     execution_operation_id: str | None = None
     checkpoint: dict[str, Any] | None = None
@@ -119,7 +122,8 @@ class AgentTurnService:
 
     def start(
         self, *, prompt: str, session_id: str, expected_revision: int,
-        model: str = "default", mode: str = "edit", background: bool = True,
+        model: str = "default", mode: str = "edit",
+        write_scope: str = "blocking", background: bool = True,
     ) -> AgentTurn:
         turn_id = uuid4().hex
         with self._lock:
@@ -142,7 +146,7 @@ class AgentTurnService:
                 turn = AgentTurn(
                     turn_id=turn_id, session_id=session_id,
                     base_revision=expected_revision, prompt=prompt,
-                    model=model, mode=mode,
+                    model=model, mode=mode, write_scope=write_scope,
                     editable_cell_ids=scope.editable_cell_ids,
                     context_cell_ids=scope.context_cell_ids,
                     checkpoint=copy.deepcopy(snapshot.notebook),
@@ -276,13 +280,31 @@ class AgentTurnService:
             terminal_error = error
         finally:
             self._set_state(turn, "cleaning_up")
+            # A turn that applied no changes (e.g. the agent asked a clarifying
+            # question) leaves the notebook revision unchanged, so keep the
+            # editable/context selection for the follow-up turn instead of forcing
+            # the user to re-scope. Once an edit is applied, scope expires as usual.
+            preserve_scope = turn.applied_revision is None and bool(
+                scope.editable_cell_ids or scope.context_cell_ids
+            )
             try:
-                self.scopes.expire(scope, outcome)
+                self.scopes.expire(scope, outcome, preserve_selection=preserve_scope)
             except Exception as error:
                 outcome = "failed"
                 terminal_error = error
             with self._lock:
-                if turn.cancel_event.is_set() and outcome == "completed":
+                # R16: a Trusted turn whose atomic structural apply already
+                # committed stays "completed" (and undoable) even if a cancel
+                # lost the race — the whole-notebook change happened, so labeling
+                # it "cancelled" would mislead. Blocking keeps its prior behavior.
+                committed_trusted = (
+                    turn.write_scope == "trusted" and turn.applied_revision is not None
+                )
+                if (
+                    turn.cancel_event.is_set()
+                    and outcome == "completed"
+                    and not committed_trusted
+                ):
                     outcome = "cancelled"
                     terminal_error = AgentCancelled()
                 try:
@@ -296,6 +318,8 @@ class AgentTurnService:
                 self._workers.pop(current_thread(), None)
 
     def _run(self, turn: AgentTurn, scope: FrozenTurnScope, lease, frozen_snapshot):
+        if turn.write_scope == "trusted":
+            return self._run_trusted(turn, scope, lease, frozen_snapshot)
         correction = None
         last_violation: WorkspaceBoundaryError | None = None
         for attempt_number in range(1, 4):
@@ -409,6 +433,115 @@ class AgentTurnService:
                 return "failed", ExecutionTimedOut(recovered=recovered)
         return "completed", None
 
+    def _run_trusted(self, turn: AgentTurn, scope: FrozenTurnScope, lease, frozen_snapshot):
+        """Trusted turn: whole-notebook structural editing.
+
+        Bounded structural-format retry (R3), no scope retry; applies structure
+        only (no auto-execution, R4); captures the agent's attempted structure on
+        terminal failure before the workspace is destroyed (R2).
+        """
+        correction = None
+        last_violation: WorkspaceBoundaryError | None = None
+        plan = None
+        for attempt_number in range(1, 4):
+            if turn.cancel_event.is_set():
+                raise AgentCancelled()
+            self._set_state(turn, "agent_running")
+            workspace = self.builder.build(
+                frozen_snapshot, scope, write_scope="trusted", correction=correction
+            )
+            attempt_error: BaseException | None = None
+            cleanup_error: WorkspaceCleanupError | None = None
+            try:
+                with self._lock:
+                    turn.attempts = attempt_number
+                result = self.adapter.run(
+                    workspace, timeout=self.timeout, cancel_event=turn.cancel_event,
+                    model=None if turn.model == "default" else turn.model,
+                    permission_mode="acceptEdits",
+                )
+                with self._lock:
+                    turn.final_output = result.final_output
+                self._set_state(turn, "validating")
+                entries = self.auditor.collect_trusted(workspace)
+                plan = derive_structural_plan(manifest=workspace.manifest, entries=entries)
+                last_violation = None
+                break
+            except WorkspaceBoundaryError as error:
+                attempt_error = error
+                last_violation = error
+                correction = "; ".join(error.violations)
+                if attempt_number == 3:
+                    self._attach_trusted_salvage(error, workspace)
+                    raise
+            except BaseException as error:
+                attempt_error = error
+                raise
+            finally:
+                try:
+                    self.builder.destroy(workspace)
+                except WorkspaceCleanupError as error:
+                    cleanup_error = error
+                    logger.exception(
+                        "Failed to remove trusted workspace %s", workspace.root,
+                    )
+                    if attempt_error is None:
+                        raise
+                    attempt_error.add_note(str(error))
+            if cleanup_error is not None and attempt_error is not None:
+                raise attempt_error
+        if last_violation is not None:
+            raise last_violation
+        if plan is None or plan.is_noop:
+            with self._lock:
+                if turn.cancel_event.is_set():
+                    return "cancelled", AgentCancelled()
+                turn.changes = ()
+                turn.structural_ops = ()
+                return "completed", None
+        self._begin_commit(turn)
+        next_cells = [
+            {"origin_id": cell.origin_id, "cell_type": cell.cell_type, "source": cell.source}
+            for cell in plan.next_cells
+        ]
+        updated = self.documents.apply_structural_changes_under_lease(
+            next_cells=next_cells, expected_session_id=scope.session_id,
+            expected_revision=scope.notebook_revision, owner=turn.turn_id, lease=lease,
+        )
+        # Surface per-cell source diffs for edited (surviving) cells so the inline
+        # diff renders. These are display-only: per-cell revert is not offered on
+        # Trusted turns (whole-turn undo only), enforced in revert_cell and the UI.
+        frozen_source = {cell.cell_id: cell.original_source for cell in workspace.manifest.cells}
+        edits = tuple(
+            CandidateCellSourceChange(
+                cell_id=cell.origin_id,
+                previous_source=frozen_source.get(cell.origin_id, ""),
+                next_source=cell.source,
+            )
+            for cell in plan.next_cells
+            if cell.origin_id is not None and cell.source != frozen_source.get(cell.origin_id, "")
+        )
+        with self._lock:
+            turn.structural_ops = tuple(plan.ops)
+            turn.changes = edits
+            turn.applied_revision = updated.revision
+            self._latest_applied_turn_id = turn.turn_id
+        if self.events is not None:
+            self.events.publish("notebook.updated", {"sessionId": turn.session_id, "revision": updated.revision, "ownerId": turn.turn_id})
+        # R4: Trusted structural turns apply structure only; the user runs cells
+        # after reviewing the diff. No automatic downstream execution.
+        return "completed", None
+
+    @staticmethod
+    def _attach_trusted_salvage(error: WorkspaceBoundaryError, workspace) -> None:
+        """Best-effort: attach the agent's attempted structure.json to the error
+        before the workspace is destroyed, so the UI can surface it (R2)."""
+        try:
+            text = (workspace.root / "structure.json").read_text(encoding="utf-8")
+        except OSError:
+            return
+        error.details["attemptedStructure"] = text[:16384]
+
     def undo(self, turn_id: str, *, session_id: str, expected_revision: int):
         turn = self._require_undoable(turn_id)
         with self._lock:
@@ -443,6 +576,10 @@ class AgentTurnService:
         expected_revision: int,
     ):
         turn = self._require_revertible(turn_id)
+        # Trusted turns are whole-turn undo only; per-cell source diffs are shown
+        # for review but per-cell revert is not offered (R20).
+        if turn.write_scope == "trusted":
+            raise RevertConflict()
         change = next((item for item in turn.changes if item.cell_id == cell_id), None)
         if change is None:
             raise CellNotFound(cell_id)
@@ -619,6 +756,8 @@ class AgentTurnService:
         values.extend(turn.context_cell_ids)
         for change in turn.changes:
             values.extend((change.cell_id, change.previous_source, change.next_source))
+        for op in turn.structural_ops:
+            values.extend((op.op, op.cell_id or "", str(op.detail)))
         if turn.error is not None:
             values.append(str(turn.error))
         return sum(len(value.encode("utf-8")) for value in values) + 512

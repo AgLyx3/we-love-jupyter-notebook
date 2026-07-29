@@ -69,11 +69,59 @@ class WorkspaceManifest:
     context_cells: tuple[ContextCellManifest, ...]
 
 
+@dataclass(frozen=True)
+class StructuralCellManifest:
+    """One cell in a Trusted-turn workspace. Every cell is writable."""
+
+    cell_id: str
+    index: int
+    cell_type: str
+    relative_path: str
+    original_source: str
+
+
+@dataclass(frozen=True)
+class TrustedWorkspaceManifest:
+    """The frozen, in-memory original structure for a Trusted turn.
+
+    Held immutably by the backend and diffed against the agent-written
+    ``structure.json``; the on-disk structure file is never trusted as the
+    source of the original order (mirrors the Blocking manifest rule).
+    """
+
+    notebook_path: str
+    structure_path: str
+    cells: tuple[StructuralCellManifest, ...]
+    context_cell_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ReturnedStructureEntry:
+    """One agent-returned structure.json entry with its resolved source.
+
+    ``is_add`` marks an ``{"op": "add", ...}`` entry (no cellId); ``cell_id`` is
+    then ``None``. The string ``"new"`` is never a sentinel, so a real cell whose
+    id happens to be ``new`` is unambiguous. For an existing entry, ``cell_id`` is
+    the referenced id (``None`` if the agent omitted/garbled it — the validator
+    rejects that).
+    """
+
+    is_add: bool
+    cell_id: str | None
+    cell_type: str
+    relative_path: str
+    content: str
+
+
 @dataclass
 class AgentWorkspace:
     root: Path
-    manifest: WorkspaceManifest
+    manifest: WorkspaceManifest | TrustedWorkspaceManifest
     baseline_hashes: dict[str, str]
+
+    @property
+    def is_trusted(self) -> bool:
+        return isinstance(self.manifest, TrustedWorkspaceManifest)
 
 
 @dataclass(frozen=True)
