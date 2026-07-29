@@ -8,7 +8,9 @@ from backend.app.boundary_validation.structural_validator import (
     derive_structural_plan,
 )
 from backend.app.notebook_document.mutation_coordinator import MutationCoordinator
-from backend.app.notebook_document.models import RevisionConflict, SessionConflict
+from backend.app.notebook_document.models import (
+    NotebookImportError, RevisionConflict, SessionConflict,
+)
 from backend.app.notebook_document.service import NotebookDocumentService
 
 
@@ -209,6 +211,27 @@ def test_apply_structural_rejects_session_and_revision_conflicts(notebook_payloa
             service.apply_structural_changes_under_lease(
                 next_cells=spec, expected_session_id=snap.session_id,
                 expected_revision=snap.revision + 5, owner="t", lease=lease,
+            )
+    finally:
+        coordinator.release(lease)
+
+
+def test_apply_structural_rejects_empty_and_duplicate_origin(notebook_payload):
+    service, coordinator, lease, snap = _service(notebook_payload)
+    try:
+        with pytest.raises(NotebookImportError):
+            service.apply_structural_changes_under_lease(
+                next_cells=[], expected_session_id=snap.session_id,
+                expected_revision=snap.revision, owner="t", lease=lease,
+            )
+        with pytest.raises(NotebookImportError):
+            service.apply_structural_changes_under_lease(
+                next_cells=[
+                    {"origin_id": "editable", "cell_type": "code", "source": "a\n"},
+                    {"origin_id": "editable", "cell_type": "code", "source": "b\n"},
+                ],
+                expected_session_id=snap.session_id,
+                expected_revision=snap.revision, owner="t", lease=lease,
             )
     finally:
         coordinator.release(lease)

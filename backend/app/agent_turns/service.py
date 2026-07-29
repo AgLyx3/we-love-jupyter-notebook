@@ -511,6 +511,9 @@ class AgentTurnService:
         # Surface per-cell source diffs for edited (surviving) cells so the inline
         # diff renders. These are display-only: per-cell revert is not offered on
         # Trusted turns (whole-turn undo only), enforced in revert_cell and the UI.
+        # NOTE: workspace.manifest is in-memory; the on-disk workspace was already
+        # destroyed in the loop's finally, but the frozen original sources live on
+        # the manifest object, so reading them here is intentional and safe.
         frozen_source = {cell.cell_id: cell.original_source for cell in workspace.manifest.cells}
         edits = tuple(
             CandidateCellSourceChange(

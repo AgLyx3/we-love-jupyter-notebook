@@ -350,6 +350,19 @@ class NotebookDocumentService:
                 raise SessionConflict(self._session_id or "")
             if expected_revision != self._revision:
                 raise RevisionConflict(self._revision)
+            # Defensive: the validator (derive_structural_plan) already guarantees a
+            # non-empty, duplicate-free cell list, but this is a public method — keep
+            # the invariants local so a future caller cannot commit a zero-cell or
+            # duplicate-id (corrupt) notebook. nbformat.validate does not reliably
+            # reject duplicate cell ids.
+            if not next_cells:
+                raise NotebookImportError("a notebook must retain at least one cell")
+            origin_ids = [
+                spec["origin_id"] for spec in next_cells
+                if spec.get("origin_id") is not None
+            ]
+            if len(origin_ids) != len(set(origin_ids)):
+                raise NotebookImportError("structural apply received duplicate origin cell ids")
             current_by_id = {cell["id"]: cell for cell in self._notebook["cells"]}
             used_ids = set(current_by_id)
             built: list[dict[str, Any]] = []
@@ -366,7 +379,10 @@ class NotebookDocumentService:
                     built.append(self._shape_cell(cell, cell_type))
                 else:
                     built.append(self._make_added_cell(cell_type, source, used_ids))
-            candidate = copy.deepcopy(self._notebook)
+            # Copy only the notebook envelope (metadata/nbformat); the cells in
+            # `built` are already independent deep copies, so re-copying every
+            # existing cell (and its outputs) via a whole-notebook deepcopy is waste.
+            candidate = {key: copy.deepcopy(value) for key, value in self._notebook.items() if key != "cells"}
             candidate["cells"] = built
             try:
                 nbformat.validate(nbformat.from_dict(candidate))
