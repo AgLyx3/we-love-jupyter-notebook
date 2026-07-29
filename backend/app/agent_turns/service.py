@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from threading import Event, RLock, Thread, current_thread
-from typing import Any
+from typing import Any, Sequence
 from uuid import uuid4
 
 from ..agent_workspace.models import (
@@ -21,6 +21,10 @@ from ..notebook_document.models import (
     SessionConflict,
 )
 from ..notebook_document.service import NotebookDocumentService
+from .operations import (
+    ACCEPTED, APPLIED_STATES, PENDING, REJECTED, TurnOperation, build_operations,
+    compose, is_stale, with_state,
+)
 from ..turn_scope.models import FrozenTurnScope
 from ..turn_scope.service import TurnScopeService
 from ..kernel_execution.service import KernelExecutionService
@@ -34,6 +38,12 @@ logger = logging.getLogger(__name__)
 TERMINAL_STATES = {"completed", "failed", "cancelled", "validation_incomplete"}
 MAX_TERMINAL_TURNS = 50
 MAX_TURN_HISTORY_BYTES = 2 * 1024 * 1024
+# Turns still holding unreviewed operations are kept past the ordinary history
+# limits, so a diff on screen always has a live ledger behind it. Bounded, so
+# an abandoned review backlog cannot pin history indefinitely; past the ceiling
+# the oldest is force-settled to accepted, which discards review state only and
+# never changes notebook content.
+MAX_PENDING_REVIEW_TURNS = 10
 # UI "mode" (edit/plan) maps to a Claude CLI permission mode.
 PERMISSION_MODE_BY_MODE = {"edit": "acceptEdits", "plan": "plan"}
 
@@ -59,6 +69,21 @@ class RevertConflict(NotebookDomainError):
     status_code = 409
 
 
+class OperationNotFound(NotebookDomainError):
+    code = "turn_operation_not_found"
+    message = "Agent turn operation was not found"
+    status_code = 404
+
+    def __init__(self, operation_id: str) -> None:
+        super().__init__(operationId=operation_id)
+
+
+class OperationConflict(NotebookDomainError):
+    code = "operation_conflict"
+    message = "Cell no longer matches this turn's recorded changes"
+    status_code = 409
+
+
 class AgentTurnServiceShuttingDown(NotebookDomainError):
     code = "agent_turn_service_shutting_down"
     message = "Agent turn service is shutting down"
@@ -79,6 +104,7 @@ class AgentTurn:
     attempts: int = 0
     final_output: str = ""
     changes: tuple[CandidateCellSourceChange, ...] = ()
+    operations: tuple[TurnOperation, ...] = ()
     applied_revision: int | None = None
     execution_operation_id: str | None = None
     checkpoint: dict[str, Any] | None = None
@@ -201,26 +227,65 @@ class AgentTurnService:
             return [self.get(turn.turn_id) for turn in turns]
 
     def is_undo_eligible(self, turn: AgentTurn) -> bool:
-        with self._lock:
-            if self._latest_applied_turn_id != turn.turn_id:
-                return False
+        """Whether the turn's checkpoint may still be restored.
+
+        Reads the snapshot before taking ``self._lock``: the document service
+        calls back into this service under its own lock when a session is
+        replaced, so acquiring the document lock while holding this one would
+        invert the lock order.
+
+        The stored turn is re-read under the lock rather than trusting the
+        caller's copy, because callers routinely pass a copy taken before a
+        concurrent mutation and this method has a destructive side effect.
+        """
         try:
             snapshot = self.documents.get_snapshot()
         except NotebookDomainError:
             return False
-        eligible = (
-            turn.applied_revision is not None
-            and turn.session_id == snapshot.session_id
-            and turn.applied_revision == snapshot.revision
+        with self._lock:
+            stored = self._turns.get(turn.turn_id)
+            if stored is None or self._latest_applied_turn_id != turn.turn_id:
+                return False
+            if (
+                stored.applied_revision is None
+                or stored.session_id != snapshot.session_id
+            ):
+                self._invalidate_checkpoint_locked(stored)
+                return False
+            if stored.applied_revision == snapshot.revision:
+                return True
+            # The document is ahead of the revision recorded on the turn. That is
+            # safe only while this turn itself is the author: downstream
+            # execution and per-operation rejection both commit before the turn's
+            # bookkeeping catches up, and a status poll landing in that window
+            # must not destroy a checkpoint that is still valid.
+            if self._owned_by_turn(snapshot.last_mutation_owner, turn.turn_id):
+                return True
+            self._invalidate_checkpoint_locked(stored)
+            return False
+
+    @staticmethod
+    def _owned_by_turn(owner: str | None, turn_id: str) -> bool:
+        """Whether a document mutation belongs to the turn's own lineage.
+
+        Excludes ``undo:`` — restoring a checkpoint deliberately ends it.
+        """
+        if not owner:
+            return False
+        return owner == turn_id or owner.startswith(
+            (f"reject:{turn_id}", f"revert:{turn_id}")
         )
-        if not eligible:
-            with self._lock:
-                if self._latest_applied_turn_id == turn.turn_id:
-                    self._latest_applied_turn_id = None
-                    stored = self._turns.get(turn.turn_id)
-                    if stored is not None:
-                        stored.checkpoint = None
-        return eligible
+
+    def _invalidate_checkpoint_locked(self, turn: AgentTurn) -> None:
+        """Drop a checkpoint that can no longer be restored.
+
+        Named for what it does. It used to be an unnamed side effect inside
+        ``is_undo_eligible``, which made a query destructive and hid the race
+        the owner check above now closes.
+        """
+        if self._latest_applied_turn_id == turn.turn_id:
+            self._latest_applied_turn_id = None
+        turn.checkpoint = None
 
     def cancel(
         self, turn_id: str, *, session_id: str, expected_revision: int,
@@ -367,6 +432,15 @@ class AgentTurnService:
         )
         with self._lock:
             turn.changes = changes
+            turn.operations = tuple(
+                operation
+                for change in changes
+                for operation in build_operations(
+                    turn_id=turn.turn_id, cell_id=change.cell_id,
+                    previous_source=change.previous_source,
+                    next_source=change.next_source,
+                )
+            )
             turn.applied_revision = updated.revision
             self._latest_applied_turn_id = turn.turn_id
             if turn.cancel_event.is_set():
@@ -438,37 +512,197 @@ class AgentTurnService:
         finally:
             self.documents.coordinator.release(lease)
 
+    def stale_cell_ids(self, turn: AgentTurn) -> frozenset[str]:
+        """Cells whose ledger no longer describes the document.
+
+        Derived on read rather than stored. A manual edit reaches the document
+        through a path with no ledger awareness, so a stored flag would only
+        become true the next time someone attempted a reject — leaving
+        live-looking controls on operations that are already dead.
+        """
+        if not turn.operations:
+            return frozenset()
+        try:
+            snapshot = self.documents.get_snapshot()
+        except NotebookDomainError:
+            return frozenset()
+        if snapshot.session_id != turn.session_id:
+            return frozenset(item.cell_id for item in turn.operations)
+        cells = {cell["id"]: cell for cell in snapshot.notebook["cells"]}
+        sources = {change.cell_id: change for change in turn.changes}
+        stale: set[str] = set()
+        for cell_id in {item.cell_id for item in turn.operations}:
+            change = sources.get(cell_id)
+            cell = cells.get(cell_id)
+            if change is None or cell is None:
+                stale.add(cell_id)
+                continue
+            source = cell.get("source", "")
+            source = "".join(source) if isinstance(source, list) else source
+            if is_stale(
+                current_source=source, previous_source=change.previous_source,
+                next_source=change.next_source,
+                operations=[
+                    item for item in turn.operations if item.cell_id == cell_id
+                ],
+            ):
+                stale.add(cell_id)
+        return frozenset(stale)
+
+    def accept_operations(
+        self, turn_id: str, operation_ids: Sequence[str] | None, *, session_id: str,
+    ) -> AgentTurn:
+        """Mark operations reviewed. Never touches the document.
+
+        Accept exists to settle review state for changes that are already
+        applied, so it takes no lease and no expected revision: a stale revision
+        cannot make it unsafe, and rejecting "I read this diff" with a 409 would
+        be hostile for no gain.
+        """
+        with self._lock:
+            turn = self._turns.get(turn_id)
+            if turn is None:
+                raise AgentTurnNotFound(turn_id)
+            if turn.session_id != session_id:
+                raise SessionConflict(turn.session_id)
+            targets = self._select_operations_locked(turn, operation_ids)
+            operations = turn.operations
+            for target in targets:
+                if target.state == REJECTED:
+                    # Flipping a rejected hunk to accepted would silently
+                    # re-apply content the user undid.
+                    raise OperationConflict(operationId=target.operation_id)
+                operations = with_state(operations, target.operation_id, ACCEPTED)
+            turn.operations = operations
+        self._publish_turn_updated(turn_id)
+        return self.get(turn_id)
+
+    def reject_operations(
+        self, turn_id: str, operation_ids: Sequence[str] | None, *,
+        session_id: str, expected_revision: int,
+        conflict: type[NotebookDomainError] = OperationConflict,
+    ):
+        """Undo operations and commit the recomposed cells as one mutation."""
+        lease = self.documents.coordinator.acquire(
+            operation_type="agent_reject", operation_id=turn_id,
+        )
+        try:
+            snapshot = self.documents.get_snapshot()
+            self.documents.check_snapshot_preconditions(
+                snapshot, session_id, expected_revision
+            )
+            with self._lock:
+                turn = self._turns.get(turn_id)
+                if turn is None:
+                    raise AgentTurnNotFound(turn_id)
+                targets = self._select_operations_locked(turn, operation_ids)
+                operations = turn.operations
+                for target in targets:
+                    operations = with_state(
+                        operations, target.operation_id, REJECTED
+                    )
+                sources = {change.cell_id: change for change in turn.changes}
+                changes = self._recompose_locked(
+                    snapshot, sources, turn.operations, operations,
+                    {target.cell_id for target in targets}, conflict,
+                )
+            updated = self.documents.apply_source_changes_under_lease(
+                changes=changes, expected_revision=expected_revision,
+                owner=f"reject:{turn_id}", lease=lease,
+            )
+            with self._lock:
+                stored = self._turns.get(turn_id)
+                if stored is not None:
+                    stored.operations = operations
+                    # Keep the checkpoint alive across the turn's own review:
+                    # undoing part of a turn is reviewing it, not unrelated work.
+                    if self._latest_applied_turn_id == turn_id:
+                        stored.applied_revision = updated.revision
+            if self.events is not None:
+                self.events.publish("notebook.updated", {"sessionId": updated.session_id, "revision": updated.revision, "ownerId": f"reject:{turn_id}"})
+            self._publish_turn_updated(turn_id)
+            return updated
+        finally:
+            self.documents.coordinator.release(lease)
+
+    def _select_operations_locked(
+        self, turn: AgentTurn, operation_ids: Sequence[str] | None,
+    ) -> tuple[TurnOperation, ...]:
+        """Resolve requested operation IDs, or every unsettled one when None."""
+        if operation_ids is None:
+            return tuple(
+                item for item in turn.operations if item.state == PENDING
+            )
+        known = {item.operation_id: item for item in turn.operations}
+        missing = [item for item in operation_ids if item not in known]
+        if missing:
+            raise OperationNotFound(missing[0])
+        return tuple(known[item] for item in operation_ids)
+
+    def _recompose_locked(
+        self, snapshot, sources, current: tuple[TurnOperation, ...],
+        updated: tuple[TurnOperation, ...], cell_ids: set[str],
+        conflict: type[NotebookDomainError],
+    ) -> dict[str, str]:
+        cells = {cell["id"]: cell for cell in snapshot.notebook["cells"]}
+        changes: dict[str, str] = {}
+        for cell_id in sorted(cell_ids):
+            change = sources.get(cell_id)
+            cell = cells.get(cell_id)
+            if change is None or cell is None:
+                raise CellNotFound(cell_id)
+            source = cell.get("source", "")
+            source = "".join(source) if isinstance(source, list) else source
+            for_cell = [item for item in current if item.cell_id == cell_id]
+            # The guard is "this cell is exactly what the ledger says it should
+            # be". A whole-cell hash against next_source cannot work here: after
+            # one hunk is undone the cell no longer matches, which would make
+            # every remaining hunk permanently unrejectable.
+            if is_stale(
+                current_source=source, previous_source=change.previous_source,
+                next_source=change.next_source, operations=for_cell,
+            ):
+                raise conflict()
+            composed = compose(
+                previous_source=change.previous_source,
+                next_source=change.next_source,
+                operations=[item for item in updated if item.cell_id == cell_id],
+            )
+            if composed != source:
+                changes[cell_id] = composed
+        return changes
+
     def revert_cell(
         self, turn_id: str, cell_id: str, *, session_id: str,
         expected_revision: int,
     ):
+        """Undo every outstanding operation for one cell.
+
+        Retained as the cell-level entry point and now expressed on the ledger,
+        so there is a single reject path rather than a parallel hash-guarded one.
+        """
         turn = self._require_revertible(turn_id)
-        change = next((item for item in turn.changes if item.cell_id == cell_id), None)
-        if change is None:
+        if not any(item.cell_id == cell_id for item in turn.changes):
             raise CellNotFound(cell_id)
-        lease = self.documents.coordinator.acquire(
-            operation_type="agent_revert", operation_id=f"{turn_id}:{cell_id}"
+        operation_ids = [
+            item.operation_id for item in turn.operations
+            if item.cell_id == cell_id and item.state in APPLIED_STATES
+        ]
+        return self.reject_operations(
+            turn_id, operation_ids, session_id=session_id,
+            expected_revision=expected_revision, conflict=RevertConflict,
         )
-        try:
-            snapshot = self.documents.get_snapshot()
-            self.documents.check_snapshot_preconditions(snapshot, session_id, expected_revision)
-            cell = next((item for item in snapshot.notebook["cells"] if item["id"] == cell_id), None)
-            if cell is None:
-                raise CellNotFound(cell_id)
-            source = cell.get("source", "")
-            source = "".join(source) if isinstance(source, list) else source
-            if self._source_hash(source) != self._source_hash(change.next_source):
-                raise RevertConflict()
-            updated = self.documents.apply_source_changes_under_lease(
-                changes={cell_id: change.previous_source},
-                expected_revision=expected_revision,
-                owner=f"revert:{turn_id}", lease=lease,
-            )
-            if self.events is not None:
-                self.events.publish("notebook.updated", {"sessionId": updated.session_id, "revision": updated.revision, "ownerId": f"revert:{turn_id}"})
-            return updated
-        finally:
-            self.documents.coordinator.release(lease)
+
+    def _publish_turn_updated(self, turn_id: str) -> None:
+        if self.events is None:
+            return
+        turn = self.get(turn_id)
+        self.events.publish("turn.updated", {
+            "turnId": turn.turn_id, "sessionId": turn.session_id,
+            "state": turn.state,
+            "revision": turn.applied_revision or turn.base_revision,
+            "executionOperationId": turn.execution_operation_id,
+        })
 
     def _require_undoable(self, turn_id: str) -> AgentTurn:
         turn = self.get(turn_id)
@@ -591,6 +825,7 @@ class AgentTurnService:
         retained: set[str] = set()
         retained_bytes = 0
         protected = {self._latest_applied_turn_id} if self._latest_applied_turn_id else set()
+        protected |= self._pending_review_turn_ids_locked(terminal)
         for item in terminal:
             if item.turn_id in protected:
                 retained.add(item.turn_id)
@@ -612,6 +847,54 @@ class AgentTurnService:
             if self._latest_applied_turn_id == expired.turn_id:
                 self._latest_applied_turn_id = None
 
+    def _pending_review_turn_ids_locked(
+        self, terminal: Sequence[AgentTurn],
+    ) -> set[str]:
+        """Turn IDs to hold back from eviction because review is unfinished.
+
+        Kept newest first, bounded by *both* a turn count and the same byte
+        budget that governs history overall. The byte bound is the important
+        one: protecting review state must not let a backlog of large unreviewed
+        turns pin memory, so an oversized ledger is force-settled rather than
+        retained. Anything not kept is settled to accepted and evicted normally
+        — the safe direction, since the change stays in the notebook exactly as
+        the turn applied it and only the record that nobody reviewed it is lost.
+        """
+        keep: set[str] = set()
+        budget = 0
+        latest = self._turns.get(self._latest_applied_turn_id or "")
+        if latest is not None:
+            budget += self._history_size(latest)
+        for item in terminal:
+            if not any(
+                operation.state == PENDING for operation in item.operations
+            ):
+                continue
+            size = self._history_size(item)
+            if (
+                len(keep) < MAX_PENDING_REVIEW_TURNS
+                and budget + size <= MAX_TURN_HISTORY_BYTES
+            ):
+                keep.add(item.turn_id)
+                budget += size
+                continue
+            self._force_settle_locked(item)
+        return keep
+
+    @staticmethod
+    def _force_settle_locked(turn: AgentTurn) -> None:
+        operations = turn.operations
+        for operation in turn.operations:
+            if operation.state == PENDING:
+                operations = with_state(
+                    operations, operation.operation_id, ACCEPTED
+                )
+        turn.operations = operations
+        logger.info(
+            "Auto-kept unreviewed agent changes for turn %s: review backlog "
+            "exceeded the retained history budget", turn.turn_id,
+        )
+
     @staticmethod
     def _history_size(turn: AgentTurn) -> int:
         values = [turn.prompt, turn.final_output]
@@ -621,4 +904,10 @@ class AgentTurnService:
             values.extend((change.cell_id, change.previous_source, change.next_source))
         if turn.error is not None:
             values.append(str(turn.error))
-        return sum(len(value.encode("utf-8")) for value in values) + 512
+        # Operations are index ranges over sources already counted above, so
+        # they add a fixed cost per hunk rather than duplicating any text.
+        return (
+            sum(len(value.encode("utf-8")) for value in values)
+            + 64 * len(turn.operations)
+            + 512
+        )

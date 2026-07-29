@@ -26,8 +26,43 @@ class MutationRequest(BaseModel):
     expected_revision: int = Field(alias="expectedDocumentRevision")
 
 
-def serialize_turn(turn: AgentTurn, *, undo_eligible: bool = False) -> dict[str, Any]:
+class AcceptRequest(BaseModel):
+    """Accept settles review state only, so it needs no expected revision."""
+
+    session_id: str = Field(alias="sessionId")
+
+
+def serialize_operations(
+    turn: AgentTurn, *, stale_cell_ids: frozenset[str] = frozenset(),
+) -> list[dict[str, Any]]:
+    """Serialize the ledger as index ranges — never hunk text.
+
+    The line content is reconstructible from ``changes``; repeating it here
+    would blow the turn-summary budget for exactly the large turns that most
+    need reviewing.
+    """
+    return [
+        {
+            "operationId": item.operation_id,
+            "cellId": item.cell_id,
+            "kind": item.kind,
+            "ordinal": item.ordinal,
+            "state": "stale" if (
+                item.state == "pending" and item.cell_id in stale_cell_ids
+            ) else item.state,
+            "previousRange": [item.hunk.prev_start, item.hunk.prev_end],
+            "nextRange": [item.hunk.next_start, item.hunk.next_end],
+        }
+        for item in turn.operations
+    ]
+
+
+def serialize_turn(
+    turn: AgentTurn, *, undo_eligible: bool = False,
+    stale_cell_ids: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
     return {
+        "operations": serialize_operations(turn, stale_cell_ids=stale_cell_ids),
         "turnId": turn.turn_id,
         "sessionId": turn.session_id,
         "baseRevision": turn.base_revision,
@@ -62,10 +97,13 @@ def _truncate(value: str, max_bytes: int) -> str:
 
 def serialize_turn_summary(
     turn: AgentTurn, *, undo_eligible: bool = False,
+    stale_cell_ids: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     change_count = len(turn.changes)
     source_budget = min(2048, max(64, 80_000 // max(1, change_count * 2)))
-    result = serialize_turn(turn, undo_eligible=undo_eligible)
+    result = serialize_turn(
+        turn, undo_eligible=undo_eligible, stale_cell_ids=stale_cell_ids
+    )
     result["prompt"] = _truncate(turn.prompt, 8192)
     result["finalOutput"] = _truncate(turn.final_output, 8192)
     result["editableCellIds"] = [_truncate(value, 256) for value in turn.editable_cell_ids[:128]]
@@ -121,7 +159,19 @@ def serialize_turn_summary(
     result["editableCellIds"] = []
     result["contextCellIds"] = []
     result["error"] = None
+    # Dropped last: without the hunk text above, the ledger is the only thing
+    # left that says a change is still unreviewed. The client refetches full
+    # detail for the selected turn when historyTruncated is set.
+    result["operations"] = []
     return result
+
+
+def _serialize_current(service, turn: AgentTurn) -> dict[str, Any]:
+    return serialize_turn(
+        turn,
+        undo_eligible=service.is_undo_eligible(turn),
+        stale_cell_ids=service.stale_cell_ids(turn),
+    )
 
 
 @router.post("", status_code=202)
@@ -132,14 +182,13 @@ def start_turn(body: StartTurnRequest, request: Request) -> dict[str, Any]:
         expected_revision=body.expected_revision,
         model=body.model, mode=body.mode,
     )
-    return serialize_turn(turn, undo_eligible=service.is_undo_eligible(turn))
+    return _serialize_current(service, turn)
 
 
 @router.get("/{turn_id}")
 def get_turn(turn_id: str, request: Request) -> dict[str, Any]:
     service = request.app.state.agent_turn_service
-    turn = service.get(turn_id)
-    return serialize_turn(turn, undo_eligible=service.is_undo_eligible(turn))
+    return _serialize_current(service, service.get(turn_id))
 
 
 @router.post("/{turn_id}/cancel")
@@ -151,7 +200,51 @@ def cancel_turn(
         turn_id, session_id=body.session_id,
         expected_revision=body.expected_revision,
     )
-    return serialize_turn(turn, undo_eligible=service.is_undo_eligible(turn))
+    return _serialize_current(service, turn)
+
+
+@router.post("/{turn_id}/operations/accept-all")
+def accept_all_operations(
+    turn_id: str, body: AcceptRequest, request: Request,
+) -> dict[str, Any]:
+    service = request.app.state.agent_turn_service
+    turn = service.accept_operations(turn_id, None, session_id=body.session_id)
+    return _serialize_current(service, turn)
+
+
+@router.post("/{turn_id}/operations/reject-all")
+def reject_all_operations(
+    turn_id: str, body: MutationRequest, request: Request,
+) -> dict[str, Any]:
+    return serialize_snapshot(
+        request.app.state.agent_turn_service.reject_operations(
+            turn_id, None, session_id=body.session_id,
+            expected_revision=body.expected_revision,
+        )
+    )
+
+
+@router.post("/{turn_id}/operations/{operation_id}/accept")
+def accept_operation(
+    turn_id: str, operation_id: str, body: AcceptRequest, request: Request,
+) -> dict[str, Any]:
+    service = request.app.state.agent_turn_service
+    turn = service.accept_operations(
+        turn_id, [operation_id], session_id=body.session_id
+    )
+    return _serialize_current(service, turn)
+
+
+@router.post("/{turn_id}/operations/{operation_id}/reject")
+def reject_operation(
+    turn_id: str, operation_id: str, body: MutationRequest, request: Request,
+) -> dict[str, Any]:
+    return serialize_snapshot(
+        request.app.state.agent_turn_service.reject_operations(
+            turn_id, [operation_id], session_id=body.session_id,
+            expected_revision=body.expected_revision,
+        )
+    )
 
 
 @router.post("/{turn_id}/undo")
