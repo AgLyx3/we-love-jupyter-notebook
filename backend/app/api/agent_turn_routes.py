@@ -19,6 +19,9 @@ class StartTurnRequest(BaseModel):
     prompt: str = Field(min_length=1)
     model: Literal["default", "opus", "sonnet", "haiku"] = "default"
     mode: Literal["edit", "plan"] = "edit"
+    write_scope: Literal["blocking", "trusted"] = Field(
+        default="blocking", alias="writeScope"
+    )
 
 
 class MutationRequest(BaseModel):
@@ -34,6 +37,7 @@ def serialize_turn(turn: AgentTurn, *, undo_eligible: bool = False) -> dict[str,
         "prompt": turn.prompt,
         "model": turn.model,
         "mode": turn.mode,
+        "writeScope": turn.write_scope,
         "editableCellIds": list(turn.editable_cell_ids),
         "contextCellIds": list(turn.context_cell_ids),
         "undoEligible": undo_eligible,
@@ -45,6 +49,10 @@ def serialize_turn(turn: AgentTurn, *, undo_eligible: bool = False) -> dict[str,
         "changes": [
             {"cellId": item.cell_id, "previousSource": item.previous_source, "nextSource": item.next_source}
             for item in turn.changes
+        ],
+        "structuralOps": [
+            {"op": op.op, "cellId": op.cell_id, "detail": op.detail}
+            for op in turn.structural_ops
         ],
         "error": turn.error,
         "createdAt": turn.created_at.isoformat(),
@@ -70,6 +78,7 @@ def serialize_turn_summary(
     result["finalOutput"] = _truncate(turn.final_output, 8192)
     result["editableCellIds"] = [_truncate(value, 256) for value in turn.editable_cell_ids[:128]]
     result["contextCellIds"] = [_truncate(value, 256) for value in turn.context_cell_ids[:128]]
+    result["structuralOps"] = result["structuralOps"][:256]
     result["changes"] = [
         {
             "cellId": _truncate(item.cell_id, 256),
@@ -118,6 +127,7 @@ def serialize_turn_summary(
     if len(json.dumps(result, separators=(",", ":")).encode()) <= MAX_TURN_SUMMARY_BYTES:
         return result
     result["changes"] = []
+    result["structuralOps"] = []
     result["editableCellIds"] = []
     result["contextCellIds"] = []
     result["error"] = None
@@ -130,7 +140,7 @@ def start_turn(body: StartTurnRequest, request: Request) -> dict[str, Any]:
     turn = service.start(
         prompt=body.prompt, session_id=body.session_id,
         expected_revision=body.expected_revision,
-        model=body.model, mode=body.mode,
+        model=body.model, mode=body.mode, write_scope=body.write_scope,
     )
     return serialize_turn(turn, undo_eligible=service.is_undo_eligible(turn))
 

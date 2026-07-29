@@ -13,7 +13,7 @@ from backend.app.agent_turns.service import (
     MAX_TURN_HISTORY_BYTES, RevertConflict, UndoConflict,
 )
 from backend.app.api.agent_turn_routes import (
-    MAX_TURN_SUMMARY_BYTES, serialize_turn_summary,
+    MAX_TURN_SUMMARY_BYTES, StartTurnRequest, serialize_turn, serialize_turn_summary,
 )
 from backend.app.boundary_validation.validator import CandidateCellSourceChange
 from backend.app.agent_workspace.adapters import FakeAgentAdapter, FakeAttempt
@@ -65,6 +65,21 @@ def test_noop_turn_does_not_increment_revision(notebook_payload):
     assert turn.state == "completed"
     assert turn.changes == ()
     assert documents.get_snapshot().revision == snapshot.revision
+
+
+def test_noop_turn_preserves_scope_for_followup(notebook_payload):
+    # The agent answered a clarifying question and changed nothing, so the
+    # editable cell must stay scoped for the follow-up turn (no re-scoping).
+    documents, scopes, turns, snapshot = _services(
+        notebook_payload, [FakeAttempt(final_output="which cell did you mean?")]
+    )
+    turn = turns.start(
+        prompt="delete it", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    assert turn.state == "completed"
+    assert turn.applied_revision is None
+    assert scopes.current().editable_cell_ids == ("editable",)
 
 
 def test_read_only_turn_with_no_scope_completes_with_agent_output(notebook_payload):
@@ -283,6 +298,44 @@ def test_turn_history_summary_marks_removed_error_details_as_truncated():
     assert summary["historyTruncated"] is True
 
 
+def test_start_turn_request_defaults_write_scope_to_blocking():
+    request = StartTurnRequest.model_validate(
+        {"sessionId": "s1", "expectedDocumentRevision": 1, "prompt": "hi"}
+    )
+    assert request.write_scope == "blocking"
+
+
+def test_start_turn_request_parses_trusted_write_scope():
+    request = StartTurnRequest.model_validate(
+        {
+            "sessionId": "s1", "expectedDocumentRevision": 1, "prompt": "hi",
+            "writeScope": "trusted",
+        }
+    )
+    assert request.write_scope == "trusted"
+
+
+def test_start_turn_request_rejects_unknown_write_scope():
+    with pytest.raises(ValueError):
+        StartTurnRequest.model_validate(
+            {
+                "sessionId": "s1", "expectedDocumentRevision": 1, "prompt": "hi",
+                "writeScope": "yolo",
+            }
+        )
+
+
+def test_serialize_turn_round_trips_write_scope():
+    blocking = AgentTurn(turn_id="t1", session_id="s1", base_revision=1, prompt="p")
+    trusted = AgentTurn(
+        turn_id="t2", session_id="s1", base_revision=1, prompt="p",
+        write_scope="trusted",
+    )
+    assert serialize_turn(blocking)["writeScope"] == "blocking"
+    assert serialize_turn(trusted)["writeScope"] == "trusted"
+    assert serialize_turn_summary(trusted)["writeScope"] == "trusted"
+
+
 def test_turn_rejects_stale_revision_and_releases_lease(notebook_payload):
     documents, _scopes, turns, snapshot = _services(notebook_payload, [FakeAttempt()])
     with pytest.raises(RevisionConflict):
@@ -401,10 +454,10 @@ def test_scope_expiration_completes_before_lease_release(notebook_payload):
     allow_expire = Event()
 
     class BarrierScopeService(TurnScopeService):
-        def expire(self, scope, outcome):
+        def expire(self, scope, outcome, **kwargs):
             entered_expire.set()
             assert allow_expire.wait(2)
-            super().expire(scope, outcome)
+            super().expire(scope, outcome, **kwargs)
 
     documents = NotebookDocumentService()
     snapshot = documents.import_notebook(notebook_payload())
@@ -444,10 +497,10 @@ def test_api_publishes_terminal_only_after_cleanup_and_lease_release(
     allow_expire = Event()
 
     class BarrierScopeService(TurnScopeService):
-        def expire(self, scope, outcome):
+        def expire(self, scope, outcome, **kwargs):
             entered_expire.set()
             assert allow_expire.wait(2)
-            super().expire(scope, outcome)
+            super().expire(scope, outcome, **kwargs)
 
     documents = NotebookDocumentService()
     scopes = BarrierScopeService(documents)
@@ -489,7 +542,8 @@ def test_api_publishes_terminal_only_after_cleanup_and_lease_release(
                 break
             time.sleep(0.01)
         assert state == "completed"
-        assert api.get("/turn-scope").json()["editableCellIds"] == []
+        # No-op turn preserves the editable selection for the follow-up turn.
+        assert api.get("/turn-scope").json()["editableCellIds"] == ["editable"]
         accepted = api.post(
             "/turn-scope/context-cells",
             json={**preconditions, "cellId": "intro"},
@@ -951,7 +1005,9 @@ def test_agent_turn_api_exposes_status_and_terminal_scope(client, notebook_paylo
             break
         time.sleep(0.01)
     assert status["state"] == "completed"
-    assert client.get("/turn-scope").json()["editableCellIds"] == []
+    # The turn applied nothing, so the editable selection is preserved for the
+    # follow-up turn (sticky scope on a no-op / clarifying-question turn).
+    assert client.get("/turn-scope").json()["editableCellIds"] == ["editable"]
 
 
 def test_replacement_api_clears_scope_but_failed_replacement_does_not(
@@ -984,3 +1040,132 @@ def test_replacement_api_clears_scope_but_failed_replacement_does_not(
     assert replaced.status_code == 201
     assert replaced.json()["sessionId"] != uploaded["sessionId"]
     assert client.get("/turn-scope").json()["editableCellIds"] == []
+
+
+def _trusted_services(notebook_payload, attempts, executions=None):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes,
+        adapter=FakeAgentAdapter(attempts), timeout=1, executions=executions,
+    )
+    return documents, scopes, turns, snapshot
+
+
+_TRUSTED_ADD_STRUCTURE = json.dumps({"cells": [
+    {"cellId": "intro", "cellType": "markdown", "source": "cells/cell_intro.md"},
+    {"cellId": "editable", "cellType": "code", "source": "cells/cell_editable.py"},
+    {"op": "add", "cellType": "markdown", "source": "cells/new_1.md"},
+]})
+
+
+def test_trusted_turn_edit_and_add_applies_and_undo_restores(notebook_payload):
+    documents, _scopes, turns, snapshot = _trusted_services(
+        notebook_payload,
+        [FakeAttempt(
+            edits={
+                "structure.json": _TRUSTED_ADD_STRUCTURE,
+                "cells/cell_editable.py": "value = 99\n",
+                "cells/new_1.md": "## summary\n",
+            },
+            final_output="restructured",
+        )],
+    )
+    turn = turns.start(
+        prompt="add a summary and bump the value", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, write_scope="trusted", background=False,
+    )
+    assert turn.state == "completed", turn.error
+    assert turn.applied_revision == snapshot.revision + 1
+    cells = documents.get_snapshot().notebook["cells"]
+    assert [c["cell_type"] for c in cells] == ["markdown", "code", "markdown"]
+    assert _source(documents.get_snapshot(), "editable") == "value = 99\n"
+    added = cells[2]
+    assert added["source"] == "## summary\n"
+    assert added["metadata"].get("agent_authored") is True
+    assert {op.op for op in turn.structural_ops} == {"edit", "add"}
+    # Edited surviving cells carry a per-cell source diff for inline review...
+    assert [(c.cell_id, c.previous_source, c.next_source) for c in turn.changes] == [
+        ("editable", "value = 1\n", "value = 99\n")
+    ]
+    # ...but per-cell revert is rejected on Trusted turns (whole-turn undo only).
+    with pytest.raises(RevertConflict):
+        turns.revert_cell(
+            turn.turn_id, "editable",
+            session_id=documents.get_snapshot().session_id,
+            expected_revision=turn.applied_revision,
+        )
+    # No auto-execution for a Trusted turn even though a code cell changed (R4).
+    assert turn.execution_operation_id is None
+
+    restored = turns.undo(
+        turn.turn_id, session_id=documents.get_snapshot().session_id,
+        expected_revision=turn.applied_revision,
+    )
+    assert [c["id"] for c in restored.notebook["cells"]] == ["intro", "editable"]
+    assert _source(restored, "editable") == "value = 1\n"
+
+
+def test_trusted_turn_reorder_and_delete(notebook_payload):
+    structure = json.dumps({"cells": [
+        {"cellId": "editable", "cellType": "code", "source": "cells/cell_editable.py"},
+    ]})
+    documents, _scopes, turns, snapshot = _trusted_services(
+        notebook_payload,
+        [FakeAttempt(edits={"structure.json": structure}, final_output="pruned")],
+    )
+    turn = turns.start(
+        prompt="drop the intro", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, write_scope="trusted", background=False,
+    )
+    assert turn.state == "completed", turn.error
+    cells = documents.get_snapshot().notebook["cells"]
+    assert [c["id"] for c in cells] == ["editable"]
+    assert any(op.op == "delete" and op.cell_id == "intro" for op in turn.structural_ops)
+
+
+def test_trusted_turn_malformed_structure_retries_then_fails_with_salvage(notebook_payload):
+    documents, _scopes, turns, snapshot = _trusted_services(
+        notebook_payload,
+        [FakeAttempt(edits={"structure.json": "{ this is not json"}, final_output="oops")],
+    )
+    turn = turns.start(
+        prompt="restructure", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, write_scope="trusted", background=False,
+    )
+    assert turn.state == "failed"
+    assert turn.attempts == 3  # bounded structural-format retry (R3)
+    assert documents.get_snapshot().revision == snapshot.revision  # nothing applied
+    # Salvage: the agent's attempted structure is captured before workspace destroy (R2).
+    assert turn.error["details"].get("attemptedStructure") == "{ this is not json"
+
+
+def test_trusted_plan_turn_writes_nothing_and_is_not_structural(notebook_payload):
+    # Regression: a Trusted+Plan turn (possible via sticky writeScope) must NOT
+    # reach the structural apply path — Plan writes nothing regardless of scope.
+    captured = {}
+
+    class SpyAdapter:
+        auxiliary_paths = frozenset()
+
+        def run(self, workspace, *, timeout, cancel_event, model=None, permission_mode="acceptEdits"):
+            captured["is_trusted"] = workspace.is_trusted
+            captured["permission_mode"] = permission_mode
+            return AdapterResult("Here is the plan; nothing was changed.")
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    turns = AgentTurnService(documents=documents, scopes=scopes, adapter=SpyAdapter(), timeout=1)
+    turn = turns.start(
+        prompt="plan a whole-notebook refactor", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, write_scope="trusted", mode="plan",
+        background=False,
+    )
+    assert turn.state == "completed"
+    assert captured["is_trusted"] is False       # routed to the Blocking (read-only) path
+    assert captured["permission_mode"] == "plan"  # CLI is told to write nothing
+    assert turn.structural_ops == ()
+    assert turn.applied_revision is None
+    assert documents.get_snapshot().revision == snapshot.revision  # nothing applied

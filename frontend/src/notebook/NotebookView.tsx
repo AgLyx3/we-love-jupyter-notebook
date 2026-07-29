@@ -3,8 +3,8 @@ import type { AgentTurn, NotebookSnapshot, TurnScope } from "../api/client";
 import NotebookCell from "./NotebookCell";
 import type { CellSelection } from "./selectionEdit";
 
-export default function NotebookView({ notebook, scope, turn, disabled, sourceActionsDisabled, autoSave, focusRequest, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
-  notebook: NotebookSnapshot; scope: TurnScope; turn: AgentTurn | null;
+export default function NotebookView({ notebook, scope, turn, trusted = false, disabled, sourceActionsDisabled, autoSave, focusRequest, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
+  notebook: NotebookSnapshot; scope: TurnScope; turn: AgentTurn | null; trusted?: boolean;
   disabled: boolean; sourceActionsDisabled: boolean; autoSave: boolean; focusRequest: { cellId: string; requestId: number } | null;
   onDirtyChange: (cellId: string, dirty: boolean) => void;
   onSave: (cellId: string, source: string) => void; onRun: (cellId: string) => void; onScope: (cellId: string, editable: boolean) => void; onScopeMany: (cellIds: string[], editable: boolean) => void; onRevert: (turnId: string, cellId: string) => void;
@@ -119,9 +119,9 @@ export default function NotebookView({ notebook, scope, turn, disabled, sourceAc
     const id = notebook.cells[next]?.cellId ?? focused; setFocused(id); const node = refs.current.get(id); node?.focus(); node?.scrollIntoView({ block: "nearest" });
   }}>
     {notebook.cells.map((cell) => <NotebookCell key={`${notebook.sessionId}:${cell.cellId}`} cell={cell} focused={focused === cell.cellId} selected={selected.has(cell.cellId)} dragIds={selected.has(cell.cellId) && orderedSelection.length > 1 ? orderedSelection : [cell.cellId]}
-      editable={scope.editableCellIds.includes(cell.cellId)} context={scope.contextCellIds.includes(cell.cellId)} disabled={disabled} sourceActionsDisabled={sourceActionsDisabled} autoSave={autoSave}
+      editable={scope.editableCellIds.includes(cell.cellId)} context={scope.contextCellIds.includes(cell.cellId)} trusted={trusted} disabled={disabled} sourceActionsDisabled={sourceActionsDisabled} autoSave={autoSave}
       cellRef={(node) => { if (node) refs.current.set(cell.cellId, node); else refs.current.delete(cell.cellId); }}
-      change={turn?.changes.find((change) => change.cellId === cell.cellId)} onFocus={() => setFocused(cell.cellId)}
+      change={turn?.changes.find((change) => change.cellId === cell.cellId)} revertable={turn?.writeScope !== "trusted"} onFocus={() => setFocused(cell.cellId)}
       onSelect={(event) => selectCell(cell.cellId, event)} onContextMenu={(event) => openMenu(cell.cellId, event)}
       onDirtyChange={(dirty) => onDirtyChange(cell.cellId, dirty)}
       onSave={(source) => onSave(cell.cellId, source)} onRun={() => onRun(cell.cellId)}
@@ -132,7 +132,7 @@ export default function NotebookView({ notebook, scope, turn, disabled, sourceAc
       <div className="cell-context-menu" style={{ left: menu.x, top: menu.y }} role="menu" aria-label="Cell scope actions" onClick={(event) => event.stopPropagation()}>
         <p className="context-menu-heading">{selected.size} cell{selected.size === 1 ? "" : "s"} selected</p>
         <button role="menuitem" disabled={scopeDisabled || editableCount === 0} onClick={() => applyScope(true)}>Add {editableCount} to edit</button>
-        <button role="menuitem" disabled={scopeDisabled} onClick={() => applyScope(false)}>Add {selected.size} as context</button>
+        <button role="menuitem" disabled={scopeDisabled} onClick={() => applyScope(false)}>Add {selected.size} as focus</button>
         <button role="menuitem" onClick={() => { setSelected(new Set()); setMenu(null); }}>Clear selection</button>
       </div>
     </div>}

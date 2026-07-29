@@ -182,10 +182,10 @@ describe("Notebook editor", () => {
     });
     render(<App />);
     await userEvent.click(await screen.findByLabelText("Allow agent edit code cell 2"));
-    await userEvent.click(screen.getByLabelText("Add markdown cell 1 as context"));
+    await userEvent.click(screen.getByLabelText("Add markdown cell 1 as focus"));
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/turn-scope/editable-cells"), expect.objectContaining({ method: "POST" }));
     expect(await screen.findByText("1 editable")).toBeInTheDocument();
-    expect(await screen.findByText("1 context")).toBeInTheDocument();
+    expect(await screen.findByText("1 focus")).toBeInTheDocument();
   });
 
   it("refreshes the notebook and reports a revision conflict", async () => {
@@ -303,13 +303,13 @@ describe("Notebook editor", () => {
     render(<App />);
 
     expect(await screen.findByLabelText("raw cell 1")).toHaveTextContent("RAW");
-    expect(screen.getByLabelText("Add raw cell 1 as context")).toBeEnabled();
+    expect(screen.getByLabelText("Add raw cell 1 as focus")).toBeEnabled();
     const editor = await screen.findByLabelText("Source for raw cell 1");
     expect(editor).toHaveValue("# literal raw\n<not markdown>");
     await userEvent.type(editor, "\nchanged");
     expect(screen.getByLabelText("Save raw cell 1")).toBeEnabled();
     expect(screen.getByLabelText("Allow agent edit raw cell 1")).toBeDisabled();
-    expect(screen.getByLabelText("Add raw cell 1 as context")).toBeDisabled();
+    expect(screen.getByLabelText("Add raw cell 1 as focus")).toBeDisabled();
   });
 
   it("submits an agent instruction with Enter", async () => {
@@ -319,7 +319,7 @@ describe("Notebook editor", () => {
 
     await userEvent.type(prompt, "  Update the selected cell{Enter}");
 
-    expect(onSubmit).toHaveBeenCalledWith("Update the selected cell", { model: "default", mode: "edit" });
+    expect(onSubmit).toHaveBeenCalledWith("Update the selected cell", { model: "default", mode: "edit", writeScope: "blocking" });
     expect(prompt).toHaveValue("");
   });
 
