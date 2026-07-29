@@ -1,6 +1,7 @@
 import { AlertTriangle, BookOpen, PanelLeft, Save, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
-import { ApiError, api, connectEvents, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type KernelStatus, type NotebookSnapshot, type TurnScope } from "./api/client";
+import { ApiError, api, connectEvents, type AgentOperation, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type KernelStatus, type NotebookSnapshot, type TurnScope } from "./api/client";
+import ReviewBar from "./notebook/ReviewBar";
 import AgentChatPanel from "./agentChat/AgentChatPanel";
 import type { TurnRecord } from "./agentChat/AgentChatPanel";
 import KernelControls from "./execution/KernelControls";
@@ -274,6 +275,18 @@ export default function App() {
   };
   const requestCellFocus = (cellId: string) => setFocusRequest((current) => ({ cellId, requestId: (current?.requestId ?? 0) + 1 }));
 
+  // Accept changes no document state, so it neither refreshes the notebook nor
+  // advances the revision — it only settles the ledger.
+  const acceptOperations = (notebook: NotebookSnapshot, turnId: string, operationId?: string) =>
+    void mutate(() => api.acceptOperations(notebook, turnId, operationId), { refreshAfter: false }, (updated) => {
+      setHistory((items) => updateTurnRecord(items, turnId, () => updated));
+      setTurn((item) => item?.turnId === turnId ? updated : item);
+    });
+  const rejectOperations = (notebook: NotebookSnapshot, turnId: string, operationId?: string) =>
+    void mutate(() => api.rejectOperations(notebook, turnId, operationId), {
+      conflictText: "This cell changed after the agent edited it, so that change can no longer be undone individually.",
+    }, setNotebook);
+
   // Selection → "Add to agent chat": the containing cell becomes the editable
   // boundary and the selection is attached to the chat as a reference chip
   // (Cursor-style — cell/line label, not raw code). The code is sent to the
@@ -334,6 +347,19 @@ export default function App() {
   const selectedTurn = history.find((item) => item.turn.turnId === selectedTurnId)?.turn ?? turn;
 
   const fileLocked = mutationsDisabled || busy || hasDirtyDrafts;
+  const reviewOperations = selectedTurn?.operations ?? [];
+  const reviewPending = reviewOperations.filter((item) => item.state === "pending");
+  const reviewKept = reviewOperations.filter((item) => item.state === "accepted").length;
+  // Walk to the next cell that still has something unreviewed, wrapping around.
+  // Reuses the existing chat-to-cell focus plumbing rather than adding a second
+  // way to scroll the notebook.
+  const focusNextChange = () => {
+    if (!notebook || !reviewPending.length) return;
+    const order = notebook.cells.map((cell) => cell.cellId).filter((cellId) => reviewPending.some((item) => item.cellId === cellId));
+    if (!order.length) return;
+    const from = order.indexOf(focusRequest?.cellId ?? "");
+    requestCellFocus(order[(from + 1) % order.length]);
+  };
   return <div className="app-shell">
     <header className="topbar">
       <div className="brand">{workspaceFolder && sidebarHidden && <button className="sidebar-reveal" title="Show files" aria-label="Show file tree" onClick={() => setSidebarHidden(false)}><PanelLeft /></button>}<BookOpen /><strong>{notebook?.filename ?? "Workspace"}</strong>{notebook && <span className={notebook.dirty ? "dirty" : ""}>{notebook.dirty ? "Unsaved" : "Clean"}</span>}{notebook && <span>Revision {notebook.revision}</span>}</div>
@@ -346,7 +372,15 @@ export default function App() {
     <div className="workspace-layout">
       {workspaceFolder && !sidebarHidden && <WorkspaceSidebar root={workspaceFolder} activePath={notebook?.notebookPath ?? null} onOpenNotebook={(path) => void handleOpen(path, workspaceFolder)} onCollapse={() => setSidebarHidden(true)} />}
       {notebook ? <div className="editor-layout" style={{ "--agent-width": `${agentWidth}px` } as CSSProperties}>
+      <div className="notebook-pane">
+      {selectedTurn && reviewOperations.length > 0 && <ReviewBar
+        total={reviewOperations.length} reviewed={reviewOperations.length - reviewPending.length} keptCount={reviewKept}
+        disabled={mutationsDisabled || busy || hasDirtyDrafts}
+        onNext={focusNextChange}
+        onKeepAll={() => acceptOperations(notebook, selectedTurn.turnId)}
+        onUndoAll={() => rejectOperations(notebook, selectedTurn.turnId)} />}
       <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} autoSave={autoSave} focusRequest={focusRequest}
+        onKeepCell={(turnId, cellId) => { const ids = pendingOperations(selectedTurn, cellId); if (ids.length) void mutate(async () => { let latest: AgentTurn | undefined; for (const item of ids) latest = await api.acceptOperations(notebook, turnId, item.operationId); return latest as AgentTurn; }, { refreshAfter: false }, (updated) => { setHistory((items) => updateTurnRecord(items, turnId, () => updated)); setTurn((item) => item?.turnId === turnId ? updated : item); }); }}
         onDirtyChange={(cellId, dirty) => setDirtyCellIds((current) => {
           if (current.has(cellId) === dirty) return current;
           const next = new Set(current); if (dirty) next.add(cellId); else next.delete(cellId); return next;
@@ -374,6 +408,7 @@ export default function App() {
           setHistory((items) => updateTurnRecord(items, turnId, (item) => ({ ...item, changes: item.changes.filter((change) => change.cellId !== cellId) })));
           setTurn((item) => item?.turnId === turnId ? { ...item, changes: item.changes.filter((change) => change.cellId !== cellId) } : item);
         })} />
+      </div>
       <div className="editor-resizer" role="separator" aria-orientation="vertical" aria-label="Resize agent panel" tabIndex={0} onPointerDown={startAgentResize} onKeyDown={nudgeAgentResize} />
       <AgentChatPanel notebook={notebook} scope={scope} turn={selectedTurn} activeTurn={activeTurn} history={history} operation={operation} busy={busy} mutationsDisabled={mutationsDisabled || hasDirtyDrafts}
         onClearScope={() => void mutate(() => api.clearScope(notebook), { refreshAfter: false }, setScope)}
@@ -439,12 +474,39 @@ function reconcileHistory(summaries: TurnRecord[], existing: TurnRecord[], noteb
   return [...reconciled, ...cachedTail].slice(0, 50);
 }
 
+// Which of a turn's changes still have something to review.
+//
+// Before the operation ledger this compared the cell's source to `nextSource`,
+// which is only correct while a change is all-or-nothing: undo one hunk and the
+// equality breaks, so the whole cell's diff — including the hunks nobody has
+// looked at yet — would silently disappear.
+//
+// With a ledger, `nextSource` describes what the turn originally proposed, not
+// what is in the cell, so it is history rather than a render source. A change
+// stays visible while it still has unsettled operations. Accepting is therefore
+// what clears a diff, which is the review gesture the UI previously lacked.
+//
+// Turns served before the ledger existed (or with operations dropped by summary
+// truncation) fall back to the old equality so their diffs still resolve.
 function reconcileTurnChanges(turn: AgentTurn, notebook: NotebookSnapshot | null): AgentTurn {
   if (!notebook) return turn;
-  return {
-    ...turn,
-    changes: turn.changes.filter((change) => notebook.cells.find((cell) => cell.cellId === change.cellId)?.source === change.nextSource),
-  };
+  const operations = turn.operations;
+  if (!operations?.length) {
+    return { ...turn, changes: turn.changes.filter((change) => notebook.cells.find((cell) => cell.cellId === change.cellId)?.source === change.nextSource) };
+  }
+  const unsettled = new Set(operations.filter((item) => item.state !== "accepted" && item.state !== "rejected").map((item) => item.cellId));
+  return { ...turn, changes: turn.changes.filter((change) => unsettled.has(change.cellId) && notebook.cells.some((cell) => cell.cellId === change.cellId)) };
+}
+
+export function pendingOperations(turn: AgentTurn | null | undefined, cellId?: string): AgentOperation[] {
+  return (turn?.operations ?? []).filter((item) => item.state === "pending" && (cellId === undefined || item.cellId === cellId));
+}
+
+// A cell whose outputs were produced by code the user has since undone. The
+// output is the thing a notebook reader reasons about, so leaving it unmarked
+// is a correctness trap, not a cosmetic one.
+export function hasUndoneChanges(turn: AgentTurn | null | undefined, cellId: string): boolean {
+  return (turn?.operations ?? []).some((item) => item.cellId === cellId && item.state === "rejected");
 }
 
 function updateTurnRecord(items: TurnRecord[], turnId: string, update: (turn: AgentTurn) => AgentTurn): TurnRecord[] {

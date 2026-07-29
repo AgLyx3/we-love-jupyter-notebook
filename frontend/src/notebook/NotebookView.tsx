@@ -3,11 +3,12 @@ import type { AgentTurn, NotebookSnapshot, TurnScope } from "../api/client";
 import NotebookCell from "./NotebookCell";
 import type { CellSelection } from "./selectionEdit";
 
-export default function NotebookView({ notebook, scope, turn, disabled, sourceActionsDisabled, autoSave, focusRequest, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
+export default function NotebookView({ notebook, scope, turn, disabled, sourceActionsDisabled, autoSave, focusRequest, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert, onKeepCell, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
   notebook: NotebookSnapshot; scope: TurnScope; turn: AgentTurn | null;
   disabled: boolean; sourceActionsDisabled: boolean; autoSave: boolean; focusRequest: { cellId: string; requestId: number } | null;
   onDirtyChange: (cellId: string, dirty: boolean) => void;
   onSave: (cellId: string, source: string) => void; onRun: (cellId: string) => void; onScope: (cellId: string, editable: boolean) => void; onScopeMany: (cellIds: string[], editable: boolean) => void; onRevert: (turnId: string, cellId: string) => void;
+  onKeepCell?: (turnId: string, cellId: string) => void;
   onAddSelectionToChat?: (selection: CellSelection) => void; onInlineEdit?: (selection: CellSelection, instruction: string) => void; onAddErrorToChat?: (cellId: string, text: string) => void;
 }) {
   const [focused, setFocused] = useState(notebook.cells[0]?.cellId ?? "");
@@ -121,13 +122,16 @@ export default function NotebookView({ notebook, scope, turn, disabled, sourceAc
     {notebook.cells.map((cell) => <NotebookCell key={`${notebook.sessionId}:${cell.cellId}`} cell={cell} focused={focused === cell.cellId} selected={selected.has(cell.cellId)} dragIds={selected.has(cell.cellId) && orderedSelection.length > 1 ? orderedSelection : [cell.cellId]}
       editable={scope.editableCellIds.includes(cell.cellId)} context={scope.contextCellIds.includes(cell.cellId)} disabled={disabled} sourceActionsDisabled={sourceActionsDisabled} autoSave={autoSave}
       cellRef={(node) => { if (node) refs.current.set(cell.cellId, node); else refs.current.delete(cell.cellId); }}
-      change={turn?.changes.find((change) => change.cellId === cell.cellId)} onFocus={() => setFocused(cell.cellId)}
+      change={turn?.changes.find((change) => change.cellId === cell.cellId)}
+      operations={(turn?.operations ?? []).filter((item) => item.cellId === cell.cellId)}
+      onFocus={() => setFocused(cell.cellId)}
       onSelect={(event) => selectCell(cell.cellId, event)} onContextMenu={(event) => openMenu(cell.cellId, event)}
       onDirtyChange={(dirty) => onDirtyChange(cell.cellId, dirty)}
       onSave={(source) => onSave(cell.cellId, source)} onRun={() => onRun(cell.cellId)}
       onAddEditable={() => onScope(cell.cellId, true)} onAddContext={() => onScope(cell.cellId, false)}
       onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} onAddErrorToChat={(errorText) => onAddErrorToChat?.(cell.cellId, errorText)}
-      onRevert={() => turn && onRevert(turn.turnId, cell.cellId)} />)}
+      onRevert={() => turn && onRevert(turn.turnId, cell.cellId)}
+      onKeep={onKeepCell && turn ? () => onKeepCell(turn.turnId, cell.cellId) : undefined} />)}
     {menu && <div className="context-menu-backdrop" onClick={() => setMenu(null)} onContextMenu={(event) => { event.preventDefault(); setMenu(null); }}>
       <div className="cell-context-menu" style={{ left: menu.x, top: menu.y }} role="menu" aria-label="Cell scope actions" onClick={(event) => event.stopPropagation()}>
         <p className="context-menu-heading">{selected.size} cell{selected.size === 1 ? "" : "s"} selected</p>

@@ -1,7 +1,7 @@
 import { BookOpen, Bot, Check, MessageSquarePlus, Pencil, Play, RotateCcw, Save, Send, Wand2, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
-import type { AgentChange, NotebookCellData } from "../api/client";
+import type { AgentChange, AgentOperation, NotebookCellData } from "../api/client";
 import CellEditor from "./CellEditor";
 import { useAutoSave } from "./useAutoSave";
 import type { CellSelection } from "./selectionEdit";
@@ -111,10 +111,11 @@ export function Outputs({ outputs, disabled = false, onAddErrorToChat, onHoverCh
   })}</div>;
 }
 
-export default function NotebookCell({ cell, focused, selected, dragIds, editable, context, change, disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
+export default function NotebookCell({ cell, focused, selected, dragIds, editable, context, change, operations = [], disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onKeep, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
   cell: NotebookCellData; focused: boolean; selected: boolean; dragIds: string[]; editable: boolean; context: boolean; change?: AgentChange;
+  operations?: AgentOperation[];
   disabled: boolean; sourceActionsDisabled: boolean; autoSave: boolean; cellRef: (node: HTMLElement | null) => void;
-  onFocus: () => void; onSelect: (event: MouseEvent) => void; onContextMenu: (event: MouseEvent) => void; onDirtyChange: (dirty: boolean) => void; onSave: (source: string) => void; onRun: () => void; onAddEditable: () => void; onAddContext: () => void; onRevert: () => void;
+  onFocus: () => void; onSelect: (event: MouseEvent) => void; onContextMenu: (event: MouseEvent) => void; onDirtyChange: (dirty: boolean) => void; onSave: (source: string) => void; onRun: () => void; onAddEditable: () => void; onAddContext: () => void; onRevert: () => void; onKeep?: () => void;
   onAddSelectionToChat?: (selection: CellSelection) => void; onInlineEdit?: (selection: CellSelection, instruction: string) => void; onAddErrorToChat?: (text: string) => void;
 }) {
   const [source, setSource] = useState(cell.source);
@@ -134,6 +135,8 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
   useAutoSave(source, dirty, disabled || !autoSave, onSave);
   const description = `${cell.cellType} cell ${cell.index + 1}`;
   const dependentDisabled = disabled || sourceActionsDisabled;
+  const stale = operations.some((item) => item.state === "stale");
+  const undone = operations.some((item) => item.state === "rejected");
   return <article ref={cellRef} draggable={!dependentDisabled && !suppressDrag} onDragStart={(event) => {
     const target = event.target as HTMLElement;
     // Never start a cell drag from selectable output text.
@@ -161,9 +164,18 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
           hover, unlabelled, and shared with scope/run actions, so the revert
           control was there but effectively undiscoverable. */}
       {change && <div className="cell-review">
-        <span className="cell-review-label"><Bot /> Agent changed this cell</span>
-        <button className="cell-review-undo" disabled={dependentDisabled} title="Undo this agent change" aria-label={`Revert agent change to ${description}`} onClick={onRevert}><RotateCcw /> Undo</button>
+        <span className="cell-review-label"><Bot /> {stale ? "Agent change can no longer be undone" : "Agent changed this cell"}</span>
+        {stale
+          // Say why the controls went away. Silently removing them reads as a
+          // bug; the change is still in the cell, it just can no longer be
+          // separated from the edits made on top of it.
+          ? <span className="cell-review-stale" role="note">This cell changed after the agent edited it — undo the whole turn or edit it by hand.</span>
+          : <>
+            {onKeep && <button className="cell-review-keep" disabled={dependentDisabled} title="Keep this agent change" aria-label={`Keep agent change to ${description}`} onClick={onKeep}><Check /> Keep</button>}
+            <button className="cell-review-undo" disabled={dependentDisabled} title="Undo this agent change" aria-label={`Revert agent change to ${description}`} onClick={onRevert}><RotateCcw /> Undo</button>
+          </>}
       </div>}
+      {undone && cell.outputs.length > 0 && <p className="cell-stale-outputs" role="note">Outputs are from code you undid — re-run this cell.</p>}
       {cell.cellType === "code" || cell.cellType === "raw" || editingMarkdown ? <CellEditor value={source} label={`Source for ${description}`} disabled={disabled} language={cell.cellType} change={change} cellId={cell.cellId} interactionsDisabled={dependentDisabled} onChange={setSource} onSave={() => dirty && onSave(source)} onRun={onRun} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} /> : <MarkdownPreview source={source} cellId={cell.cellId} disabled={dependentDisabled} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} onHoverChange={setSuppressDrag} />}
       <Outputs outputs={cell.outputs} disabled={dependentDisabled} onAddErrorToChat={onAddErrorToChat} onHoverChange={setSuppressDrag} />
     </div>
