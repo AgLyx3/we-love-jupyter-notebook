@@ -898,3 +898,116 @@ source on 2026-07-28. Claims are grouped by outcome.
 3. `## API Surface` (line 1360) — the four new endpoints.
 4. Line 583-585 — clarify that apply-then-review now has an explicit review
    *settlement*, while held proposals remain deferred.
+
+---
+
+## 12. Structural turns (Trusted mode): extending the ledger
+
+*Added 2026-07-30, after merging main's per-turn Trusted mode (`dca1814`) into
+this branch (`b8e689c`). Proposal only — not yet implemented.*
+
+### 12.1 Where the merge left things
+
+Trusted mode lets one turn add, delete, reorder and retype cells via an
+agent-writable `structure.json`. The merge drew the safe minimal boundary:
+Trusted turns carry **no ledger** (`_run_trusted` sets `operations = ()`),
+`revert_cell` refuses them (main's R20), and the UI explains that only
+whole-turn undo applies. Five tests pin that boundary.
+
+That boundary is correct but coarser than necessary. This section proposes the
+changes needed to bring per-operation accept/undo to structural turns.
+
+### 12.2 The insight: the boundary is per-op independence, not turn mode
+
+The merge treated "Trusted turn" as the unit that can't be reviewed per
+operation. The real unit is the individual op, and the structural op kinds
+split cleanly:
+
+| Op kind | Position-entangled? | Per-op undo well-defined? |
+|---|---|---|
+| `edit` (surviving cell, same type) | **No** — recompose, apply, and stale guard all key off the cell id, never its index | **Yes, today, with the existing hunk ledger** |
+| `add` | **No** — undo = delete that one cell by its realized id | **Yes**, with one new mechanism |
+| `delete` | Yes — where does a restored cell return once neighbours moved? | Needs notebook-level compose (T2) |
+| `move` | Yes — same anchor problem | Needs notebook-level compose (T2) |
+| `retype` | No positionally, but outputs semantics: code→markdown drops outputs, and un-retyping cannot restore them without the checkpoint | Whole-turn only until outputs join the ledger (Phase 3) |
+
+Two consequences worth stating plainly:
+
+- **Everything that makes hunk review work is already position-independent.**
+  `compose()` rebuilds one cell's source; `apply_source_changes_under_lease`
+  writes by cell id; `is_stale` hashes one cell. A surviving, same-type cell
+  edited by a Trusted turn could use the exact Phase 1 machinery — it is
+  switched off today only by R20 plus the conservative merge, not by any
+  technical blocker.
+- **R20 was a deferral, not an invariant.** Main's own commit message says
+  "per-op structural revert deferred". This proposal is that deferred work.
+
+### 12.3 Phase T1 — `edit` hunks + `add` undo (proposed next slice)
+
+Covers the common Trusted turn ("edited some cells, added a couple") while
+leaving the genuinely global ops whole-turn.
+
+**Backend:**
+
+1. **Realized ids for adds.** `apply_structural_changes_under_lease` builds the
+   returned cell list positionally aligned with `next_cells` (verified in
+   `service.py`), so `_run_trusted` can map each `add` op to its realized cell
+   id from the returned snapshot. Prefer making this explicit: return (or
+   record onto the plan) an `origin_id → applied_id` mapping rather than
+   relying on position at a distance.
+2. **Build the ledger in `_run_trusted`:** `build_operations(...)` for each
+   `edit` op on a surviving, same-type cell (identical to the Blocking path);
+   one `TurnOperation(kind="structural_add", cell_id=<applied id>)` per add.
+   `delete`/`move`/`retype` ops stay ledger-less in T1.
+3. **Reject learns one new kind.** `reject_operations` branches on `kind`:
+   - `source_hunk` — existing path, unchanged.
+   - `structural_add` — guard: the cell still exists **and** its source hashes
+     to what the turn wrote (per-op-local; a cell the user has since edited is
+     `stale`, because deleting it would destroy their work). Apply: recompute
+     `next_cells` = current list minus that cell and commit through
+     `apply_structural_changes_under_lease` — reusing the hardened structural
+     path (zero-cell floor, duplicate-id check, nbformat validation) instead of
+     adding a bespoke delete.
+   - A mixed reject-all composes **one** `next_cells` list (drop rejected adds,
+     swap recomposed sources) and commits once.
+4. **Lineage:** nothing new — owner `reject:{turn_id}` is already forgiven by
+   `_owned_by_turn`, so whole-turn undo survives structural rejects too.
+5. **Staleness:** `stale_cell_ids` gains the add case — cell missing or source
+   drifted → stale. (An added cell has no entry in `turn.changes`; its
+   expected source is the op's applied source.)
+6. **Serialization:** `kind: "structural_add"`, ranges omitted. The state
+   machine is unchanged (`accepted → rejected` allowed, `rejected → accepted`
+   409 — "keeping" a cell whose add you undid would be a silent re-add).
+7. **`revert_cell` on Trusted turns** narrows from "always 409" to "409 only
+   when the cell has no ledger operations" — i.e. cells involved in
+   delete/move/retype keep today's behaviour.
+
+**Frontend:** the review bar and Next-change need no changes (they count the
+ledger); the added-cell review bar reads *"Agent added this cell — Keep /
+Undo"*, anchored on the existing `metadata.agent_authored` badge; the Trusted
+explanation string in `NotebookCell` shows only for cells without operations.
+
+**Edge cases to pin in tests:** rejecting the sole remaining cell (zero-cell
+floor → conflict, not a crash); undo-of-add after the user manually deleted the
+cell (stale, no-op); accept-of-add then reject-of-add (allowed); whole-turn
+undo after a structural reject (checkpoint restore, ledger settles); a Trusted
+turn with only delete/move/retype ops still shows no review bar.
+
+### 12.4 Phase T2 — notebook-level compose (delete / move / retype)
+
+The full generalisation: `compose` lifts from one cell's source to the ordered
+cell list. Rejecting a `delete` re-inserts the frozen cell after its nearest
+surviving pre-turn predecessor; rejecting a `move` restores relative order the
+same way; the guard becomes one hash over the ordered `(id, type, source)`
+list. Retype additionally waits on output operations (Phase 3) so un-retyping
+can restore dropped outputs. T2 is designed but deliberately unscheduled —
+anchor semantics deserve their own review, and T1 does not foreclose any of it
+(the `kind` field and per-op guard structure are already general).
+
+### 12.5 Spec amendments (adds to §11)
+
+5. `## Trusted mode` / R20 — narrow "per-cell revert is not offered on Trusted
+   turns" to cells involved in delete/move/retype ops; record that `edit` and
+   `add` ops are individually reviewable.
+6. `## Undo And Checkpoints` — undo-of-add is a structural mutation guarded
+   per-op-locally; it does not break the turn's own undo lineage.
