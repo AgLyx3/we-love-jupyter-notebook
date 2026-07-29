@@ -401,6 +401,8 @@ export default function App() {
         onUndoAll={() => rejectOperations(notebook, selectedTurn.turnId)} />}
       <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} trusted={trustedScope} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} autoSave={autoSave} focusRequest={focusRequest}
         onKeepCell={(turnId, cellId) => { const ids = pendingOperations(selectedTurn, cellId); if (ids.length) void mutate(async () => { let latest: AgentTurn | undefined; for (const item of ids) latest = await api.acceptOperations(notebook, turnId, item.operationId); return latest as AgentTurn; }, { refreshAfter: false }, (updated) => { setHistory((items) => updateTurnRecord(items, turnId, () => updated)); setTurn((item) => item?.turnId === turnId ? updated : item); }); }}
+        onKeepOperation={(turnId, operationId) => acceptOperations(notebook, turnId, operationId)}
+        onUndoOperation={(turnId, operationId) => rejectOperations(notebook, turnId, operationId)}
         onDirtyChange={(cellId, dirty) => setDirtyCellIds((current) => {
           if (current.has(cellId) === dirty) return current;
           const next = new Set(current); if (dirty) next.add(cellId); else next.delete(cellId); return next;

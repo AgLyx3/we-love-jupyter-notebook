@@ -88,6 +88,16 @@ body.marquee-active iframe { pointer-events: none; }
 .review-bar button svg { width: 14px; height: 14px; }
 .review-bar-danger { color: var(--red); border-color: #e0b4ae; }
 .review-bar-danger:not(:disabled):hover { background: #fdf0ee; }
+/* Per-hunk review widget: removed lines + Keep/Undo, rendered as a CodeMirror
+   block widget above the hunk. Same rules as the review bar — persistent,
+   labelled, and the destructive button visually distinct. */
+.cm-hunk-widget { border-left: 3px solid #d9822b; background: #fdf9f3; }
+.cm-hunk-actions { display: flex; gap: 6px; padding: 3px 8px; }
+.cm-hunk-actions button { height: 22px; min-width: 58px; padding: 0 8px; font-size: 11px; font-weight: 650; border-radius: 4px; }
+.cm-hunk-keep { color: var(--green); border-color: #a7cdb8; }
+.cm-hunk-keep:not(:disabled):hover { background: #eaf6ef; }
+.cm-hunk-undo { color: var(--red); border-color: #e0b4ae; }
+.cm-hunk-undo:not(:disabled):hover { background: #fdf0ee; }
 .cell-review-keep { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; font-size: 12px; font-weight: 600; }
 .cell-review-keep svg { width: 14px; height: 14px; }
 .cell-review-stale { font-size: 11px; color: var(--muted); }

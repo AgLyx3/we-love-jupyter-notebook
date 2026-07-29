@@ -3,12 +3,13 @@ import type { AgentTurn, NotebookSnapshot, TurnScope } from "../api/client";
 import NotebookCell from "./NotebookCell";
 import type { CellSelection } from "./selectionEdit";
 
-export default function NotebookView({ notebook, scope, turn, trusted = false, disabled, sourceActionsDisabled, autoSave, focusRequest, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert, onKeepCell, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
+export default function NotebookView({ notebook, scope, turn, trusted = false, disabled, sourceActionsDisabled, autoSave, focusRequest, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert, onKeepCell, onKeepOperation, onUndoOperation, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
   notebook: NotebookSnapshot; scope: TurnScope; turn: AgentTurn | null; trusted?: boolean;
   disabled: boolean; sourceActionsDisabled: boolean; autoSave: boolean; focusRequest: { cellId: string; requestId: number } | null;
   onDirtyChange: (cellId: string, dirty: boolean) => void;
   onSave: (cellId: string, source: string) => void; onRun: (cellId: string) => void; onScope: (cellId: string, editable: boolean) => void; onScopeMany: (cellIds: string[], editable: boolean) => void; onRevert: (turnId: string, cellId: string) => void;
   onKeepCell?: (turnId: string, cellId: string) => void;
+  onKeepOperation?: (turnId: string, operationId: string) => void; onUndoOperation?: (turnId: string, operationId: string) => void;
   onAddSelectionToChat?: (selection: CellSelection) => void; onInlineEdit?: (selection: CellSelection, instruction: string) => void; onAddErrorToChat?: (cellId: string, text: string) => void;
 }) {
   const [focused, setFocused] = useState(notebook.cells[0]?.cellId ?? "");
@@ -136,7 +137,9 @@ export default function NotebookView({ notebook, scope, turn, trusted = false, d
       onAddEditable={() => onScope(cell.cellId, true)} onAddContext={() => onScope(cell.cellId, false)}
       onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} onAddErrorToChat={(errorText) => onAddErrorToChat?.(cell.cellId, errorText)}
       onRevert={() => turn && onRevert(turn.turnId, cell.cellId)}
-      onKeep={onKeepCell && turn ? () => onKeepCell(turn.turnId, cell.cellId) : undefined} />)}
+      onKeep={onKeepCell && turn ? () => onKeepCell(turn.turnId, cell.cellId) : undefined}
+      onKeepOperation={onKeepOperation && turn ? (operationId) => onKeepOperation(turn.turnId, operationId) : undefined}
+      onUndoOperation={onUndoOperation && turn ? (operationId) => onUndoOperation(turn.turnId, operationId) : undefined} />)}
     {menu && <div className="context-menu-backdrop" onClick={() => setMenu(null)} onContextMenu={(event) => { event.preventDefault(); setMenu(null); }}>
       <div className="cell-context-menu" style={{ left: menu.x, top: menu.y }} role="menu" aria-label="Cell scope actions" onClick={(event) => event.stopPropagation()}>
         <p className="context-menu-heading">{selected.size} cell{selected.size === 1 ? "" : "s"} selected</p>

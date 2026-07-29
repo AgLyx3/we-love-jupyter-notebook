@@ -2,7 +2,8 @@ import { BookOpen, Bot, Check, MessageSquarePlus, Pencil, Play, RotateCcw, Save,
 import ReactMarkdown from "react-markdown";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import type { AgentChange, AgentOperation, NotebookCellData } from "../api/client";
-import CellEditor from "./CellEditor";
+import CellEditor, { type HunkControls } from "./CellEditor";
+import { hunkOverlays } from "./cellDiff";
 import { useAutoSave } from "./useAutoSave";
 import type { CellSelection } from "./selectionEdit";
 
@@ -111,11 +112,12 @@ export function Outputs({ outputs, disabled = false, onAddErrorToChat, onHoverCh
   })}</div>;
 }
 
-export default function NotebookCell({ cell, focused, selected, dragIds, editable, context, trusted = false, change, operations = [], revertable = true, disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onKeep, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
+export default function NotebookCell({ cell, focused, selected, dragIds, editable, context, trusted = false, change, operations = [], revertable = true, disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onKeep, onKeepOperation, onUndoOperation, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
   cell: NotebookCellData; focused: boolean; selected: boolean; dragIds: string[]; editable: boolean; context: boolean; trusted?: boolean; change?: AgentChange; revertable?: boolean;
   operations?: AgentOperation[];
   disabled: boolean; sourceActionsDisabled: boolean; autoSave: boolean; cellRef: (node: HTMLElement | null) => void;
   onFocus: () => void; onSelect: (event: MouseEvent) => void; onContextMenu: (event: MouseEvent) => void; onDirtyChange: (dirty: boolean) => void; onSave: (source: string) => void; onRun: () => void; onAddEditable: () => void; onAddContext: () => void; onRevert: () => void; onKeep?: () => void;
+  onKeepOperation?: (operationId: string) => void; onUndoOperation?: (operationId: string) => void;
   onAddSelectionToChat?: (selection: CellSelection) => void; onInlineEdit?: (selection: CellSelection, instruction: string) => void; onAddErrorToChat?: (text: string) => void;
 }) {
   const [source, setSource] = useState(cell.source);
@@ -141,6 +143,18 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
   const added = operations.some((item) => item.kind === "structural_add");
   const reviewable = Boolean(change)
     || operations.some((item) => item.state === "pending" || item.state === "stale");
+  // Per-hunk Keep/Undo inside the editor. Only when the ledger is live for this
+  // cell: a stale cell keeps the read-only legacy diff (the review bar explains
+  // why), and pre-ledger/trusted-no-ops cells have no hunks to control.
+  const hunkControls: HunkControls | undefined =
+    change && !stale && onKeepOperation && onUndoOperation
+      ? {
+        overlays: hunkOverlays(change.previousSource, operations.filter((item) => item.kind === "source_hunk")),
+        disabled: dependentDisabled,
+        onKeep: onKeepOperation,
+        onUndo: onUndoOperation,
+      }
+      : undefined;
   // Outputs are suspect only until the cell is executed again. Deriving this
   // from the ledger alone would pin the warning forever, since the operation
   // stays rejected no matter how many times the user re-runs. Remember the
@@ -193,7 +207,7 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
           </>}
       </div>}
       {outputsStale && cell.outputs.length > 0 && <p className="cell-stale-outputs" role="note">Outputs are from code you undid — re-run this cell.</p>}
-      {cell.cellType === "code" || cell.cellType === "raw" || editingMarkdown ? <CellEditor value={source} label={`Source for ${description}`} disabled={disabled} language={cell.cellType} change={change} cellId={cell.cellId} interactionsDisabled={dependentDisabled} onChange={setSource} onSave={() => dirty && onSave(source)} onRun={onRun} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} /> : <MarkdownPreview source={source} cellId={cell.cellId} disabled={dependentDisabled} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} onHoverChange={setSuppressDrag} />}
+      {cell.cellType === "code" || cell.cellType === "raw" || editingMarkdown ? <CellEditor value={source} label={`Source for ${description}`} disabled={disabled} language={cell.cellType} change={change} hunkControls={hunkControls} cellId={cell.cellId} interactionsDisabled={dependentDisabled} onChange={setSource} onSave={() => dirty && onSave(source)} onRun={onRun} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} /> : <MarkdownPreview source={source} cellId={cell.cellId} disabled={dependentDisabled} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} onHoverChange={setSuppressDrag} />}
       <Outputs outputs={cell.outputs} disabled={dependentDisabled} onAddErrorToChat={onAddErrorToChat} onHoverChange={setSuppressDrag} />
     </div>
   </article>;
