@@ -22,6 +22,18 @@ PLAN_PREAMBLE = (
     "presenting the plan.\n\n"
 )
 
+# Codex's only file-access tool runs through its shell/exec tool, so the shared
+# "Do not run shell commands" instruction (written for Claude, which has a
+# separate non-shell Read tool) would otherwise stop Codex from reading the
+# notebook at all. Clarify the scope of that instruction for Codex specifically.
+CODEX_READ_HINT = (
+    "Note on \"do not run shell commands\" below: that restricts you to the file\n"
+    "operations this message explicitly permits (only editing the listed editable\n"
+    "files, nothing else). It does not prohibit using your shell/exec tool to read\n"
+    "files in this workspace, such as notebook.ipynb — do that as needed to answer\n"
+    "the request.\n\n"
+)
+
 
 @dataclass
 class FakeAttempt:
@@ -212,6 +224,8 @@ class CodexAgentAdapter:
             permission_mode = "acceptEdits"
         if permission_mode == "plan":
             prompt = PLAN_PREAMBLE + prompt
+        else:
+            prompt = CODEX_READ_HINT + prompt
         # Codex scopes writes by sandbox directory rather than per tool: an
         # editable turn gets workspace-write (the workspace audit still rejects
         # writes outside editable/); read-only and plan turns get no write

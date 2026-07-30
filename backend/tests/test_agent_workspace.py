@@ -10,6 +10,7 @@ import pytest
 
 from backend.app.agent_workspace.models import WorkspaceBoundaryError, WorkspaceCleanupError
 from backend.app.agent_workspace.adapters import (
+    CODEX_READ_HINT,
     ClaudeAgentAdapter,
     CodexAgentAdapter,
     DevelopmentFakeAgentAdapter,
@@ -729,6 +730,7 @@ def test_codex_editable_turn_uses_workspace_write_sandbox(notebook_payload, monk
         assert result.final_output == "codex finished"
         args = captured["args"]
         assert args[:2] == ["codex", "exec"]
+        assert args[2].startswith(CODEX_READ_HINT)
         assert args[args.index("--sandbox") + 1] == "workspace-write"
         assert "--ephemeral" in args
         assert "--ignore-user-config" in args
@@ -761,7 +763,9 @@ def test_codex_read_only_and_plan_turns_use_read_only_sandbox(notebook_payload, 
         )
         # No final-message file written -> falls back to stdout.
         assert result.final_output == "explanation"
-        assert captured["args"][captured["args"].index("--sandbox") + 1] == "read-only"
+        args = captured["args"]
+        assert args[args.index("--sandbox") + 1] == "read-only"
+        assert args[2].startswith(CODEX_READ_HINT)
     finally:
         builder.destroy(workspace)
     builder, workspace = _workspace(notebook_payload)
@@ -771,6 +775,7 @@ def test_codex_read_only_and_plan_turns_use_read_only_sandbox(notebook_payload, 
         )
         args = captured["args"]
         assert args[args.index("--sandbox") + 1] == "read-only"
+        # Plan mode's own preamble takes precedence over the read hint.
         assert args[2].startswith("You are operating in plan mode")
     finally:
         builder.destroy(workspace)
