@@ -16,7 +16,7 @@ from backend.app.agent_turns.service import (
     OperationNotFound, RevertConflict, UndoConflict,
 )
 from backend.app.agent_workspace.adapters import FakeAgentAdapter, FakeAttempt
-from backend.app.notebook_document.models import SessionConflict
+from backend.app.notebook_document.models import NotebookImportError, SessionConflict
 from backend.app.notebook_document.service import NotebookDocumentService
 from backend.app.turn_scope.service import TurnScopeService
 
@@ -577,6 +577,74 @@ class TestTrustedTurnLedger:
         ]
         assert source_of(updated) == "value = 1\n"
 
+    def test_undoing_an_add_twice_is_a_no_op(self, notebook_payload):
+        """A repeated Undo (a double-click) must not conflict.
+
+        The cell is already gone, which is the state being requested. Hunk
+        rejects were idempotent; adds must be too, or the second click reports
+        a scary "cell changed" error for work that already succeeded.
+        """
+        _documents, turns, snapshot, turn = self.trusted_turn(notebook_payload)
+        added = self.added_cell_id(turn)
+        first = turns.revert_cell(
+            turn.turn_id, added, session_id=snapshot.session_id,
+            expected_revision=turn.applied_revision,
+        )
+        second = turns.revert_cell(
+            turn.turn_id, added, session_id=snapshot.session_id,
+            expected_revision=first.revision,
+        )
+        # A no-op must not burn a revision either.
+        assert second.revision == first.revision
+        assert [cell["id"] for cell in second.notebook["cells"]] == [
+            "intro", "editable",
+        ]
+
+    def test_undoing_an_add_preserves_other_cells_outputs(
+        self, notebook_payload,
+    ):
+        """Undoing an add rewrites the whole cell list through the structural
+        apply, so verify it inherits rather than resets untouched cells."""
+        documents = NotebookDocumentService()
+        payload = json.dumps({"cells": [
+            {"cell_type": "markdown", "id": "intro", "metadata": {}, "source": ["# t\n"]},
+            {"cell_type": "code", "id": "editable", "metadata": {}, "source": ["value = 1\n"],
+             "execution_count": 3,
+             "outputs": [{"output_type": "stream", "name": "stdout", "text": "kept\n"}]},
+        ], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}).encode()
+        snapshot = documents.import_notebook(payload)
+        scopes = TurnScopeService(documents)
+        structure = json.dumps({"cells": [
+            {"cellId": "intro", "cellType": "markdown", "source": "cells/cell_intro.md"},
+            {"cellId": "editable", "cellType": "code", "source": "cells/cell_editable.py"},
+            {"op": "add", "cellType": "markdown", "source": "cells/new_1.md"},
+        ]})
+        turns = AgentTurnService(
+            documents=documents, scopes=scopes,
+            adapter=FakeAgentAdapter([FakeAttempt(edits={
+                "structure.json": structure, "cells/new_1.md": "## s\n",
+            })]), timeout=1,
+        )
+        turn = turns.start(
+            prompt="add", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision, write_scope="trusted",
+            background=False,
+        )
+        added = next(
+            i for i in turn.operations if i.kind == "structural_add"
+        ).cell_id
+        updated = turns.revert_cell(
+            turn.turn_id, added, session_id=snapshot.session_id,
+            expected_revision=turn.applied_revision,
+        )
+        survivor = next(
+            cell for cell in updated.notebook["cells"] if cell["id"] == "editable"
+        )
+        assert survivor["outputs"] == [
+            {"output_type": "stream", "name": "stdout", "text": "kept\n"}
+        ]
+        assert survivor["execution_count"] == 3
+
     def test_accepting_an_add_settles_it_without_touching_the_document(
         self, notebook_payload,
     ):
@@ -643,11 +711,16 @@ class TestTrustedTurnLedger:
             {"cells/new_1.md": "# the only cell left\n"},
         )
         (add,) = [i for i in turn.operations if i.kind == "structural_add"]
-        with pytest.raises(RevertConflict):
+        # This turn records no source changes, so assert the conflict comes from
+        # the zero-cell floor and not from an earlier gate — an add-only turn
+        # once failed `_require_revertible` and made this pass vacuously.
+        assert turn.changes == ()
+        with pytest.raises(RevertConflict) as raised:
             turns.revert_cell(
                 turn.turn_id, add.cell_id, session_id=snapshot.session_id,
                 expected_revision=turn.applied_revision,
             )
+        assert isinstance(raised.value.__cause__, NotebookImportError)
 
     def test_a_trusted_turn_reports_no_stale_cells(self, notebook_payload):
         _documents, turns, _snapshot, turn = self.trusted_turn(notebook_payload)

@@ -828,9 +828,14 @@ class AgentTurnService:
                         operations = with_state(
                             operations, target.operation_id, REJECTED
                         )
+                # Already-rejected adds are skipped, not re-guarded: their cell
+                # is gone, which is the state being asked for. Guarding them
+                # would look up a deleted cell and conflict, making a repeated
+                # Undo (a double-click) fail where the hunk path is idempotent.
                 add_targets = tuple(
                     item for item in targets
                     if item.kind == KIND_STRUCTURAL_ADD
+                    and item.state in APPLIED_STATES
                 )
                 hunk_cell_ids = {
                     item.cell_id for item in targets
@@ -841,12 +846,16 @@ class AgentTurnService:
                     snapshot, sources, turn.operations, operations,
                     hunk_cell_ids, conflict,
                 )
-            if add_targets:
+            # Only when a cell is actually being removed: the structural apply
+            # always writes a new revision, so routing a no-op through it would
+            # bump the revision for nothing. The source path already no-ops on
+            # an empty change set.
+            dropped = {item.cell_id for item in add_targets}
+            if dropped:
                 # Undoing an add removes a whole cell, so the commit goes
                 # through the hardened structural path — one atomic apply for
                 # the dropped cells and any recomposed sources together, and the
                 # zero-cell floor / duplicate-id checks come with it.
-                dropped = {item.cell_id for item in add_targets}
                 next_cells = [
                     {
                         "origin_id": cell["id"],
@@ -973,6 +982,11 @@ class AgentTurnService:
         so there is a single reject path rather than a parallel hash-guarded one.
         """
         turn = self._require_revertible(turn_id)
+        # Whether the cell is *governed* by the ledger — not whether anything is
+        # still outstanding. Once everything is rejected there is nothing left
+        # to do, and that must read as a no-op, not as "this cell is off
+        # limits"; otherwise a repeated Undo conflicts on work already done.
+        in_ledger = any(item.cell_id == cell_id for item in turn.operations)
         operation_ids = [
             item.operation_id for item in turn.operations
             if item.cell_id == cell_id and item.state in APPLIED_STATES
@@ -982,9 +996,9 @@ class AgentTurnService:
         # (an `edit` on a surviving same-type cell, or an `add`). Cells caught
         # up in delete/move/retype have none — undoing those needs the
         # notebook-level compose (design doc §12.4) — so they keep the hard 409.
-        if turn.write_scope == "trusted" and not operation_ids:
+        if turn.write_scope == "trusted" and not in_ledger:
             raise RevertConflict()
-        if not operation_ids and not any(
+        if not in_ledger and not any(
             item.cell_id == cell_id for item in turn.changes
         ):
             raise CellNotFound(cell_id)
@@ -1012,7 +1026,11 @@ class AgentTurnService:
 
     def _require_revertible(self, turn_id: str) -> AgentTurn:
         turn = self.get(turn_id)
-        if turn.applied_revision is None or not turn.changes:
+        # A turn is revertible if it applied anything reviewable. `changes`
+        # alone is not that test: an add-only Trusted turn records structural
+        # operations and no source changes, and gating on `changes` made its
+        # added cells permanently un-undoable.
+        if turn.applied_revision is None or not (turn.changes or turn.operations):
             raise RevertConflict()
         return turn
 
