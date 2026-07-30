@@ -30,7 +30,8 @@ medium Jupyter notebooks and AI coding agents.
 - Support read-only agent turns that answer or explain through the same scope
   selector and write boundary, without requiring an edit.
 - Provide Cursor-style immediate application of valid changes with visible color-coded diffs.
-- Provide whole-turn undo in chat and per-cell revert in the notebook UI.
+- Provide Cursor-style review of applied changes: Keep/Undo per hunk and per cell
+  in the notebook UI, and whole-turn undo in chat.
 - Run affected downstream notebook cells after valid edits and show results to both user and future agent context.
 - Support upload/import and download/export file operations for `.ipynb`.
 
@@ -155,12 +156,14 @@ Revision and mutation rules:
   starting. Only the lease owner may commit mutations until it reaches a
   terminal state.
 - While a mutation lease is active, imports, source edits, turn-scope changes,
-  undo/revert, manual execution, close, and new agent turns fail with `409 Conflict`.
-  Download may read a consistent snapshot.
-- Each mutation records its primary owner (`manual`, an agent `turnId`, or a
-  manual execution `attemptId`). Agent-triggered execution results retain their
-  child attempt ID but use the parent `turnId` as mutation owner, so undo
-  eligibility can be checked without relying on UI history.
+  undo/reject, manual execution, close, and new agent turns fail with `409 Conflict`.
+  Download may read a consistent snapshot. Accepting a reviewed change is not a
+  document mutation and is unaffected.
+- Each mutation records its primary owner (`manual`, an agent `turnId`, a
+  `reject:`/`revert:` owner derived from a turn, or a manual execution
+  `attemptId`). Agent-triggered execution results retain their child attempt ID
+  but use the parent `turnId` as mutation owner, so undo eligibility can be
+  checked without relying on UI history.
 
 ### Turn Scope
 
@@ -295,7 +298,7 @@ Responsibilities:
 - Render hover/selection gutter controls.
 - Render chat and turn-scope lists.
 - Render color-coded diffs.
-- Render whole-turn undo and per-cell revert actions.
+- Render per-operation, per-cell, and whole-turn review actions.
 - Render dirty state, upload/download controls, and execution status.
 
 Core use cases:
@@ -589,9 +592,13 @@ Edit permission is a grant, not an obligation:
 - The turn instructions state this explicitly so the agent does not treat edit
   permission as a command to modify code.
 - "Propose" here means apply-then-review: a warranted edit is applied
-  immediately and made reviewable through the diff, per-cell revert, and
-  whole-turn undo. There is no separate un-applied proposal state in v1; a held
-  "pending change the user must accept" model is deferred.
+  immediately and made reviewable through the diff, per-operation and per-cell
+  Keep/Undo, and whole-turn undo. There is no separate un-applied proposal state
+  in v1; a held "pending change the user must accept" model is deferred.
+- Review is explicitly *settled* rather than left to lapse: accepting a change
+  marks it reviewed and clears its diff without touching the document. "Accept"
+  here therefore means "reviewed", not "committed" — the change was already
+  live. The UI says **Keep** for that reason.
 
 ## Trusted Mode (per-turn, whole-notebook structural editing)
 
@@ -631,8 +638,30 @@ any pinned cell — however it was added, including drag-and-drop, which default
 Focus pin in Trusted — is a **Focus** cell: an attention hint, not a permission grant.
 Both the editable and context sets collapse into a single Focus/attention list that is
 forwarded to the agent (editable first, deduped). The scope panel renders every pin the
-same, and the turn-history entry reads "all editable" rather than per-set counts. Revert
-granularity is **whole-turn undo**; per-operation structural revert is deferred.
+same, and the turn-history entry reads "all editable" rather than per-set counts.
+
+Revert granularity in Trusted follows **per-operation independence**, not the turn
+mode. A structural op is individually reviewable when undoing it needs nothing from
+the rest of the notebook:
+
+- `edit` on a surviving, same-type cell — reviewable per hunk, exactly as in
+  Blocking. Source recompose, apply, and the staleness guard all key off the cell
+  id and never its index, so the ordinary ledger holds even if the same turn also
+  moved that cell.
+- `add` — reviewable per cell. Undoing deletes that one cell by the id it was
+  given when applied, guarded only by that cell still holding the source the turn
+  wrote; a cell the user has since edited is stale and refuses, because deleting
+  it would destroy their work.
+- `delete`, `move`, `retype` — **whole-turn undo only**. Reversing one needs an
+  anchor in an ordering that other ops in the same turn also changed, which
+  requires a notebook-level composition; `retype` additionally drops outputs that
+  only the checkpoint can restore. Cells touched only by these ops carry no ledger
+  operations, keep their read-only diff, and say that whole-turn undo applies.
+
+Per-cell revert on a Trusted turn therefore succeeds exactly when the cell carries
+ledger operations, and fails with `409` otherwise. (An earlier draft refused it for
+every cell on a Trusted turn; that was a deferral of the work above, not a property
+of structural editing.)
 
 Full design and review: `docs/plans/2026-07-28-trusted-mode-structural-editing.md`.
 
@@ -1306,30 +1335,117 @@ Whole-turn undo:
 - Restores sources, outputs, execution counts, and visible diff state.
 - Does not restore live kernel memory state.
 - Is available only for the most recent agent turn that applied changes when
-  every mutation since its checkpoint is owned by that turn. Any later manual
-  edit, import, revert, manual execution, or agent turn makes full-checkpoint
-  undo ineligible, regardless of whether the applied turn completed, failed,
-  timed out, or was cancelled during execution.
+  every mutation since its checkpoint is owned by that turn **or by that turn's
+  own per-operation rejections**. Any later manual edit, import, manual
+  execution, or agent turn makes full-checkpoint undo ineligible, regardless of
+  whether the applied turn completed, failed, timed out, or was cancelled
+  during execution.
+- Reversing part of a turn is *reviewing that turn*, not unrelated later work,
+  so it must not end the turn's undo. The checkpoint still represents the
+  pre-turn document exactly, so a full restore stays correct however many
+  operations were rejected first. (Earlier drafts listed "revert" as
+  lineage-breaking; that made granular review self-defeating — the first change
+  you undid destroyed your ability to undo the rest.)
+- The lineage check must tolerate the window between committing a mutation and
+  updating the turn's recorded revision: eligibility is a *query* and must not
+  destroy a checkpoint that is still valid. Recognise the turn's own ownership
+  (its id, and its `reject:`/`revert:` owners) rather than treating any
+  revision gap as a break. This window is not specific to review — downstream
+  execution has always committed outputs before the turn's bookkeeping catches
+  up.
 - Requires the current document revision in the request and fails with
   `409 Conflict` if the revision or eligibility check no longer matches.
 - Creates a new document revision rather than moving the revision counter
   backward.
+- Restoring the checkpoint also reverses operations the user explicitly kept.
+  The UI must say so rather than implying it only undoes outstanding work.
+- Settles the turn's operation ledger: after a restore no operation may remain
+  pending, or the cells keep advertising changes that are already gone.
+
+Per-operation review (the operation ledger):
+
+Applying a turn's changes records a **ledger** of individually reviewable
+operations. Turn and cell become roll-ups over that ledger rather than separate
+mechanisms; the granularity ladder is turn → cell → operation.
+
+- An operation is one atomic reviewable unit: a **source hunk** (one contiguous
+  diff region within a cell), or a **structural add** (one whole cell a Trusted
+  turn created).
+- **Accept ("Keep") settles review state and never mutates the document.** The
+  change is already applied, so accept takes no mutation lease, bumps no
+  revision, and breaks no undo lineage — it means "reviewed, stop showing me
+  this diff". It is guarded by session only; a stale revision cannot make it
+  unsafe, and refusing "I read this diff" with a `409` would be hostile.
+- **Reject ("Undo") is a real mutation**, guarded like every other: mutation
+  lease, session and revision preconditions, plus the composition guard below.
+- Accept and reject are each idempotent from their own state. `accepted →
+  rejected` is allowed (undoing something kept is legitimate); `rejected →
+  accepted` fails with `409` — it would silently re-apply undone content.
+- Operation identifiers are deterministic, so a client refetching a truncated
+  turn keeps stable ids.
+- Hunk boundaries are computed **server-side**, so a control can never act on a
+  different region than the one rendered. The client renders overlays from the
+  ledger, projecting each pending hunk onto the current document; after a
+  partial reject the cell matches neither the pre-turn nor the proposed source,
+  and re-diffing the two client-side would misplace the remaining highlights.
+- Reviewing settles the diff: an accepted operation renders nothing, so
+  accepting is the gesture that clears an overlay.
+- The ledger stores line ranges (and a fixed-size hash for adds), never copies
+  of source text — the sources are already retained on the turn's changes, and
+  duplicating them would double per-turn memory against the retention budget.
+
+Composition guard:
+
+- A cell's expected content is recomputed from its pre-turn source plus the
+  current per-operation states. Rejecting requires the cell to hash to exactly
+  that; otherwise the operations for that cell are **stale** and the request
+  fails with `409`.
+- A whole-cell hash against the proposed source cannot be used once a cell has
+  more than one independently rejectable operation, because undoing the first
+  makes every remaining one permanently unrejectable.
+- Staleness is **derived on read**, never stored: a manual edit reaches the
+  document through a path with no ledger awareness, so a stored flag would only
+  become true the next time someone attempted a reject — leaving live-looking
+  controls on operations that are already dead.
+- "Undo all" undoes everything it still can; a cell the user has since edited
+  by hand must not block the rest, and keeps its operations so it can go on
+  explaining itself. Nothing is dropped silently.
+- Undoing a **structural add** deletes that cell, guarded per-operation-locally:
+  the cell must still hash to the source the turn wrote, because deleting a
+  cell the user has since edited would destroy their work. It commits through
+  the structural apply path so the zero-cell floor and duplicate-id checks
+  apply; undoing the last remaining cell surfaces as a review conflict, not a
+  malformed-request error.
 
 Per-cell revert:
 
-- Triggered from a changed cell.
+- Triggered from a changed cell; equivalent to rejecting every outstanding
+  operation for that cell in one mutation.
 - Reverts that cell's source to the pre-turn source.
 - Should make clear that kernel memory state is not restored.
-- Is allowed only when the cell's current source hash equals the `nextSource`
-  hash recorded for that turn and no mutation lease is active.
 - Requires the current document revision and creates a new manual mutation. It
   never rewinds unrelated cells or later outputs.
 
-Persistence:
+Persistence and retention:
 
 - Checkpoints are in-memory only.
 - Undo history does not survive app restart in v1.
 - In-session turn history is enough for v1.
+- Turns holding unreviewed operations are retained past the ordinary history
+  limits so a diff on screen always has a live ledger behind it — otherwise the
+  overlay outlives its operations and its controls fail. The retention is
+  bounded by both a turn count and the existing byte budget; memory safety
+  wins, so an oversized backlog is force-settled to accepted (which discards
+  review state only, never notebook content) and reported rather than dropped
+  silently.
+
+Outputs after a reject:
+
+- Undoing a source change leaves outputs produced by code that no longer
+  exists. In a notebook the output is the artefact being reasoned about, so
+  this must be surfaced on the cell until it is re-executed, not left implicit.
+- Restoring outputs per operation is deferred; whole-turn undo remains the way
+  to restore them.
 
 ## UI Behavior
 
@@ -1398,8 +1514,27 @@ Diff display:
   cell; there is no separate diff panel rendered below the cell.
 - A changed Markdown cell shows its inline diff in the editor when opened for
   editing; in preview mode it renders normally.
-- Provide per-cell revert controls.
-- Provide whole-turn undo in the chat turn.
+- Provide review controls at every tier of the ledger: per operation (a
+  Keep/Undo pair attached to each pending hunk inside the editor), per cell, and
+  per turn.
+- Review controls are **persistent and labelled**, never hover-revealed and
+  never icon-only. Reviewing is a state the user is in; hiding its controls
+  until hover is what made an earlier per-cell revert control undiscoverable
+  despite being implemented and tested.
+- Review controls are **co-located with the change** they act on, not collected
+  in a corner cluster shared with scope and run actions.
+- A review session over the selected turn's changes shows how many remain, a way
+  to jump to the next unreviewed change, and Keep-all / Undo-all roll-ups. It is
+  shown only while unreviewed operations exist, and hides once review settles.
+- Destructive review controls must not be easy to hit by accident: fixed
+  positions that do not reflow as the counter drops, visually distinct from the
+  constructive ones, and confirmed before firing. No destructive review action
+  is bound to a keyboard chord.
+- When controls are unavailable — a stale cell, a structural op that is
+  whole-turn only, a deselected turn — say why rather than silently removing
+  them.
+- Provide whole-turn undo in the chat turn, labelled so it is clear it reverses
+  the entire turn including kept changes.
 
 File controls:
 
@@ -1428,6 +1563,17 @@ This is a conceptual API surface, not a final implementation contract.
 - `POST /agent-turns/{turnId}/cancel`
 - `POST /agent-turns/{turnId}/undo`
 - `POST /agent-turns/{turnId}/cells/{cellId}/revert`
+- `POST /agent-turns/{turnId}/operations/{operationId}/accept`
+- `POST /agent-turns/{turnId}/operations/{operationId}/reject`
+- `POST /agent-turns/{turnId}/operations/accept-all`
+- `POST /agent-turns/{turnId}/operations/reject-all`
+
+The accept endpoints carry `sessionId` only — they settle review state and
+mutate no document, so the blanket expected-revision precondition (which is
+scoped to document mutations) does not apply. The reject endpoints carry
+`sessionId` and `expectedDocumentRevision` like every other mutation. A turn
+response exposes its ledger as `operations[]`; each entry carries its kind,
+state, and line ranges (null for structural kinds), never hunk text.
 - `POST /execution/cells/{cellId}/run`
 - `POST /execution/run-all`
 - `POST /execution/{executionAttemptId}/approve`
@@ -1647,7 +1793,17 @@ lineage, and source hash on every result or decision commit.
 Risk: Undoing an older turn overwrites later work.
 
 Mitigation: Permit full-checkpoint undo only for the latest applied turn with an
-unbroken ownership lineage; guard per-cell revert by current source hash.
+unbroken ownership lineage, counting the turn's own per-operation rejections as
+part of that lineage; guard each rejection by recomposing the cell from its
+pre-turn source and current operation states.
+
+Risk: A destructive review control is triggered by accident.
+
+Mitigation: Keep review controls visible, labelled, and fixed in position so the
+group cannot reflow under the cursor; separate destructive from constructive
+actions; confirm before undoing in bulk; bind no destructive review action to a
+keyboard chord; and keep whole-turn undo available after partial review so a
+mistaken rejection is recoverable.
 
 Risk: External CLI or kernel processes hang or outlive cancellation.
 
@@ -1857,9 +2013,25 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
 
 - Decision: Store a full in-memory checkpoint before each agent turn, but allow
   checkpoint restoration only for the latest applied turn with an unbroken
-  mutation-ownership lineage. Guard per-cell revert by source hash.
+  mutation-ownership lineage. A turn's own per-operation rejections belong to
+  that lineage; unrelated edits still end it.
 - Alternatives: Unrestricted historical checkpoint restoration; per-cell only undo; durable history.
-- Rationale: Preserves whole-turn and per-cell recovery without overwriting later work.
+- Rationale: Preserves whole-turn and granular recovery without overwriting later work.
+
+### Per-Operation Review
+
+- Decision: Record an operation ledger per applied turn. Accept is review-only
+  metadata (no lease, no revision bump, no lineage break); reject is a guarded
+  mutation whose precondition is a recomposition of the cell from its pre-turn
+  source and current operation states.
+- Alternatives: A held-proposal model where changes are staged until accepted;
+  a whole-cell hash guard; fuzzy re-anchoring of hunks onto an edited cell.
+- Rationale: The changes are already applied, so "accept" can only mean
+  "reviewed" — keeping it out of the mutation path makes the entire accept
+  surface incapable of corrupting the document. A whole-cell hash cannot support
+  more than one independently rejectable operation per cell, and fuzzy
+  re-anchoring trades a clean `409` for a silently mis-applied patch in a
+  document people compute on.
 
 ### Cell Identity
 
