@@ -211,11 +211,27 @@ describe("per-operation review", () => {
     expect(screen.queryByText(/Outputs are from code you undid/)).not.toBeInTheDocument();
   });
 
-  it("keeps a single cell's changes from the cell's own control", async () => {
+  it("keeps a whole cell's changes in one batched request", async () => {
+    // Previously one request per hunk, which was N round trips and left the
+    // cell half-kept if one failed mid-loop.
     const calls = mount(turnWith([operation(0, "pending"), operation(1, "pending")]));
     await userEvent.click(await screen.findByLabelText("Keep agent change to code cell 1"));
-    await waitFor(() => expect(calls.filter((item) => /operations\/.+\/accept$/.test(item.path))).toHaveLength(2));
+    const accepts = await waitFor(() => {
+      const found = calls.filter((item) => item.path.includes("/operations/"));
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    expect(accepts[0].path).toContain("/operations/accept-all");
+    expect(accepts[0].body).toEqual({
+      sessionId: "session-1",
+      operationIds: ["turn-1:code-1:0", "turn-1:code-1:1"],
+    });
   });
+
+  // The per-hunk widget buttons themselves are not asserted here: this file
+  // mocks @uiw/react-codemirror with a plain textarea, so CodeMirror
+  // decorations never render. Their placement is covered by the hunkOverlays
+  // unit tests, and the click-through was verified against the running app.
 
   it("offers Keep/Undo on a trusted turn's added cell", async () => {
     // T1: an added cell has no `change` (nothing to diff against) but carries a

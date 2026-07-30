@@ -7,6 +7,7 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from ..agent_turns.service import AgentTurn
+from ..notebook_document.models import NotebookDomainError
 from .notebook_routes import serialize_snapshot
 
 router = APIRouter(prefix="/agent-turns")
@@ -33,6 +34,10 @@ class AcceptRequest(BaseModel):
     """Accept settles review state only, so it needs no expected revision."""
 
     session_id: str = Field(alias="sessionId")
+    # Optional batch: keeping a cell settles all of its hunks at once. Omitted
+    # for accept-all (which means "every pending operation") and for the
+    # single-operation route, which takes its id from the path.
+    operation_ids: list[str] | None = Field(default=None, alias="operationIds")
 
 
 def serialize_operations(
@@ -182,10 +187,17 @@ def serialize_turn_summary(
 
 
 def _serialize_current(service, turn: AgentTurn) -> dict[str, Any]:
+    # One snapshot for both checks: taking one deep-copies the notebook, so
+    # letting each take its own doubled the cost of every turn response —
+    # including every per-hunk Keep.
+    try:
+        snapshot = service.documents.get_snapshot()
+    except NotebookDomainError:
+        snapshot = None
     return serialize_turn(
         turn,
-        undo_eligible=service.is_undo_eligible(turn),
-        stale_cell_ids=service.stale_cell_ids(turn),
+        undo_eligible=service.is_undo_eligible(turn, snapshot),
+        stale_cell_ids=service.stale_cell_ids(turn, snapshot),
     )
 
 
@@ -222,8 +234,11 @@ def cancel_turn(
 def accept_all_operations(
     turn_id: str, body: AcceptRequest, request: Request,
 ) -> dict[str, Any]:
+    """Settle a set of operations, or every pending one when none are named."""
     service = request.app.state.agent_turn_service
-    turn = service.accept_operations(turn_id, None, session_id=body.session_id)
+    turn = service.accept_operations(
+        turn_id, body.operation_ids, session_id=body.session_id
+    )
     return _serialize_current(service, turn)
 
 

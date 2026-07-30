@@ -286,8 +286,8 @@ export default function App() {
 
   // Accept changes no document state, so it neither refreshes the notebook nor
   // advances the revision — it only settles the ledger.
-  const acceptOperations = (notebook: NotebookSnapshot, turnId: string, operationId?: string) =>
-    void mutate(() => api.acceptOperations(notebook, turnId, operationId), { refreshAfter: false }, (updated) => {
+  const acceptOperations = (notebook: NotebookSnapshot, turnId: string, operationIds?: string[]) =>
+    void mutate(() => api.acceptOperations(notebook, turnId, operationIds), { refreshAfter: false }, (updated) => {
       setHistory((items) => updateTurnRecord(items, turnId, () => updated));
       setTurn((item) => item?.turnId === turnId ? updated : item);
     });
@@ -400,8 +400,13 @@ export default function App() {
         onKeepAll={() => acceptOperations(notebook, selectedTurn.turnId)}
         onUndoAll={() => rejectOperations(notebook, selectedTurn.turnId)} />}
       <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} trusted={trustedScope} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} autoSave={autoSave} focusRequest={focusRequest}
-        onKeepCell={(turnId, cellId) => { const ids = pendingOperations(selectedTurn, cellId); if (ids.length) void mutate(async () => { let latest: AgentTurn | undefined; for (const item of ids) latest = await api.acceptOperations(notebook, turnId, item.operationId); return latest as AgentTurn; }, { refreshAfter: false }, (updated) => { setHistory((items) => updateTurnRecord(items, turnId, () => updated)); setTurn((item) => item?.turnId === turnId ? updated : item); }); }}
-        onKeepOperation={(turnId, operationId) => acceptOperations(notebook, turnId, operationId)}
+        onKeepCell={(turnId, cellId) => {
+          // One request per cell, not per hunk: keeping a cell is a single
+          // settle, and a mid-loop failure used to leave it half-kept.
+          const ids = pendingOperations(selectedTurn, cellId).map((item) => item.operationId);
+          if (ids.length) acceptOperations(notebook, turnId, ids);
+        }}
+        onKeepOperation={(turnId, operationId) => acceptOperations(notebook, turnId, [operationId])}
         onUndoOperation={(turnId, operationId) => rejectOperations(notebook, turnId, operationId)}
         onDirtyChange={(cellId, dirty) => setDirtyCellIds((current) => {
           if (current.has(cellId) === dirty) return current;
@@ -523,13 +528,6 @@ function reconcileTurnChanges(turn: AgentTurn, notebook: NotebookSnapshot | null
 
 export function pendingOperations(turn: AgentTurn | null | undefined, cellId?: string): AgentOperation[] {
   return (turn?.operations ?? []).filter((item) => item.state === "pending" && (cellId === undefined || item.cellId === cellId));
-}
-
-// A cell whose outputs were produced by code the user has since undone. The
-// output is the thing a notebook reader reasons about, so leaving it unmarked
-// is a correctness trap, not a cosmetic one.
-export function hasUndoneChanges(turn: AgentTurn | null | undefined, cellId: string): boolean {
-  return (turn?.operations ?? []).some((item) => item.cellId === cellId && item.state === "rejected");
 }
 
 function updateTurnRecord(items: TurnRecord[], turnId: string, update: (turn: AgentTurn) => AgentTurn): TurnRecord[] {

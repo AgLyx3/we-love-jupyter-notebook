@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { MessageSquarePlus, Send, Wand2, X } from "lucide-react";
 import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
@@ -127,7 +127,13 @@ export default function CellEditor({ value, label, disabled, language, change, h
   const [instruction, setInstruction] = useState("");
   const selectionActionsEnabled = Boolean(cellId) && (Boolean(onAddSelectionToChat) || Boolean(onInlineEdit));
 
-  const extensions = [
+  // Rebuilding this array redefines the diff StateField and reconfigures the
+  // editor, so it is memoized: without it every keystroke anywhere in the
+  // notebook reconfigures every cell under review. onRun goes through a ref so
+  // its per-render identity does not invalidate the memo.
+  const runRef = useRef(onRun);
+  runRef.current = onRun;
+  const extensions = useMemo(() => [
     ...(language === "code" ? [python()] : []),
     // Ledger-driven overlays win when available: they map hunks onto the
     // *composed* document, so highlights stay aligned after a partial undo —
@@ -136,10 +142,10 @@ export default function CellEditor({ value, label, disabled, language, change, h
     ...(hunkControls && hunkControls.overlays.length ? [hunkField(hunkControls)]
       : change && change.previousSource !== change.nextSource ? [diffField(change)] : []),
     ...(language === "code" && onRun ? [Prec.highest(keymap.of([
-      { key: "Shift-Enter", run: () => { onRun(); return true; } },
-      { key: "Mod-Enter", run: () => { onRun(); return true; } },
+      { key: "Shift-Enter", run: () => { runRef.current?.(); return true; } },
+      { key: "Mod-Enter", run: () => { runRef.current?.(); return true; } },
     ]))] : []),
-  ];
+  ], [language, hunkControls, change?.previousSource, change?.nextSource, Boolean(onRun)]);
 
   const readSelection = (view: EditorView): CellSelection | null => {
     if (!cellId) return null;

@@ -7,6 +7,7 @@ The pure diff/compose layer is tested in test_turn_operations.py.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -863,3 +864,48 @@ class TestPruningProtectsUnfinishedReview:
             for item in settled for operation in item.operations
         )
         assert source_of(documents.get_snapshot()) == "value = 15\n"
+
+
+class TestBatchedAndFailClosed:
+    def test_accept_settles_a_named_subset_in_one_call(self, notebook_payload):
+        """Keeping a cell settles all its hunks at once rather than one at a
+        time; the service already took a list, only the route did not."""
+        _documents, turns, snapshot, turn = two_operation_turn(notebook_payload)
+        updated = turns.accept_operations(
+            turn.turn_id,
+            [item.operation_id for item in turn.operations],
+            session_id=snapshot.session_id,
+        )
+        assert all(item.state == ACCEPTED for item in updated.operations)
+
+    def test_an_unhandled_operation_kind_fails_closed(self, notebook_payload):
+        """Dispatch is positive, so a future kind cannot be silently treated as
+        a source hunk — where it would look for a `changes` entry it has none
+        of and surface as a confusing CellNotFound."""
+        _documents, turns, snapshot, turn = two_operation_turn(notebook_payload)
+        with turns._lock:
+            stored = turns._turns[turn.turn_id]
+            stored.operations = (
+                replace(stored.operations[0], kind="structural_move"),
+            ) + stored.operations[1:]
+        with pytest.raises(NotImplementedError):
+            turns.reject_operations(
+                turn.turn_id, [turn.operations[0].operation_id],
+                session_id=snapshot.session_id,
+                expected_revision=turn.applied_revision,
+            )
+
+    def test_owner_minting_rejects_an_unregistered_action(self):
+        """Producers and the lineage parser share one definition, so an owner
+        the parser would not recognise cannot be minted by accident."""
+        assert AgentTurnService.owner_for_turn("t") == "t"
+        assert AgentTurnService.owner_for_turn("t", "reject") == "reject:t"
+        with pytest.raises(ValueError):
+            AgentTurnService.owner_for_turn("t", "restore")
+
+    def test_a_reject_owner_keeps_the_turn_lineage(self):
+        assert AgentTurnService._owned_by_turn("reject:t", "t")
+        assert AgentTurnService._owned_by_turn("t", "t")
+        # Restoring a checkpoint deliberately ends the lineage.
+        assert not AgentTurnService._owned_by_turn("undo:t", "t")
+        assert not AgentTurnService._owned_by_turn("manual", "t")

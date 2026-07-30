@@ -1,6 +1,6 @@
 import { BookOpen, Bot, Check, MessageSquarePlus, Pencil, Play, RotateCcw, Save, Send, Wand2, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { AgentChange, AgentOperation, NotebookCellData } from "../api/client";
 import CellEditor, { type HunkControls } from "./CellEditor";
 import { hunkOverlays } from "./cellDiff";
@@ -146,15 +146,37 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
   // Per-hunk Keep/Undo inside the editor. Only when the ledger is live for this
   // cell: a stale cell keeps the read-only legacy diff (the review bar explains
   // why), and pre-ledger/trusted-no-ops cells have no hunks to control.
-  const hunkControls: HunkControls | undefined =
-    change && !stale && onKeepOperation && onUndoOperation
-      ? {
-        overlays: hunkOverlays(change.previousSource, operations.filter((item) => item.kind === "source_hunk")),
-        disabled: dependentDisabled,
-        onKeep: onKeepOperation,
-        onUndo: onUndoOperation,
-      }
-      : undefined;
+  //
+  // Memoized on a signature rather than the arrays themselves: NotebookView
+  // rebuilds each cell's operations array every render, and CellEditor turns
+  // these controls into a CodeMirror StateField, so an unstable identity here
+  // reconfigures the editor of every cell under review on every keystroke.
+  // Handlers go through refs for the same reason — their identity changes each
+  // render and would otherwise defeat the memo.
+  const hunkOps = operations.filter((item) => item.kind === "source_hunk");
+  const hunkSignature = hunkOps
+    .map((item) => `${item.operationId}:${item.state}:${item.previousRange?.join("-")}:${item.nextRange?.join("-")}`)
+    .join("|");
+  const keepRef = useRef(onKeepOperation);
+  const undoRef = useRef(onUndoOperation);
+  keepRef.current = onKeepOperation;
+  undoRef.current = onUndoOperation;
+  const reviewable_ = Boolean(change) && !stale && Boolean(onKeepOperation) && Boolean(onUndoOperation);
+  const previousSource = change?.previousSource;
+  const hunkControls = useMemo<HunkControls | undefined>(() => {
+    if (!reviewable_ || previousSource === undefined) return undefined;
+    const parsed = hunkSignature ? hunkOps : [];
+    const overlays = hunkOverlays(previousSource, parsed);
+    if (!overlays.length) return undefined;
+    return {
+      overlays,
+      disabled: dependentDisabled,
+      onKeep: (operationId: string) => keepRef.current?.(operationId),
+      onUndo: (operationId: string) => undoRef.current?.(operationId),
+    };
+    // hunkSignature stands in for hunkOps; see the note above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewable_, previousSource, hunkSignature, dependentDisabled]);
   // Outputs are suspect only until the cell is executed again. Deriving this
   // from the ledger alone would pin the warning forever, since the operation
   // stays rejected no matter how many times the user re-runs. Remember the

@@ -187,8 +187,10 @@ export const api = {
   // Accept settles review state only, so it carries no expected revision — a
   // stale revision cannot make it unsafe, and 409-ing "I read this diff" would
   // be hostile for no gain. Reject is a document mutation like any other.
-  acceptOperations: (snapshot: NotebookSnapshot, turnId: string, operationId?: string) =>
-    request<AgentTurn>(`/agent-turns/${encodeURIComponent(turnId)}/operations/${operationId ? `${encodeURIComponent(operationId)}/accept` : "accept-all"}`, { method: "POST", body: JSON.stringify({ sessionId: snapshot.sessionId }) }),
+  // operationIds omitted settles every pending operation; a list settles just
+  // those (one request per cell rather than one per hunk).
+  acceptOperations: (snapshot: NotebookSnapshot, turnId: string, operationIds?: string[]) =>
+    request<AgentTurn>(`/agent-turns/${encodeURIComponent(turnId)}/operations/${operationIds?.length === 1 ? `${encodeURIComponent(operationIds[0])}/accept` : "accept-all"}`, { method: "POST", body: JSON.stringify({ sessionId: snapshot.sessionId, ...(operationIds?.length ? { operationIds } : {}) }) }),
   rejectOperations: (snapshot: NotebookSnapshot, turnId: string, operationId?: string) =>
     request<NotebookSnapshot>(`/agent-turns/${encodeURIComponent(turnId)}/operations/${operationId ? `${encodeURIComponent(operationId)}/reject` : "reject-all"}`, { method: "POST", body: JSON.stringify(mutation(snapshot)) }),
   decide: (operation: ExecutionOperation, attempt: ExecutionAttempt, decision: "approve" | "skip" | "cancel") => {

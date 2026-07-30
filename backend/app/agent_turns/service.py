@@ -23,7 +23,8 @@ from ..notebook_document.models import (
 )
 from ..notebook_document.service import NotebookDocumentService
 from .operations import (
-    ACCEPTED, APPLIED_STATES, KIND_STRUCTURAL_ADD, PENDING, REJECTED,
+    ACCEPTED, APPLIED_STATES, KIND_SOURCE_HUNK, KIND_STRUCTURAL_ADD, PENDING,
+    REJECTED,
     TurnOperation, build_add_operation, build_operations, compose, is_stale,
     source_hash, with_state,
 )
@@ -46,6 +47,10 @@ MAX_TURN_HISTORY_BYTES = 2 * 1024 * 1024
 # the oldest is force-settled to accepted, which discards review state only and
 # never changes notebook content.
 MAX_PENDING_REVIEW_TURNS = 10
+# Review actions whose document mutations still count as a turn's own lineage,
+# so undoing part of a turn does not end its whole-turn undo. `undo` is
+# deliberately absent: restoring the checkpoint ends the lineage by definition.
+LINEAGE_ACTIONS = ("reject",)
 # UI "mode" (edit/plan) maps to a Claude CLI permission mode.
 PERMISSION_MODE_BY_MODE = {"edit": "acceptEdits", "plan": "plan"}
 
@@ -234,8 +239,12 @@ class AgentTurnService:
             )[:limit]
             return [self.get(turn.turn_id) for turn in turns]
 
-    def is_undo_eligible(self, turn: AgentTurn) -> bool:
+    def is_undo_eligible(self, turn: AgentTurn, snapshot=None) -> bool:
         """Whether the turn's checkpoint may still be restored.
+
+        Callers serializing a turn should pass a snapshot they already hold:
+        taking one deep-copies the notebook, and a turn response otherwise
+        pays for two (here and in ``stale_cell_ids``).
 
         Reads the snapshot before taking ``self._lock``: the document service
         calls back into this service under its own lock when a session is
@@ -252,7 +261,7 @@ class AgentTurnService:
             if self._latest_applied_turn_id != turn.turn_id:
                 return False
         try:
-            snapshot = self.documents.get_snapshot()
+            snapshot = snapshot if snapshot is not None else self.documents.get_snapshot()
         except NotebookDomainError:
             return False
         with self._lock:
@@ -278,7 +287,22 @@ class AgentTurnService:
             return False
 
     @staticmethod
-    def _owned_by_turn(owner: str | None, turn_id: str) -> bool:
+    def owner_for_turn(turn_id: str, action: str | None = None) -> str:
+        """Mint a mutation owner tag for a turn, or one of its review actions.
+
+        Mint through here rather than inline: ``is_undo_eligible`` forgives a
+        revision gap authored by a turn's own lineage, so a producer the parser
+        does not recognise silently reintroduces the checkpoint-destroying race
+        that ownership recognition exists to close.
+        """
+        if action is None:
+            return turn_id
+        if action not in LINEAGE_ACTIONS:
+            raise ValueError(f"owner action {action!r} is not a turn lineage action")
+        return f"{action}:{turn_id}"
+
+    @classmethod
+    def _owned_by_turn(cls, owner: str | None, turn_id: str) -> bool:
         """Whether a document mutation belongs to the turn's own lineage.
 
         Excludes ``undo:`` — restoring a checkpoint deliberately ends it.
@@ -286,7 +310,7 @@ class AgentTurnService:
         if not owner:
             return False
         return owner == turn_id or owner.startswith(
-            (f"reject:{turn_id}", f"revert:{turn_id}")
+            tuple(f"{action}:{turn_id}" for action in LINEAGE_ACTIONS)
         )
 
     def _invalidate_checkpoint_locked(self, turn: AgentTurn) -> None:
@@ -839,8 +863,23 @@ class AgentTurnService:
                 )
                 hunk_cell_ids = {
                     item.cell_id for item in targets
-                    if item.kind != KIND_STRUCTURAL_ADD
+                    if item.kind == KIND_SOURCE_HUNK
                 }
+                # Dispatch positively and fail closed. Treating "not an add" as
+                # "a source hunk" would route a future kind (the structural
+                # delete/move of design doc §12.4) into the recompose path,
+                # where it would look for a `changes` entry it never has and
+                # surface as a confusing CellNotFound instead of an unhandled
+                # kind at the one site that must learn about it.
+                unhandled = {
+                    item.kind for item in targets
+                    if item.kind not in (KIND_SOURCE_HUNK, KIND_STRUCTURAL_ADD)
+                }
+                if unhandled:
+                    raise NotImplementedError(
+                        f"reject_operations cannot undo operation kinds: "
+                        f"{sorted(unhandled)}"
+                    )
                 self._guard_add_targets_locked(snapshot, add_targets, conflict)
                 changes = self._recompose_locked(
                     snapshot, sources, turn.operations, operations,
@@ -871,7 +910,7 @@ class AgentTurnService:
                     updated = self.documents.apply_structural_changes_under_lease(
                         next_cells=next_cells, expected_session_id=session_id,
                         expected_revision=expected_revision,
-                        owner=f"reject:{turn_id}", lease=lease,
+                        owner=self.owner_for_turn(turn_id, "reject"), lease=lease,
                     )
                 except NotebookImportError as error:
                     # e.g. undoing the only remaining cell: a notebook must
@@ -881,7 +920,7 @@ class AgentTurnService:
             else:
                 updated = self.documents.apply_source_changes_under_lease(
                     changes=changes, expected_revision=expected_revision,
-                    owner=f"reject:{turn_id}", lease=lease,
+                    owner=self.owner_for_turn(turn_id, "reject"), lease=lease,
                 )
             with self._lock:
                 stored = self._turns.get(turn_id)
@@ -901,7 +940,7 @@ class AgentTurnService:
                     if self._latest_applied_turn_id == turn_id:
                         stored.applied_revision = updated.revision
             if self.events is not None:
-                self.events.publish("notebook.updated", {"sessionId": updated.session_id, "revision": updated.revision, "ownerId": f"reject:{turn_id}"})
+                self.events.publish("notebook.updated", {"sessionId": updated.session_id, "revision": updated.revision, "ownerId": self.owner_for_turn(turn_id, "reject")})
             self._publish_turn_updated(turn_id)
             return updated
         finally:
@@ -1010,13 +1049,21 @@ class AgentTurnService:
     def _publish_turn_updated(self, turn_id: str) -> None:
         if self.events is None:
             return
-        turn = self.get(turn_id)
-        self.events.publish("turn.updated", {
-            "turnId": turn.turn_id, "sessionId": turn.session_id,
-            "state": turn.state,
-            "revision": turn.applied_revision or turn.base_revision,
-            "executionOperationId": turn.execution_operation_id,
-        })
+        # Read the scalars under the lock rather than via get(), which
+        # deep-copies the turn's checkpoint — a full copy of the pre-turn
+        # notebook — on what is now the hottest path in the app: every
+        # per-hunk Keep or Undo publishes this.
+        with self._lock:
+            turn = self._turns.get(turn_id)
+            if turn is None:
+                return
+            payload = {
+                "turnId": turn.turn_id, "sessionId": turn.session_id,
+                "state": turn.state,
+                "revision": turn.applied_revision or turn.base_revision,
+                "executionOperationId": turn.execution_operation_id,
+            }
+        self.events.publish("turn.updated", payload)
 
     def _require_undoable(self, turn_id: str) -> AgentTurn:
         turn = self.get(turn_id)
