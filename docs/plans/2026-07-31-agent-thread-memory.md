@@ -435,7 +435,35 @@ P0 and P1 do not have to wait for the per-op branch. P2 is the merge point.
 
 **Manual:**
 
-- Verified against the real Claude CLI, not `FakeAgentAdapter`.
+- Verified against the real Claude CLI, not `FakeAgentAdapter`. See §9.1.
+
+### 9.1 Validation log
+
+**2026-07-31 — real Claude CLI 2.1.220, P0 + P1, full `AgentTurnService`
+pipeline.**
+
+Scenario chosen so that the *correct* answer and the *rejected* answer are the
+same code, which is the case memory has to get right:
+
+1. Cell contains an append loop building `squares`.
+2. Turn 1: "Rewrite this loop as a single list comprehension." → agent applied
+   `squares = [n * n for n in range(10)]`.
+3. User undid it. `undone_at` recorded; cell restored.
+4. Turn 2: "Make this cell faster." — a prompt that leads almost inevitably back
+   to the comprehension.
+
+Result: the agent did not re-propose it, and named the reason unprompted —
+*"That's the version you undid last turn, so I'm leaving the explicit loop in
+place rather than proposing it again."* It offered numpy and generator
+alternatives instead, and correctly noted that the numpy option would need an
+import in a cell outside this turn's editable scope. The cell was left
+byte-identical.
+
+Before this change the same turn 2 had no way to know turn 1 had happened.
+
+Caveats: one scenario, one run, non-deterministic model. This shows the feed
+reaches the agent and is acted on; it is not a measurement of how reliably that
+holds across prompts.
 
 ---
 
