@@ -1,9 +1,15 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { configure, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import type { AgentOperation, AgentTurn, NotebookSnapshot } from "../api/client";
 import { EventSourceMock } from "../test/setup";
+
+// Every case here mounts the whole App, which fans out several mocked fetches
+// and an EventSource before the review UI settles. Testing Library's 1s default
+// is enough in isolation but not when vitest runs files in parallel — these
+// were flaky under full-suite load while passing every time on their own.
+configure({ asyncUtilTimeout: 5000 });
 
 vi.mock("@uiw/react-codemirror", () => ({
   default: ({ value, onChange, "aria-label": label, readOnly }: { value: string; onChange: (value: string) => void; "aria-label": string; readOnly: boolean }) =>

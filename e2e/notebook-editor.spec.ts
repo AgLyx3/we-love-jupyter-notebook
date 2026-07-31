@@ -19,6 +19,27 @@ async function replaceEditor(page: Page, label: string, source: string) {
   await expect.poll(() => editor.evaluate((node) => (node as HTMLElement).innerText)).toBe(source);
 }
 
+function cellOf(page: Page, sourceLabel: string) {
+  return page.locator(".notebook-cell").filter({ has: page.getByLabel(sourceLabel) });
+}
+
+// Undo every agent change in one cell.
+//
+// Review lives on the hunks now: a cell whose changes are all hunks carries a
+// Keep/Undo pair per changed region inside the editor and deliberately no pair
+// in its header, so there is no single per-cell revert button to click. Undo
+// each remaining hunk until the cell is back to its pre-turn source.
+async function undoCellChanges(page: Page, sourceLabel: string) {
+  const undo = cellOf(page, sourceLabel).getByLabel("Undo this change");
+  let remaining = await undo.count();
+  expect(remaining).toBeGreaterThan(0);
+  while (remaining > 0) {
+    await undo.first().click();
+    await expect.poll(() => undo.count(), { timeout: 15_000 }).toBeLessThan(remaining);
+    remaining = await undo.count();
+  }
+}
+
 async function waitForTurn(page: Page, expected: RegExp = terminalTurn) {
   await expect(page.locator(".turn-state")).toHaveText(expected, { timeout: 45_000 });
 }
@@ -229,8 +250,33 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   await dialog.getByRole("button", { name: "Approve and run" }).click();
   await waitForTurn(page, /completed/);
   await expect(page.getByLabel("Cell output").filter({ hasText: "Total: 30" })).toBeVisible();
-  await page.getByLabel("Revert agent change to code cell 2").click();
+
+  // Review controls: one per change, and only where they can act.
+  //
+  // This is the only suite that can check the per-hunk widgets at all — the
+  // vitest specs mock CodeMirror away — and it is where the deduplication rule
+  // is enforced end to end: the hunk pair is present, the header pair is not,
+  // and both render as the same control rather than two unrelated buttons.
+  const changed = cellOf(page, "Source for code cell 2");
+  await expect(changed.getByLabel("Undo this change").first()).toBeVisible();
+  await expect(changed.getByLabel("Keep this change").first()).toBeVisible();
+  await expect(changed.getByLabel("Revert agent change to code cell 2")).toHaveCount(0);
+  await expect(changed.getByLabel("Keep agent change to code cell 2")).toHaveCount(0);
+  await expect(changed.locator(".cell-review-label")).toContainText("Agent changed this cell");
+  // Not assertOverlayLayout: that also forbids overlapping the sticky topbar,
+  // which is meaningless for a widget inline in a scrolling document. The part
+  // that matters here is the touch target the project enforces elsewhere.
+  for (const box of await changed.locator(".cm-hunk-actions button").all()) {
+    const rect = (await box.boundingBox())!;
+    expect(rect.height).toBeGreaterThanOrEqual(28);
+    expect(rect.width).toBeGreaterThanOrEqual(28);
+  }
+
+  await undoCellChanges(page, "Source for code cell 2");
   await expect(page.getByLabel("Source for code cell 2")).toContainText("values = [2, 4, 6]");
+  // Undoing the last hunk settles the cell, so its review surface clears.
+  await expect(changed.getByLabel("Undo this change")).toHaveCount(0);
+  await expect(changed.locator(".cell-review-label")).toHaveCount(0);
 
   await replaceEditor(page, "Source for code cell 4", "average = total / len(values)\nprint('stale save')");
   await page.route("**/api/cells/downstream/source", async (route) => {
@@ -298,7 +344,7 @@ test("handles risky decisions and manual kernel controls", async ({ page }) => {
   await expect(dialog).toBeVisible({ timeout: 45_000 });
   await dialog.getByRole("button", { name: "Skip cell" }).click();
   await waitForTurn(page, /validation incomplete/);
-  await page.getByLabel("Revert agent change to code cell 2").click();
+  await undoCellChanges(page, "Source for code cell 2");
   await expect(page.getByLabel("Source for code cell 2")).toContainText("values = [2, 4, 6]");
 
   await page.getByLabel("Allow agent edit code cell 2").click();

@@ -91,7 +91,9 @@ body.marquee-active iframe { pointer-events: none; }
 /* One Keep/Undo appearance everywhere it appears — per hunk inside the editor,
    per cell in the header — so the same pair never reads as two different
    controls. Only the anchor differs; the affordance must not. */
-.review-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 26px; min-width: 84px; padding: 0 10px; font-size: 12px; font-weight: 650; border-radius: 4px; }
+/* 28px is the minimum touch target this project enforces on every visible
+   control (asserted in the e2e layout checks); these were 26px. */
+.review-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; min-width: 84px; padding: 0 10px; font-size: 12px; font-weight: 650; border-radius: 4px; }
 .review-action svg { width: 14px; height: 14px; }
 .review-action.keep { color: var(--green); border-color: #a7cdb8; }
 .review-action.keep:not(:disabled):hover { background: #eaf6ef; border-color: #7fb99a; }
