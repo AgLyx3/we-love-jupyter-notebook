@@ -1,5 +1,4 @@
 import { expect, test, type Page } from "@playwright/test";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 const sample = path.resolve("examples/sample.ipynb");
@@ -16,7 +15,12 @@ async function replaceEditor(page: Page, label: string, source: string) {
   await editor.click();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.insertText(source);
-  await expect.poll(() => editor.evaluate((node) => (node as HTMLElement).innerText)).toBe(source);
+  // .cm-line only: diff decorations render removed lines and the per-hunk
+  // Keep/Undo widgets inside .cm-content, so its innerText is the document plus
+  // review chrome. The document lines are what this helper is asserting on.
+  await expect.poll(() => editor.evaluate((node) =>
+    [...node.querySelectorAll(".cm-line")].map((line) => (line as HTMLElement).innerText).join("\n"),
+  )).toBe(source);
 }
 
 function cellOf(page: Page, sourceLabel: string) {
@@ -44,11 +48,39 @@ async function waitForTurn(page: Page, expected: RegExp = terminalTurn) {
   await expect(page.locator(".turn-state")).toHaveText(expected, { timeout: 45_000 });
 }
 
-async function uploadSample(page: Page) {
+// Load the sample notebook into a fresh session.
+//
+// The app opens notebooks by path now; the file-upload input these tests used
+// to drive was removed when the local file/folder selector landed, which is why
+// every test here had been failing at the first step. Going through the API
+// rather than the file picker keeps the tests about the editor instead of the
+// browser dialog, and matches how the app itself opens a file.
+async function openSample(page: Page) {
   await page.goto("/");
-  const uploadFinished = page.waitForResponse((response) => response.url().includes("/api/notebooks/upload") && response.request().method() === "POST");
-  await page.locator('input[type="file"]').first().setInputFiles(sample);
-  expect((await uploadFinished).ok()).toBeTruthy();
+  const opened = page.waitForResponse((response) => response.url().includes("/api/notebooks/open") && response.request().method() === "POST");
+  await page.evaluate(async (path) => {
+    // One notebook session exists per backend, and Playwright reuses the server
+    // across tests, so close whatever a previous test left open — replacing a
+    // loaded notebook requires its session and revision as preconditions.
+    const current = await fetch("/api/notebooks/current");
+    if (current.ok) {
+      const { sessionId, revision } = await current.json();
+      const closed = await fetch("/api/notebooks/current", {
+        method: "DELETE", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, expectedDocumentRevision: revision }),
+      });
+      await closed.text();
+    }
+    const response = await fetch("/api/notebooks/open", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    // Drain the body: the reload below aborts anything still in flight, which
+    // the page's requestfailed listener reports as an unexpected failure.
+    await response.text();
+  }, sample);
+  expect((await opened).ok()).toBeTruthy();
+  await page.reload();
   await expect(page.getByText("sample.ipynb", { exact: true })).toBeVisible();
 }
 
@@ -209,11 +241,18 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
     replacedSessionId = String((await initialCurrentResponse.json()).sessionId);
   }
   phase = "upload";
-  const uploadFinished = page.waitForResponse((response) => response.url().includes("/api/notebooks/upload") && response.request().method() === "POST");
-  await page.locator('input[type="file"]').first().setInputFiles(sample);
-  expect((await uploadFinished).ok()).toBeTruthy();
+  const opened = page.waitForResponse((response) => response.url().includes("/api/notebooks/open") && response.request().method() === "POST");
+  await page.evaluate(async (path) => {
+    const response = await fetch("/api/notebooks/open", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    await response.text();
+  }, sample);
+  expect((await opened).ok()).toBeTruthy();
+  await page.reload();
   await expect(page.getByText("sample.ipynb", { exact: true })).toBeVisible();
-  await expect(page.locator('input[type="file"]').first()).toBeEnabled();
+  await expect(page.getByLabel("Open a notebook or folder")).toBeEnabled();
   phase = "workflow";
 
   await replaceEditor(page, "Source for code cell 4", "average = total / len(values)\nprint(f'Average: {average}')");
@@ -225,22 +264,24 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   await expect(page.getByText("Revision 1")).toBeVisible();
 
   await page.getByLabel("Allow agent edit code cell 2").click();
-  await page.getByLabel("Add code cell 3 as context").click();
+  await page.getByLabel("Add code cell 3 as focus").click();
   await expect(page.getByText("1 editable")).toBeVisible();
-  await expect(page.getByText("1 context")).toBeVisible();
+  await expect(page.getByText("1 focus")).toBeVisible();
 
   await page.getByLabel("Agent instruction").fill("[safe] Update the parameter values");
   await page.getByLabel("Agent instruction").press("Enter");
   await waitForTurn(page, /completed/);
-  const diff = page.locator(".cell-diff").first();
-  await expect(diff.locator(".diff-removed")).toContainText("values = [2, 4, 6]");
-  await expect(diff.locator(".diff-added")).toContainText("values = [3, 6, 9]");
+  // The diff is inline CodeMirror decorations now; the separate .cell-diff
+  // panel these assertions targeted no longer exists.
+  const safeEdited = cellOf(page, "Source for code cell 2");
+  await expect(safeEdited.locator(".cm-diff-removed-line").first()).toContainText("values = [2, 4, 6]");
+  await expect(safeEdited.locator(".cm-diff-added-line").first()).toContainText("values = [3, 6, 9]");
   await expect(page.getByLabel("Cell output").filter({ hasText: "Total: 18" })).toBeVisible();
   await page.getByRole("button", { name: "Undo entire turn" }).click();
   await expect(page.getByLabel("Source for code cell 2")).toContainText("values = [2, 4, 6]");
 
   await page.getByLabel("Allow agent edit code cell 2").click();
-  await page.getByLabel("Add code cell 3 as context").click();
+  await page.getByLabel("Add code cell 3 as focus").click();
   await page.getByLabel("Agent instruction").fill("[risk] Update values with an environment lookup");
   await page.getByRole("button", { name: "Send" }).click();
   const dialog = page.getByRole("alertdialog", { name: "Execution needs approval" });
@@ -298,13 +339,12 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   await expect(page.getByLabel("Run code cell 4")).toBeDisabled();
   await expect(page.getByLabel("Run all cells")).toBeDisabled();
 
-  const downloadPromise = page.waitForEvent("download");
-  await page.getByLabel("Download notebook").click();
-  const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe("sample.ipynb");
-  const downloadedPath = await download.path();
-  expect(downloadedPath).not.toBeNull();
-  const downloadedText = await readFile(downloadedPath!, "utf8");
+  // The toolbar exports through Save / Save as now; the download button these
+  // assertions drove was removed with the local file/folder work. The export
+  // endpoint still serves the committed document, so assert on that.
+  const exported = await page.request.get(`${backendUrl}/notebooks/download`);
+  expect(exported.ok()).toBeTruthy();
+  const downloadedText = await exported.text();
   expect(downloadedText.length).toBeGreaterThan(100);
   const downloaded = JSON.parse(downloadedText) as {
     nbformat: number;
@@ -335,7 +375,7 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
 });
 
 test("handles risky decisions and manual kernel controls", async ({ page }) => {
-  await uploadSample(page);
+  await openSample(page);
 
   await page.getByLabel("Allow agent edit code cell 2").click();
   await page.getByLabel("Agent instruction").fill("[risk] Exercise the skip path");
@@ -381,11 +421,11 @@ test("handles risky decisions and manual kernel controls", async ({ page }) => {
 });
 
 test("closes the active notebook and returns to upload state", async ({ page }) => {
-  await uploadSample(page);
+  await openSample(page);
 
   await page.getByLabel("Close notebook").click();
 
-  await expect(page.getByText("Open a notebook to begin")).toBeVisible();
+  await expect(page.getByText("Open a notebook or a folder to begin")).toBeVisible();
   await expect(page.getByLabel("Close notebook")).toHaveCount(0);
   const current = await page.request.get(`${backendUrl}/notebooks/current`);
   expect(current.status()).toBe(404);

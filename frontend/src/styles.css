@@ -103,7 +103,7 @@ body.marquee-active iframe { pointer-events: none; }
 /* Per-hunk review widget: removed lines + Keep/Undo, rendered as a CodeMirror
    block widget above the hunk it acts on. */
 .cm-hunk-widget { border-left: 3px solid #d9822b; background: #fdf9f3; }
-.cm-hunk-actions { display: flex; gap: 6px; padding: 4px 8px; }
+.cm-hunk-actions { display: flex; gap: 6px; padding: 4px 8px; user-select: none; }
 .cell-review-stale { font-size: 11px; color: var(--muted); }
 .cell-stale-outputs { margin: 0; padding: 5px 14px; font-size: 11px; font-weight: 600; color: var(--amber); background: #fdf6ea; border-top: 1px solid #ecd9b8; }
 .cell-retyped { margin: 0; padding: 5px 14px; font-size: 11px; font-weight: 600; color: var(--amber); background: #fdf6ea; border-top: 1px solid #ecd9b8; }
