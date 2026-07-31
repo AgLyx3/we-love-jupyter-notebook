@@ -1,6 +1,7 @@
 import { AlertTriangle, BookOpen, PanelLeft, Save, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
-import { ApiError, api, connectEvents, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type KernelStatus, type NotebookSnapshot, type TurnScope, type WriteScope } from "./api/client";
+import { ApiError, api, connectEvents, type AgentOperation, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type KernelStatus, type NotebookSnapshot, type TurnScope, type WriteScope } from "./api/client";
+import ReviewBar from "./notebook/ReviewBar";
 import AgentChatPanel from "./agentChat/AgentChatPanel";
 import type { TurnRecord } from "./agentChat/AgentChatPanel";
 import KernelControls from "./execution/KernelControls";
@@ -283,6 +284,23 @@ export default function App() {
   };
   const requestCellFocus = (cellId: string) => setFocusRequest((current) => ({ cellId, requestId: (current?.requestId ?? 0) + 1 }));
 
+  // Accept changes no document state, so it neither refreshes the notebook nor
+  // advances the revision — it only settles the ledger.
+  const acceptOperations = (notebook: NotebookSnapshot, turnId: string, operationIds?: string[]) =>
+    void mutate(() => api.acceptOperations(notebook, turnId, operationIds), { refreshAfter: false }, (updated) => {
+      // Reconcile before committing. The raw response still carries every
+      // change the turn made, so storing it verbatim leaves a fully-reviewed
+      // cell showing its header and — because no pending hunks remain for the
+      // ledger overlay — falling back to the legacy whole-change diff.
+      const settled = reconcileTurnChanges(updated, snapshotRef.current);
+      setHistory((items) => updateTurnRecord(items, turnId, () => settled));
+      setTurn((item) => item?.turnId === turnId ? settled : item);
+    });
+  const rejectOperations = (notebook: NotebookSnapshot, turnId: string, operationId?: string) =>
+    void mutate(() => api.rejectOperations(notebook, turnId, operationId), {
+      conflictText: "This cell changed after the agent edited it, so that change can no longer be undone individually.",
+    }, setNotebook);
+
   // Selection → "Add to agent chat": the containing cell becomes the editable
   // boundary and the selection is attached to the chat as a reference chip
   // (Cursor-style — cell/line label, not raw code). The code is sent to the
@@ -343,6 +361,30 @@ export default function App() {
   const selectedTurn = history.find((item) => item.turn.turnId === selectedTurnId)?.turn ?? turn;
 
   const fileLocked = mutationsDisabled || busy || hasDirtyDrafts;
+  const reviewOperations = selectedTurn?.operations ?? [];
+  // "Unsettled" must mean the same thing everywhere: here, in
+  // reconcileTurnChanges, and in Next-change navigation. Stale counts as
+  // unsettled — the user has not decided about it — and stays settleable,
+  // because Keep needs no composition guard even when Undo can no longer apply.
+  const reviewUnsettled = reviewOperations.filter((item) => item.state === "pending" || item.state === "stale");
+  const reviewKept = reviewOperations.filter((item) => item.state === "accepted").length;
+  // Step through the cells that still have something unreviewed, in either
+  // direction, wrapping at both ends. Reuses the existing chat-to-cell focus
+  // plumbing rather than adding a second way to scroll the notebook. Stale
+  // cells are included: landing on one is how the user finds out why it can no
+  // longer be undone.
+  const focusChange = (direction: 1 | -1) => {
+    if (!notebook || !reviewUnsettled.length) return;
+    const order = notebook.cells.map((cell) => cell.cellId).filter((cellId) => reviewUnsettled.some((item) => item.cellId === cellId));
+    if (!order.length) return;
+    const from = order.indexOf(focusRequest?.cellId ?? "");
+    // Nothing focused yet: forward starts at the first change, back at the last,
+    // so the first press lands somewhere useful either way.
+    const next = from < 0
+      ? (direction === 1 ? 0 : order.length - 1)
+      : (from + direction + order.length) % order.length;
+    requestCellFocus(order[next]);
+  };
   return <div className="app-shell">
     <header className="topbar">
       <div className="brand">{workspaceFolder && sidebarHidden && <button className="sidebar-reveal" title="Show files" aria-label="Show file tree" onClick={() => setSidebarHidden(false)}><PanelLeft /></button>}<BookOpen /><strong>{notebook?.filename ?? "Workspace"}</strong>{notebook && <span className={notebook.dirty ? "dirty" : ""}>{notebook.dirty ? "Unsaved" : "Clean"}</span>}{notebook && <span>Revision {notebook.revision}</span>}</div>
@@ -355,7 +397,29 @@ export default function App() {
     <div className="workspace-layout">
       {workspaceFolder && !sidebarHidden && <WorkspaceSidebar root={workspaceFolder} activePath={notebook?.notebookPath ?? null} onOpenNotebook={(path) => void handleOpen(path, workspaceFolder)} onCollapse={() => setSidebarHidden(true)} />}
       {notebook ? <div className="editor-layout" style={{ "--agent-width": `${agentWidth}px` } as CSSProperties}>
+      <div className="notebook-pane">
+      {/* Gated on unsettled work, so finishing a review clears the bar rather
+          than leaving a live "Undo all" behind a "2 of 2 reviewed" counter.
+          Keyed by turn so no confirmation survives a switch to another turn.
+          Trusted turns carry no ledger, so this never shows for them. */}
+      {selectedTurn && reviewUnsettled.length > 0 && <ReviewBar
+        key={selectedTurn.turnId}
+        total={reviewOperations.length} reviewed={reviewOperations.length - reviewUnsettled.length} keptCount={reviewKept}
+        undoableCount={reviewUnsettled.filter((item) => item.state === "pending").length}
+        disabled={mutationsDisabled || busy || hasDirtyDrafts}
+        onPrevious={() => focusChange(-1)}
+        onNext={() => focusChange(1)}
+        onKeepAll={() => acceptOperations(notebook, selectedTurn.turnId)}
+        onUndoAll={() => rejectOperations(notebook, selectedTurn.turnId)} />}
       <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} trusted={trustedScope} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} autoSave={autoSave} focusRequest={focusRequest}
+        onKeepCell={(turnId, cellId) => {
+          // One request per cell, not per hunk: keeping a cell is a single
+          // settle, and a mid-loop failure used to leave it half-kept.
+          const ids = pendingOperations(selectedTurn, cellId).map((item) => item.operationId);
+          if (ids.length) acceptOperations(notebook, turnId, ids);
+        }}
+        onKeepOperation={(turnId, operationId) => acceptOperations(notebook, turnId, [operationId])}
+        onUndoOperation={(turnId, operationId) => rejectOperations(notebook, turnId, operationId)}
         onDirtyChange={(cellId, dirty) => setDirtyCellIds((current) => {
           if (current.has(cellId) === dirty) return current;
           const next = new Set(current); if (dirty) next.add(cellId); else next.delete(cellId); return next;
@@ -383,6 +447,7 @@ export default function App() {
           setHistory((items) => updateTurnRecord(items, turnId, (item) => ({ ...item, changes: item.changes.filter((change) => change.cellId !== cellId) })));
           setTurn((item) => item?.turnId === turnId ? { ...item, changes: item.changes.filter((change) => change.cellId !== cellId) } : item);
         })} />
+      </div>
       <div className="editor-resizer" role="separator" aria-orientation="vertical" aria-label="Resize agent panel" tabIndex={0} onPointerDown={startAgentResize} onKeyDown={nudgeAgentResize} />
       <AgentChatPanel notebook={notebook} scope={scope} turn={selectedTurn} activeTurn={activeTurn} history={history} operation={operation} busy={busy} mutationsDisabled={mutationsDisabled || hasDirtyDrafts}
         onClearScope={() => void mutate(() => api.clearScope(notebook), { refreshAfter: false }, setScope)}
@@ -449,12 +514,42 @@ function reconcileHistory(summaries: TurnRecord[], existing: TurnRecord[], noteb
   return [...reconciled, ...cachedTail].slice(0, 50);
 }
 
+// Which of a turn's changes still have something to review.
+//
+// Before the operation ledger this compared the cell's source to `nextSource`,
+// which is only correct while a change is all-or-nothing: undo one hunk and the
+// equality breaks, so the whole cell's diff — including the hunks nobody has
+// looked at yet — would silently disappear.
+//
+// With a ledger, `nextSource` describes what the turn originally proposed, not
+// what is in the cell, so it is history rather than a render source. A change
+// stays visible while it still has unsettled operations. Accepting is therefore
+// what clears a diff, which is the review gesture the UI previously lacked.
+//
+// Turns served before the ledger existed (or with operations dropped by summary
+// truncation) fall back to the old equality so their diffs still resolve.
 function reconcileTurnChanges(turn: AgentTurn, notebook: NotebookSnapshot | null): AgentTurn {
   if (!notebook) return turn;
+  const operations = turn.operations;
+  if (!operations?.length) {
+    return { ...turn, changes: turn.changes.filter((change) => notebook.cells.find((cell) => cell.cellId === change.cellId)?.source === change.nextSource) };
+  }
+  const governed = new Set(operations.map((item) => item.cellId));
+  const unsettled = new Set(operations.filter((item) => item.state !== "accepted" && item.state !== "rejected").map((item) => item.cellId));
   return {
     ...turn,
-    changes: turn.changes.filter((change) => notebook.cells.find((cell) => cell.cellId === change.cellId)?.source === change.nextSource),
+    changes: turn.changes.filter((change) =>
+      // A cell the ledger does not govern keeps its change: on a Trusted turn,
+      // cells caught up in a retype carry a diff for review but no operations,
+      // and treating "no operations" as "fully reviewed" hid both their diff
+      // and the note explaining that only whole-turn undo applies.
+      (governed.has(change.cellId) ? unsettled.has(change.cellId) : true)
+      && notebook.cells.some((cell) => cell.cellId === change.cellId)),
   };
+}
+
+export function pendingOperations(turn: AgentTurn | null | undefined, cellId?: string): AgentOperation[] {
+  return (turn?.operations ?? []).filter((item) => item.state === "pending" && (cellId === undefined || item.cellId === cellId));
 }
 
 function updateTurnRecord(items: TurnRecord[], turnId: string, update: (turn: AgentTurn) => AgentTurn): TurnRecord[] {

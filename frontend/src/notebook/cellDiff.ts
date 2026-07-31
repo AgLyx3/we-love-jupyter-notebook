@@ -43,6 +43,43 @@ export function lineDiff(before: string, after: string): DiffLine[] {
   return lines;
 }
 
+// Ledger-driven overlays: project each still-pending operation onto the CURRENT
+// document. Hunk ranges index the turn's original previous/next sources, but
+// after a partial undo the cell holds the *composed* source — every earlier
+// rejected hunk shifts later positions by (removed - added) lines. Diffing
+// previousSource→nextSource against the composed document (what the legacy
+// overlay does) draws highlights on the wrong lines in exactly that case; this
+// mapping is what makes per-hunk controls act on the region they decorate.
+// Accepted and rejected hunks render nothing (reviewed means stop showing it).
+export type LedgerOperation = {
+  operationId: string;
+  ordinal: number;
+  state: string;
+  previousRange: [number, number] | null;
+  nextRange: [number, number] | null;
+};
+export type HunkOverlay = { operationId: string; line: number; added: number; removed: string[] };
+
+export function hunkOverlays(previousSource: string, operations: LedgerOperation[]): HunkOverlay[] {
+  const previous = previousSource.split("\n");
+  const overlays: HunkOverlay[] = [];
+  let shift = 0;
+  for (const operation of [...operations].sort((a, b) => a.ordinal - b.ordinal)) {
+    if (!operation.previousRange || !operation.nextRange) continue; // structural kinds
+    const [prevStart, prevEnd] = operation.previousRange;
+    const [nextStart, nextEnd] = operation.nextRange;
+    if (operation.state === "rejected") { shift += (prevEnd - prevStart) - (nextEnd - nextStart); continue; }
+    if (operation.state === "pending") overlays.push({
+      operationId: operation.operationId,
+      line: nextStart + shift,
+      added: nextEnd - nextStart,
+      removed: previous.slice(prevStart, prevEnd),
+    });
+    // accepted: lines are in the document at their next positions; no shift, no overlay.
+  }
+  return overlays;
+}
+
 // Pure "which lines changed" projection of lineDiff onto the AFTER document, for in-editor overlays.
 // `added` = 0-based line indices in `after` that were added/changed; `removed` = red markers, each anchored
 // at the 0-based `after` line index it precedes (equal to the after line count when trailing).

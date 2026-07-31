@@ -36,8 +36,24 @@ export interface TurnScope {
 }
 
 export interface AgentChange { cellId: string; previousSource: string; nextSource: string }
+
 export type StructuralOpKind = "add" | "delete" | "edit" | "retype" | "move";
 export interface StructuralOp { op: StructuralOpKind; cellId: string | null; detail: Record<string, unknown> }
+
+export type OperationState = "pending" | "accepted" | "rejected" | "stale";
+/** One reviewable hunk of an applied turn. Ranges index the line arrays of the
+ *  change's previousSource / nextSource; the backend owns these boundaries so a
+ *  Keep/Undo control can never act on a different region than the one drawn. */
+export interface AgentOperation {
+  operationId: string;
+  cellId: string;
+  kind: string;
+  ordinal: number;
+  state: OperationState;
+  // null for structural kinds (a whole added cell has no line ranges).
+  previousRange: [number, number] | null;
+  nextRange: [number, number] | null;
+}
 export interface AgentTurn {
   turnId: string;
   sessionId: string;
@@ -55,6 +71,8 @@ export interface AgentTurn {
   appliedRevision: number | null;
   executionOperationId: string | null;
   changes: AgentChange[];
+  // Populated for Blocking turns only; Trusted turns are whole-turn undo.
+  operations?: AgentOperation[];
   structuralOps?: StructuralOp[];
   error: ApiErrorBody | null;
   createdAt: string;
@@ -166,6 +184,15 @@ export const api = {
   cancelTurn: (snapshot: NotebookSnapshot, id: string) => request<AgentTurn>(`/agent-turns/${encodeURIComponent(id)}/cancel`, { method: "POST", body: JSON.stringify(mutation(snapshot)) }),
   undoTurn: (snapshot: NotebookSnapshot, id: string) => request<NotebookSnapshot>(`/agent-turns/${encodeURIComponent(id)}/undo`, { method: "POST", body: JSON.stringify(mutation(snapshot)) }),
   revertCell: (snapshot: NotebookSnapshot, turnId: string, cellId: string) => request<NotebookSnapshot>(`/agent-turns/${encodeURIComponent(turnId)}/cells/${encodeURIComponent(cellId)}/revert`, { method: "POST", body: JSON.stringify(mutation(snapshot)) }),
+  // Accept settles review state only, so it carries no expected revision — a
+  // stale revision cannot make it unsafe, and 409-ing "I read this diff" would
+  // be hostile for no gain. Reject is a document mutation like any other.
+  // operationIds omitted settles every pending operation; a list settles just
+  // those (one request per cell rather than one per hunk).
+  acceptOperations: (snapshot: NotebookSnapshot, turnId: string, operationIds?: string[]) =>
+    request<AgentTurn>(`/agent-turns/${encodeURIComponent(turnId)}/operations/${operationIds?.length === 1 ? `${encodeURIComponent(operationIds[0])}/accept` : "accept-all"}`, { method: "POST", body: JSON.stringify({ sessionId: snapshot.sessionId, ...(operationIds?.length ? { operationIds } : {}) }) }),
+  rejectOperations: (snapshot: NotebookSnapshot, turnId: string, operationId?: string) =>
+    request<NotebookSnapshot>(`/agent-turns/${encodeURIComponent(turnId)}/operations/${operationId ? `${encodeURIComponent(operationId)}/reject` : "reject-all"}`, { method: "POST", body: JSON.stringify(mutation(snapshot)) }),
   decide: (operation: ExecutionOperation, attempt: ExecutionAttempt, decision: "approve" | "skip" | "cancel") => {
     if (operation.currentDocumentRevision == null) throw new Error("Execution correlation is incomplete");
     return request<ExecutionOperation>(`/execution/${encodeURIComponent(attempt.executionAttemptId)}/${decision}`, { method: "POST", body: JSON.stringify({ sessionId: operation.sessionId, expectedDocumentRevision: operation.currentDocumentRevision, turnId: operation.parentTurnId, cellId: attempt.cellId }) });

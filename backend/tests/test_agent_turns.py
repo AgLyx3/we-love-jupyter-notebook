@@ -1089,13 +1089,11 @@ def test_trusted_turn_edit_and_add_applies_and_undo_restores(notebook_payload):
     assert [(c.cell_id, c.previous_source, c.next_source) for c in turn.changes] == [
         ("editable", "value = 1\n", "value = 99\n")
     ]
-    # ...but per-cell revert is rejected on Trusted turns (whole-turn undo only).
-    with pytest.raises(RevertConflict):
-        turns.revert_cell(
-            turn.turn_id, "editable",
-            session_id=documents.get_snapshot().session_id,
-            expected_revision=turn.applied_revision,
-        )
+    # ...and since T1 the edited surviving cell also carries ledger operations,
+    # so per-cell revert works on it (R20 now applies only to cells without
+    # operations — those involved in delete/move/retype). Covered in depth by
+    # test_turn_operation_review.py; here just pin that the blanket 409 is gone.
+    assert any(op.cell_id == "editable" for op in turn.operations)
     # No auto-execution for a Trusted turn even though a code cell changed (R4).
     assert turn.execution_operation_id is None
 

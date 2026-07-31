@@ -3,11 +3,23 @@ import type { AgentTurn, NotebookSnapshot, TurnScope } from "../api/client";
 import NotebookCell from "./NotebookCell";
 import type { CellSelection } from "./selectionEdit";
 
-export default function NotebookView({ notebook, scope, turn, trusted = false, disabled, sourceActionsDisabled, autoSave, focusRequest, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
+// A Trusted turn can change a cell's type. That is invisible in the diff — a
+// pure retype edits no source — while silently clearing outputs, so the cell
+// has to say so itself.
+function retypeOf(turn: AgentTurn | null, cellId: string): { from: string; to: string } | undefined {
+  const op = (turn?.structuralOps ?? []).find((item) => item.op === "retype" && item.cellId === cellId);
+  if (!op) return undefined;
+  const { from, to } = op.detail as { from?: unknown; to?: unknown };
+  return typeof from === "string" && typeof to === "string" ? { from, to } : undefined;
+}
+
+export default function NotebookView({ notebook, scope, turn, trusted = false, disabled, sourceActionsDisabled, autoSave, focusRequest, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert, onKeepCell, onKeepOperation, onUndoOperation, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
   notebook: NotebookSnapshot; scope: TurnScope; turn: AgentTurn | null; trusted?: boolean;
   disabled: boolean; sourceActionsDisabled: boolean; autoSave: boolean; focusRequest: { cellId: string; requestId: number } | null;
   onDirtyChange: (cellId: string, dirty: boolean) => void;
   onSave: (cellId: string, source: string) => void; onRun: (cellId: string) => void; onScope: (cellId: string, editable: boolean) => void; onScopeMany: (cellIds: string[], editable: boolean) => void; onRevert: (turnId: string, cellId: string) => void;
+  onKeepCell?: (turnId: string, cellId: string) => void;
+  onKeepOperation?: (turnId: string, operationId: string) => void; onUndoOperation?: (turnId: string, operationId: string) => void;
   onAddSelectionToChat?: (selection: CellSelection) => void; onInlineEdit?: (selection: CellSelection, instruction: string) => void; onAddErrorToChat?: (cellId: string, text: string) => void;
 }) {
   const [focused, setFocused] = useState(notebook.cells[0]?.cellId ?? "");
@@ -121,13 +133,24 @@ export default function NotebookView({ notebook, scope, turn, trusted = false, d
     {notebook.cells.map((cell) => <NotebookCell key={`${notebook.sessionId}:${cell.cellId}`} cell={cell} focused={focused === cell.cellId} selected={selected.has(cell.cellId)} dragIds={selected.has(cell.cellId) && orderedSelection.length > 1 ? orderedSelection : [cell.cellId]}
       editable={scope.editableCellIds.includes(cell.cellId)} context={scope.contextCellIds.includes(cell.cellId)} trusted={trusted} disabled={disabled} sourceActionsDisabled={sourceActionsDisabled} autoSave={autoSave}
       cellRef={(node) => { if (node) refs.current.set(cell.cellId, node); else refs.current.delete(cell.cellId); }}
-      change={turn?.changes.find((change) => change.cellId === cell.cellId)} revertable={turn?.writeScope !== "trusted"} onFocus={() => setFocused(cell.cellId)}
+      change={turn?.changes.find((change) => change.cellId === cell.cellId)}
+      operations={(turn?.operations ?? []).filter((item) => item.cellId === cell.cellId)}
+      retyped={retypeOf(turn, cell.cellId)}
+      // T1: on a Trusted turn a cell is individually revertible exactly when it
+      // carries ledger operations (edit on a surviving same-type cell, or an
+      // add). Cells involved in delete/move/retype have none and stay
+      // whole-turn-undo only, with the explanatory note instead of controls.
+      revertable={turn?.writeScope !== "trusted" || (turn?.operations ?? []).some((item) => item.cellId === cell.cellId)}
+      onFocus={() => setFocused(cell.cellId)}
       onSelect={(event) => selectCell(cell.cellId, event)} onContextMenu={(event) => openMenu(cell.cellId, event)}
       onDirtyChange={(dirty) => onDirtyChange(cell.cellId, dirty)}
       onSave={(source) => onSave(cell.cellId, source)} onRun={() => onRun(cell.cellId)}
       onAddEditable={() => onScope(cell.cellId, true)} onAddContext={() => onScope(cell.cellId, false)}
       onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} onAddErrorToChat={(errorText) => onAddErrorToChat?.(cell.cellId, errorText)}
-      onRevert={() => turn && onRevert(turn.turnId, cell.cellId)} />)}
+      onRevert={() => turn && onRevert(turn.turnId, cell.cellId)}
+      onKeep={onKeepCell && turn ? () => onKeepCell(turn.turnId, cell.cellId) : undefined}
+      onKeepOperation={onKeepOperation && turn ? (operationId) => onKeepOperation(turn.turnId, operationId) : undefined}
+      onUndoOperation={onUndoOperation && turn ? (operationId) => onUndoOperation(turn.turnId, operationId) : undefined} />)}
     {menu && <div className="context-menu-backdrop" onClick={() => setMenu(null)} onContextMenu={(event) => { event.preventDefault(); setMenu(null); }}>
       <div className="cell-context-menu" style={{ left: menu.x, top: menu.y }} role="menu" aria-label="Cell scope actions" onClick={(event) => event.stopPropagation()}>
         <p className="context-menu-heading">{selected.size} cell{selected.size === 1 ? "" : "s"} selected</p>
