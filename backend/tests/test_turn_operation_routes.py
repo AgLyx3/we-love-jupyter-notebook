@@ -117,6 +117,10 @@ class TestSummaryBounds:
         summary = serialize_turn_summary(turn)
         assert len(summary["operations"]) == 256
         assert len(json.dumps(summary).encode()) <= MAX_TURN_SUMMARY_BYTES
+        # The client refetches full detail only on this flag. Truncating the
+        # ledger without it strands the cells past the cut: their diff stays on
+        # screen with no working controls, and the review counter under-reports.
+        assert summary["historyTruncated"] is True
 
 
 class TestAcceptContract:

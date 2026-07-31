@@ -151,6 +151,12 @@ def serialize_turn_summary(
         }
     result["historyTruncated"] = (
         change_count > len(result["changes"])
+        # Dropping ledger entries silently is worse than dropping source text:
+        # the client refetches full detail only when this flag is set, so
+        # without it the cells past the cut keep their diff on screen with no
+        # working controls and the review counter under-reports.
+        or len(turn.operations) > len(result["operations"])
+        or len(turn.structural_ops) > len(result["structuralOps"])
         or len(turn.editable_cell_ids) > len(result["editableCellIds"])
         or len(turn.context_cell_ids) > len(result["contextCellIds"])
         or result["prompt"] != turn.prompt

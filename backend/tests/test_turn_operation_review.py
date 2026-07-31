@@ -11,9 +11,12 @@ from dataclasses import replace
 
 import pytest
 
-from backend.app.agent_turns.operations import ACCEPTED, PENDING, REJECTED
+from backend.app.agent_turns.operations import (
+    ACCEPTED, PENDING, REJECTED, SourceHunk, TurnOperation,
+)
 from backend.app.agent_turns.service import (
-    AgentTurnService, MAX_PENDING_REVIEW_TURNS, OperationConflict,
+    AgentTurn, AgentTurnService, MAX_PENDING_REVIEW_TURNS,
+    MAX_TURN_HISTORY_BYTES, OperationConflict,
     OperationNotFound, RevertConflict, UndoConflict,
 )
 from backend.app.agent_workspace.adapters import FakeAgentAdapter, FakeAttempt
@@ -909,3 +912,71 @@ class TestBatchedAndFailClosed:
         # Restoring a checkpoint deliberately ends the lineage.
         assert not AgentTurnService._owned_by_turn("undo:t", "t")
         assert not AgentTurnService._owned_by_turn("manual", "t")
+
+
+class TestStaleSnapshotSafety:
+    """A snapshot older than the turn's own commit must not end its undo.
+
+    is_undo_eligible is destructive and callers share one snapshot across a
+    whole status response for performance. If a turn applies inside that
+    window, the shared snapshot cannot show who authored the newer revision —
+    its last_mutation_owner predates the turn entirely — so treating that as a
+    broken lineage permanently destroys a checkpoint that is still valid.
+    """
+
+    def test_a_snapshot_taken_before_the_turn_applied_does_not_invalidate(
+        self, notebook_payload,
+    ):
+        documents, turns, snapshot, turn = two_operation_turn(notebook_payload)
+        # Re-create the window: this snapshot predates the turn's own commit.
+        stale = snapshot
+        assert stale.revision < turn.applied_revision
+
+        assert turns.is_undo_eligible(turns.get(turn.turn_id), stale)
+        assert turns.get(turn.turn_id).checkpoint is not None
+
+        # And undo still works afterwards.
+        restored = turns.undo(
+            turn.turn_id, session_id=snapshot.session_id,
+            expected_revision=turn.applied_revision,
+        )
+        assert source_of(restored) == THREE_LINE
+
+    def test_a_newer_foreign_mutation_still_ends_undo(self, notebook_payload):
+        """The optimism above must not blanket-forgive a real lineage break."""
+        documents, turns, snapshot, turn = two_operation_turn(notebook_payload)
+        documents.update_cell_source(
+            cell_id="intro", source="# manual\n",
+            expected_revision=turn.applied_revision,
+            expected_session_id=snapshot.session_id, owner="manual",
+        )
+        fresh = documents.get_snapshot()
+        assert not turns.is_undo_eligible(turns.get(turn.turn_id), fresh)
+        assert turns.get(turn.turn_id).checkpoint is None
+
+
+class TestPendingReviewBudget:
+    def test_the_checkpoint_turn_is_not_charged_to_the_budget_twice(self):
+        """The newest unreviewed turn is usually also the checkpoint-protected
+        one; counting it twice halved the ceiling, so a turn just over half the
+        budget was force-settled the moment it completed."""
+        big = "x" * 600_000
+
+        class Change:
+            def __init__(self) -> None:
+                self.cell_id, self.previous_source, self.next_source = "c", big, big
+
+        item = AgentTurn(
+            turn_id="T1", session_id="s", base_revision=1, prompt="p",
+            state="completed", applied_revision=2, changes=(Change(),),
+            operations=(TurnOperation("T1:c:0", "c", 0, SourceHunk(0, 0, 1, 0, 1)),),
+        )
+        assert AgentTurnService._history_size(item) <= MAX_TURN_HISTORY_BYTES
+
+        service = AgentTurnService.__new__(AgentTurnService)
+        service._turns = {"T1": item}
+        service._latest_applied_turn_id = "T1"
+
+        keep = AgentTurnService._pending_review_turn_ids_locked(service, [item])
+        assert keep == {"T1"}
+        assert item.operations[0].state == PENDING

@@ -279,6 +279,40 @@ describe("per-operation review", () => {
     expect(screen.queryByLabelText("Revert agent change to code cell 1")).not.toBeInTheDocument();
   });
 
+  it("clears the cell header immediately after keeping every change", async () => {
+    // The accept response still carries every change the turn made. Committing
+    // it verbatim left a fully-reviewed cell showing its header and — with no
+    // pending hunks left for the ledger overlay — the legacy whole-change diff.
+    const operations = [operation(0, "pending"), operation(1, "pending")];
+    mount(turnWith(operations), notebookFor(operations));
+    await userEvent.click(await screen.findByRole("button", { name: /Keep all/ }));
+    await waitFor(() => expect(screen.queryByText("Agent changed this cell")).not.toBeInTheDocument());
+  });
+
+  it("keeps the diff for a cell the ledger does not govern", async () => {
+    // A Trusted turn's retyped cells carry a change but no operations. Reading
+    // "no operations" as "fully reviewed" hid their diff and the note saying
+    // only whole-turn undo applies.
+    const governed = operation(0, "pending");
+    const turn: AgentTurn = {
+      ...turnWith([governed]),
+      writeScope: "trusted",
+      changes: [
+        { cellId: "code-1", previousSource: PREVIOUS, nextSource: NEXT },
+        { cellId: "code-2", previousSource: "old\n", nextSource: "new\n" },
+      ],
+    };
+    const twoCells = { ...notebookFor([governed]) };
+    twoCells.cells = [
+      twoCells.cells[0],
+      { ...twoCells.cells[0], cellId: "code-2", index: 1, source: "new\n" },
+    ];
+    mount(turn, twoCells);
+    // Both cells still under review: the governed one and the ungoverned one.
+    await waitFor(() => expect(screen.getAllByText(/Agent changed this cell/)).toHaveLength(2));
+    expect(screen.getByText(/Part of a whole-notebook edit/)).toBeInTheDocument();
+  });
+
   it("falls back to source comparison for turns served without a ledger", async () => {
     const legacy = turnWith([]);
     delete (legacy as { operations?: unknown }).operations;

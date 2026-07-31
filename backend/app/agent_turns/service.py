@@ -276,6 +276,16 @@ class AgentTurnService:
                 return False
             if stored.applied_revision == snapshot.revision:
                 return True
+            if snapshot.revision < stored.applied_revision:
+                # The caller's snapshot predates this turn's own commit, so it
+                # cannot show who authored anything since — its
+                # last_mutation_owner is from before the turn even applied.
+                # Invalidating on that evidence destroys a checkpoint that is
+                # almost certainly still valid, which is exactly the race the
+                # owner check below exists to prevent. Stay optimistic: undo
+                # itself is revision-guarded, so a false positive costs a 409
+                # while a false negative costs the checkpoint permanently.
+                return True
             # The document is ahead of the revision recorded on the turn. That is
             # safe only while this turn itself is the author: downstream
             # execution and per-operation rejection both commit before the turn's
@@ -1232,21 +1242,29 @@ class AgentTurnService:
         """
         keep: set[str] = set()
         budget = 0
+        # The checkpoint-protected turn is retained regardless, so its size is
+        # reserved up front. Track it as already counted: it is usually *also*
+        # the newest unreviewed turn, and charging it twice halved the effective
+        # ceiling — a turn just over half the budget was force-settled the
+        # moment it completed and could never be reviewed per operation.
+        counted: set[str] = set()
         latest = self._turns.get(self._latest_applied_turn_id or "")
         if latest is not None:
             budget += self._history_size(latest)
+            counted.add(latest.turn_id)
         for item in terminal:
             if not any(
                 operation.state == PENDING for operation in item.operations
             ):
                 continue
-            size = self._history_size(item)
+            size = 0 if item.turn_id in counted else self._history_size(item)
             if (
                 len(keep) < MAX_PENDING_REVIEW_TURNS
                 and budget + size <= MAX_TURN_HISTORY_BYTES
             ):
                 keep.add(item.turn_id)
                 budget += size
+                counted.add(item.turn_id)
                 continue
             self._force_settle_locked(item)
         return keep

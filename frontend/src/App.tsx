@@ -288,8 +288,13 @@ export default function App() {
   // advances the revision — it only settles the ledger.
   const acceptOperations = (notebook: NotebookSnapshot, turnId: string, operationIds?: string[]) =>
     void mutate(() => api.acceptOperations(notebook, turnId, operationIds), { refreshAfter: false }, (updated) => {
-      setHistory((items) => updateTurnRecord(items, turnId, () => updated));
-      setTurn((item) => item?.turnId === turnId ? updated : item);
+      // Reconcile before committing. The raw response still carries every
+      // change the turn made, so storing it verbatim leaves a fully-reviewed
+      // cell showing its header and — because no pending hunks remain for the
+      // ledger overlay — falling back to the legacy whole-change diff.
+      const settled = reconcileTurnChanges(updated, snapshotRef.current);
+      setHistory((items) => updateTurnRecord(items, turnId, () => settled));
+      setTurn((item) => item?.turnId === turnId ? settled : item);
     });
   const rejectOperations = (notebook: NotebookSnapshot, turnId: string, operationId?: string) =>
     void mutate(() => api.rejectOperations(notebook, turnId, operationId), {
@@ -522,8 +527,18 @@ function reconcileTurnChanges(turn: AgentTurn, notebook: NotebookSnapshot | null
   if (!operations?.length) {
     return { ...turn, changes: turn.changes.filter((change) => notebook.cells.find((cell) => cell.cellId === change.cellId)?.source === change.nextSource) };
   }
+  const governed = new Set(operations.map((item) => item.cellId));
   const unsettled = new Set(operations.filter((item) => item.state !== "accepted" && item.state !== "rejected").map((item) => item.cellId));
-  return { ...turn, changes: turn.changes.filter((change) => unsettled.has(change.cellId) && notebook.cells.some((cell) => cell.cellId === change.cellId)) };
+  return {
+    ...turn,
+    changes: turn.changes.filter((change) =>
+      // A cell the ledger does not govern keeps its change: on a Trusted turn,
+      // cells caught up in a retype carry a diff for review but no operations,
+      // and treating "no operations" as "fully reviewed" hid both their diff
+      // and the note explaining that only whole-turn undo applies.
+      (governed.has(change.cellId) ? unsettled.has(change.cellId) : true)
+      && notebook.cells.some((cell) => cell.cellId === change.cellId)),
+  };
 }
 
 export function pendingOperations(turn: AgentTurn | null | undefined, cellId?: string): AgentOperation[] {
