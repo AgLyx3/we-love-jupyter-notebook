@@ -11,7 +11,8 @@ from typing import Any, Sequence
 from uuid import uuid4
 
 from ..agent_workspace.models import (
-    AgentAdapter, AgentCancelled, WorkspaceBoundaryError, WorkspaceCleanupError,
+    AgentAdapter, AgentCancelled, MemoryEntry, MemoryOperation,
+    WorkspaceBoundaryError, WorkspaceCleanupError,
 )
 from ..agent_workspace.workspace_auditor import WorkspaceAuditor
 from ..agent_workspace.workspace_builder import AgentWorkspaceBuilder
@@ -51,6 +52,12 @@ MAX_PENDING_REVIEW_TURNS = 10
 # so undoing part of a turn does not end its whole-turn undo. `undo` is
 # deliberately absent: restoring the checkpoint ends the lineage by definition.
 LINEAGE_ACTIONS = ("reject",)
+# How many past turns the agent is shown at the start of a turn. Deliberately
+# far tighter than MAX_TERMINAL_TURNS, so count-based pruning can never evict a
+# turn the feed still wants. Equal to MAX_PENDING_REVIEW_TURNS by coincidence,
+# not by coupling: that one protects unreviewed turns from eviction, which can
+# only ever help the feed.
+THREAD_MEMORY_TURNS = 10
 # UI "mode" (edit/plan) maps to a Claude CLI permission mode.
 PERMISSION_MODE_BY_MODE = {"edit": "acceptEdits", "plan": "plan"}
 
@@ -182,6 +189,10 @@ class AgentTurnService:
                     prompt=prompt, lease=lease,
                 )
                 snapshot = self.documents.get_snapshot()
+                # Frozen alongside the scope and the snapshot: all three boundary
+                # retries must see identical memory, or a retry becomes a
+                # different turn.
+                memory = self._thread_memory_or_empty(session_id)
                 turn = AgentTurn(
                     turn_id=turn_id, session_id=session_id,
                     base_revision=expected_revision, prompt=prompt,
@@ -200,13 +211,14 @@ class AgentTurnService:
                 raise
             if background:
                 worker = Thread(
-                    target=self._run_guarded, args=(turn, scope, lease, snapshot),
+                    target=self._run_guarded,
+                    args=(turn, scope, lease, snapshot, memory),
                     name=f"agent-turn-{turn_id[:8]}", daemon=True,
                 )
                 self._workers[worker] = turn_id
                 worker.start()
         if not background:
-            self._run_guarded(turn, scope, lease, snapshot)
+            self._run_guarded(turn, scope, lease, snapshot, memory)
         return self.get(turn_id)
 
     def get(self, turn_id: str) -> AgentTurn:
@@ -232,6 +244,59 @@ class AgentTurnService:
             result.checkpoint = copy.deepcopy(result.checkpoint)
             result.error = copy.deepcopy(result.error)
             return result
+
+    def thread_memory(
+        self, session_id: str, *, limit: int = THREAD_MEMORY_TURNS,
+    ) -> tuple[MemoryEntry, ...]:
+        """Past turns of this session, oldest first, as the agent will see them.
+
+        Only settled turns qualify: an in-flight turn has no outcome to report.
+        Status is derived here, at read time, and never cached on the entry.
+        """
+        with self._lock:
+            settled = sorted(
+                (
+                    turn for turn in self._turns.values()
+                    if turn.session_id == session_id and turn.state in TERMINAL_STATES
+                ),
+                key=lambda item: item.completed_at or item.created_at,
+            )[-limit:]
+            return tuple(self._memory_entry(turn) for turn in settled)
+
+    @staticmethod
+    def _memory_entry(turn: AgentTurn) -> MemoryEntry:
+        if turn.state == "cancelled":
+            turn_status = "CANCELLED"
+        elif turn.state in ("failed", "validation_incomplete"):
+            turn_status = f"FAILED ({(turn.error or {}).get('code') or turn.state})"
+        else:
+            turn_status = ""
+        # A turn that did not settle cleanly gets no per-operation status: _run
+        # can apply changes and *then* cancel, so whether they survived is not
+        # recorded anywhere and must not be guessed.
+        status = "" if turn_status else ("UNDONE" if turn.undone_at else "KEPT")
+        operations = tuple(
+            MemoryOperation(
+                cell_id=change.cell_id, status=status,
+                previous_source=change.previous_source, next_source=change.next_source,
+            )
+            for change in turn.changes
+        )
+        return MemoryEntry(
+            prompt=turn.prompt, mode=turn.mode, operations=operations,
+            reply="" if operations else turn.final_output, turn_status=turn_status,
+        )
+
+    def _thread_memory_or_empty(self, session_id: str) -> tuple[MemoryEntry, ...]:
+        """Memory is advisory: a failure here must never fail the turn."""
+        try:
+            return self.thread_memory(session_id)
+        except Exception:
+            logger.exception(
+                "Failed to build thread memory for session %s; running without it",
+                session_id,
+            )
+            return ()
 
     def history_for_session(
         self, session_id: str, *, limit: int = 50,
@@ -378,11 +443,14 @@ class AgentTurnService:
                     self.executions.cancel_parent(turn_id)
         return self.get(turn_id)
 
-    def _run_guarded(self, turn: AgentTurn, scope: FrozenTurnScope, lease, frozen_snapshot) -> None:
+    def _run_guarded(
+        self, turn: AgentTurn, scope: FrozenTurnScope, lease, frozen_snapshot,
+        memory: tuple[MemoryEntry, ...] = (),
+    ) -> None:
         outcome = "failed"
         terminal_error: Exception | None = None
         try:
-            outcome, terminal_error = self._run(turn, scope, lease, frozen_snapshot)
+            outcome, terminal_error = self._run(turn, scope, lease, frozen_snapshot, memory)
         except AgentCancelled as error:
             outcome = "cancelled"
             terminal_error = error
@@ -429,13 +497,16 @@ class AgentTurnService:
                 self._finish_locked(turn, outcome, terminal_error)
                 self._workers.pop(current_thread(), None)
 
-    def _run(self, turn: AgentTurn, scope: FrozenTurnScope, lease, frozen_snapshot):
+    def _run(
+        self, turn: AgentTurn, scope: FrozenTurnScope, lease, frozen_snapshot,
+        memory: tuple[MemoryEntry, ...] = (),
+    ):
         # A Plan turn writes nothing regardless of scope, so it must never reach the
         # structural apply path. Only dispatch to the Trusted path in Edit mode; a
         # Trusted+Plan turn (possible via the sticky writeScope) falls through to the
         # Blocking path here, which runs the adapter with permission_mode="plan".
         if turn.write_scope == "trusted" and turn.mode != "plan":
-            return self._run_trusted(turn, scope, lease, frozen_snapshot)
+            return self._run_trusted(turn, scope, lease, frozen_snapshot, memory)
         correction = None
         last_violation: WorkspaceBoundaryError | None = None
         for attempt_number in range(1, 4):
@@ -443,7 +514,7 @@ class AgentTurnService:
                 raise AgentCancelled()
             self._set_state(turn, "agent_running")
             workspace = self.builder.build(
-                frozen_snapshot, scope, correction=correction
+                frozen_snapshot, scope, correction=correction, memory=memory
             )
             attempt_error: BaseException | None = None
             cleanup_error: WorkspaceCleanupError | None = None
@@ -558,7 +629,10 @@ class AgentTurnService:
                 return "failed", ExecutionTimedOut(recovered=recovered)
         return "completed", None
 
-    def _run_trusted(self, turn: AgentTurn, scope: FrozenTurnScope, lease, frozen_snapshot):
+    def _run_trusted(
+        self, turn: AgentTurn, scope: FrozenTurnScope, lease, frozen_snapshot,
+        memory: tuple[MemoryEntry, ...] = (),
+    ):
         """Trusted turn: whole-notebook structural editing.
 
         Bounded structural-format retry (R3), no scope retry; applies structure
@@ -573,7 +647,8 @@ class AgentTurnService:
                 raise AgentCancelled()
             self._set_state(turn, "agent_running")
             workspace = self.builder.build(
-                frozen_snapshot, scope, write_scope="trusted", correction=correction
+                frozen_snapshot, scope, write_scope="trusted",
+                correction=correction, memory=memory,
             )
             attempt_error: BaseException | None = None
             cleanup_error: WorkspaceCleanupError | None = None

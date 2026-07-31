@@ -7,7 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.app.agent_workspace.models import WorkspaceBoundaryError, WorkspaceCleanupError
+from backend.app.agent_workspace.models import (
+    MemoryEntry, MemoryOperation, WorkspaceBoundaryError, WorkspaceCleanupError,
+)
 from backend.app.agent_workspace.adapters import (
     ClaudeAgentAdapter,
     DevelopmentFakeAgentAdapter,
@@ -544,6 +546,191 @@ def test_claude_adapter_grants_write_tools_for_trusted_workspace(
         assert set(tools) == {"Read", "Edit", "Write"}
     finally:
         builder.destroy(workspace)
+
+
+def _memory_instructions(notebook_payload, memory, *, cell_ids=("intro", "editable")):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload(cell_ids=cell_ids))
+    scope = FrozenTurnScope.create(
+        turn_id="turn", session_id=snapshot.session_id,
+        notebook_revision=snapshot.revision,
+        selection=ScopeSelection((cell_ids[1],), ()), prompt="update value",
+    )
+    builder = AgentWorkspaceBuilder()
+    workspace = builder.build(snapshot, scope, memory=tuple(memory))
+    try:
+        return (workspace.root / "INSTRUCTIONS.md").read_text()
+    finally:
+        builder.destroy(workspace)
+
+
+def _entry(prompt, *, status="KEPT", previous="value = 1\n", following="value = 2\n",
+           cell_id="editable", **kwargs):
+    return MemoryEntry(
+        prompt=prompt, mode=kwargs.pop("mode", "edit"),
+        operations=(
+            MemoryOperation(
+                cell_id=cell_id, status=status,
+                previous_source=previous, next_source=following,
+            ),
+        ),
+        **kwargs,
+    )
+
+
+def _trusted_memory_instructions(notebook_payload, memory):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scope = FrozenTurnScope.create(
+        turn_id="turn", session_id=snapshot.session_id,
+        notebook_revision=snapshot.revision,
+        selection=ScopeSelection((), ("intro",)), prompt="restructure",
+    )
+    builder = AgentWorkspaceBuilder()
+    workspace = builder.build(
+        snapshot, scope, write_scope="trusted", memory=tuple(memory)
+    )
+    try:
+        return (workspace.root / "INSTRUCTIONS.md").read_text()
+    finally:
+        builder.destroy(workspace)
+
+
+def test_trusted_turn_receives_the_same_thread_memory(notebook_payload):
+    # build() has two instruction writers. Memory reaching only the Blocking one
+    # fails silently — a Trusted turn would just quietly forget the thread.
+    instructions = _trusted_memory_instructions(
+        notebook_payload,
+        [_entry("vectorize this", status="UNDONE",
+                previous="for row in rows:\n", following="total = sum(rows)\n")],
+    )
+    assert instructions.splitlines()[0] == "restructure"
+    assert "Conversation so far" in instructions
+    assert "STATUS: UNDONE by the user" in instructions
+    assert "- for row in rows:" in instructions
+    # Memory must not displace the Trusted turn's own structural rules.
+    assert "structure.json is the ordered list of cells" in instructions
+    assert instructions.index("Conversation so far") < instructions.index("Trusted turn:")
+
+
+def test_trusted_turn_without_memory_leaves_instructions_untouched(notebook_payload):
+    instructions = _trusted_memory_instructions(notebook_payload, ())
+    assert instructions.splitlines()[0] == "restructure"
+    assert "Conversation so far" not in instructions
+    assert instructions.splitlines()[2] == "Trusted turn: the WHOLE notebook is editable."
+
+
+def test_turn_without_memory_leaves_instructions_untouched(notebook_payload):
+    instructions = _memory_instructions(notebook_payload, ())
+    assert instructions.splitlines()[0] == "update value"
+    assert "Conversation so far" not in instructions
+
+
+def test_memory_renders_below_the_prompt_line(notebook_payload):
+    instructions = _memory_instructions(notebook_payload, [_entry("earlier work")])
+    # DevelopmentFakeAgentAdapter reads line 1 as the prompt; memory must not
+    # displace it.
+    assert instructions.splitlines()[0] == "update value"
+    assert "Conversation so far" in instructions
+    assert instructions.index("update value") < instructions.index("Conversation so far")
+
+
+def test_undone_operation_carries_its_diff_and_forbids_re_proposing(notebook_payload):
+    instructions = _memory_instructions(
+        notebook_payload,
+        [_entry("vectorize this", status="UNDONE",
+                previous="for row in rows:\n", following="total = sum(rows)\n")],
+    )
+    assert "STATUS: UNDONE by the user" in instructions
+    assert "Do not re-propose it." in instructions
+    assert "- for row in rows:" in instructions
+    assert "+ total = sum(rows)" in instructions
+
+
+def test_kept_operation_points_at_the_notebook_instead_of_repeating_itself(notebook_payload):
+    instructions = _memory_instructions(notebook_payload, [_entry("add a docstring")])
+    assert "STATUS: KEPT" in instructions
+    assert "read it there" in instructions
+    assert "+ value = 2" not in instructions
+
+
+def test_edits_are_described_by_what_the_diff_changed(notebook_payload):
+    wide = "".join(f"line {index}\n" for index in range(20))
+    instructions = _memory_instructions(
+        notebook_payload,
+        [
+            _entry("tweak", status="UNDONE", previous=wide,
+                   following=wide.replace("line 4\n", "line four\n")),
+            _entry("extend", status="UNDONE", previous=wide,
+                   following=wide + "line 20\n"),
+        ],
+    )
+    # A one-line edit inside a 20-line cell reads as one line changed, not as
+    # "replaced 20 lines with 20 lines".
+    assert "changed 1 line." in instructions
+    assert "added 1 line." in instructions
+
+
+def test_cancelled_turn_is_never_reported_as_kept(notebook_payload):
+    instructions = _memory_instructions(
+        notebook_payload, [_entry("stop", status="", turn_status="CANCELLED")],
+    )
+    assert "STATUS: CANCELLED" in instructions
+    assert "not" in instructions and "read notebook.ipynb for current source" in instructions
+    assert "STATUS: KEPT" not in instructions
+
+
+def test_attachment_payloads_are_not_replayed_into_later_turns(notebook_payload):
+    composed = "\n".join([
+        "Fix the error shown below.", "", "Referenced selections:",
+        "Cell 2 (error output):", "```",
+        "Traceback (most recent call last): NameError: SENTINEL_TRACEBACK", "```",
+    ])
+    instructions = _memory_instructions(notebook_payload, [_entry(composed)])
+    assert 'You asked: "Fix the error shown below." (+1 referenced selection)' in instructions
+    assert "SENTINEL_TRACEBACK" not in instructions
+
+
+def test_operation_on_a_deleted_cell_keeps_its_record(notebook_payload):
+    instructions = _memory_instructions(
+        notebook_payload,
+        [_entry("tidy up", status="UNDONE", cell_id="gone-cell")],
+    )
+    assert "a since-deleted cell (id gone-cell)" in instructions
+
+
+def test_entries_are_labelled_by_distance_from_the_current_turn(notebook_payload):
+    instructions = _memory_instructions(
+        notebook_payload, [_entry("oldest"), _entry("middle"), _entry("newest")],
+    )
+    assert "--- 3 turns ago ---" in instructions
+    assert "--- 1 turn ago ---" in instructions
+    assert instructions.index("oldest") < instructions.index("newest")
+    assert instructions.index("--- 3 turns ago ---") < instructions.index("--- 1 turn ago ---")
+
+
+def test_long_diffs_are_truncated_with_a_marker(notebook_payload):
+    instructions = _memory_instructions(
+        notebook_payload,
+        [_entry("rewrite", status="UNDONE",
+                previous="".join(f"line {index}\n" for index in range(200)),
+                following="")],
+    )
+    assert "more diff lines omitted" in instructions
+
+
+def test_oversized_thread_drops_the_oldest_turns_and_says_so(notebook_payload):
+    bulky = "".join(f"{'x' * 200}{index}\n" for index in range(80))
+    instructions = _memory_instructions(
+        notebook_payload,
+        [
+            _entry(f"turn {index}", status="UNDONE", previous=bulky, following="")
+            for index in range(5)
+        ],
+    )
+    assert "(earlier turns omitted)" in instructions
+    assert "turn 4" in instructions
+    assert "turn 0" not in instructions
 
 
 def test_read_only_turn_uses_read_only_tools_and_writes_no_editable_files(notebook_payload, monkeypatch):

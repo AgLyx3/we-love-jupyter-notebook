@@ -113,6 +113,33 @@ class ReturnedStructureEntry:
     content: str
 
 
+@dataclass(frozen=True)
+class MemoryOperation:
+    """One source change a past turn made, with its outcome as known now."""
+
+    cell_id: str
+    status: str  # "KEPT" | "UNDONE"
+    previous_source: str
+    next_source: str
+
+
+@dataclass(frozen=True)
+class MemoryEntry:
+    """One past turn, as the thread memory feed will render it.
+
+    `turn_status` is set only when the turn as a whole ended without a settled
+    per-operation outcome (cancelled, failed). It is never inferred: a cancelled
+    turn can have applied its changes before cancelling, so the feed states what
+    happened and points at the notebook rather than guessing.
+    """
+
+    prompt: str
+    mode: str
+    operations: tuple[MemoryOperation, ...] = ()
+    reply: str = ""
+    turn_status: str = ""
+
+
 @dataclass
 class AgentWorkspace:
     root: Path

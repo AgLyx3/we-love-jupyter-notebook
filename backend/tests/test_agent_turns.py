@@ -404,6 +404,137 @@ def test_turn_rejects_stale_revision_and_releases_lease(notebook_payload):
     assert documents.coordinator.active_lease is None
 
 
+class _RecordingFakeAdapter(FakeAgentAdapter):
+    """FakeAgentAdapter that keeps the INSTRUCTIONS.md of every attempt."""
+
+    def __init__(self, attempts=None):
+        super().__init__(attempts)
+        self.instructions = []
+
+    def run(self, workspace, **kwargs):
+        self.instructions.append((workspace.root / "INSTRUCTIONS.md").read_text())
+        return super().run(workspace, **kwargs)
+
+
+def _memory_section(instructions):
+    _, _, tail = instructions.partition("Conversation so far")
+    return tail.partition("Notebook context:")[0]
+
+
+def test_thread_memory_lists_settled_turns_oldest_first(notebook_payload):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=FakeAgentAdapter(), timeout=1,
+    )
+    for index in range(3):
+        scopes.add("editable", editable=True)
+        turns.start(
+            prompt=f"turn {index}", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision, background=False,
+        )
+    memory = turns.thread_memory(snapshot.session_id)
+    assert [entry.prompt for entry in memory] == ["turn 0", "turn 1", "turn 2"]
+    assert all(entry.operations == () for entry in memory)
+
+
+def test_thread_memory_excludes_the_turn_being_started(notebook_payload):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    recorder = _RecordingFakeAdapter()
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=recorder, timeout=1,
+    )
+    scopes.add("editable", editable=True)
+    turns.start(
+        prompt="the only turn", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    assert "Conversation so far" not in recorder.instructions[0]
+
+
+def test_boundary_retries_all_receive_identical_memory(notebook_payload):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    recorder = _RecordingFakeAdapter([
+        FakeAttempt(edits={"editable/cell_editable.py": "value = 2\n"}),
+        FakeAttempt(creates={"outside.txt": "bad"}),
+        FakeAttempt(creates={"outside.txt": "bad"}),
+        FakeAttempt(edits={"editable/cell_editable.py": "value = 3\n"}),
+    ])
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=recorder, timeout=2,
+    )
+    scopes.add("editable", editable=True)
+    turns.start(
+        prompt="first", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    current = documents.get_snapshot()
+    scopes.add("editable", editable=True)
+    retried = turns.start(
+        prompt="second", session_id=current.session_id,
+        expected_revision=current.revision, background=False,
+    )
+    assert retried.attempts == 3
+    sections = [_memory_section(item) for item in recorder.instructions[1:]]
+    # A retry must not become a different turn: memory is frozen at start.
+    assert len(sections) == 3
+    assert len(set(sections)) == 1
+    assert "first" in sections[0]
+
+
+def test_thread_memory_failure_does_not_fail_the_turn(notebook_payload, monkeypatch):
+    documents, _scopes, turns, snapshot = _services(notebook_payload, [FakeAttempt()])
+
+    def explode(self, session_id, **kwargs):
+        raise RuntimeError("memory unavailable")
+
+    monkeypatch.setattr(AgentTurnService, "thread_memory", explode)
+    turn = turns.start(
+        prompt="still works", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    assert turn.state == "completed"
+
+
+def test_an_undone_change_reaches_the_next_turn_with_its_diff(notebook_payload):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    recorder = _RecordingFakeAdapter([
+        FakeAttempt(edits={"editable/cell_editable.py": "values = [9]\n"}),
+        FakeAttempt(),
+    ])
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=recorder, timeout=2,
+    )
+    scopes.add("editable", editable=True)
+    first = turns.start(
+        prompt="use nines", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    applied = turns.get(first.turn_id)
+    turns.undo(
+        first.turn_id, session_id=applied.session_id,
+        expected_revision=applied.applied_revision,
+    )
+    current = documents.get_snapshot()
+    scopes.add("editable", editable=True)
+    turns.start(
+        prompt="try again", session_id=current.session_id,
+        expected_revision=current.revision, background=False,
+    )
+    second = recorder.instructions[-1]
+    assert 'You asked: "use nines"' in second
+    assert "STATUS: UNDONE by the user" in second
+    assert "+ values = [9]" in second
+    assert second.splitlines()[0] == "try again"
+
+
 def test_boundary_violation_retries_in_fresh_workspace(notebook_payload):
     attempts = [
         FakeAttempt(creates={"outside.txt": "bad"}),
