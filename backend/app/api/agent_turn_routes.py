@@ -36,8 +36,12 @@ class AcceptRequest(BaseModel):
     session_id: str = Field(alias="sessionId")
     # Optional batch: keeping a cell settles all of its hunks at once. Omitted
     # for accept-all (which means "every pending operation") and for the
-    # single-operation route, which takes its id from the path.
-    operation_ids: list[str] | None = Field(default=None, alias="operationIds")
+    # single-operation route, which takes its id from the path. Bounded because
+    # it is client-supplied and iterated under the service lock; a real cell has
+    # orders of magnitude fewer hunks than this.
+    operation_ids: list[str] | None = Field(
+        default=None, alias="operationIds", max_length=512,
+    )
 
 
 def serialize_operations(
@@ -127,6 +131,10 @@ def serialize_turn_summary(
     result["editableCellIds"] = [_truncate(value, 256) for value in turn.editable_cell_ids[:128]]
     result["contextCellIds"] = [_truncate(value, 256) for value in turn.context_cell_ids[:128]]
     result["structuralOps"] = result["structuralOps"][:256]
+    # Bounded like its siblings. Without this a turn with thousands of hunks
+    # serializes its whole ledger twice before the byte cap below catches it;
+    # the final fallback still clears the list outright.
+    result["operations"] = result["operations"][:256]
     result["changes"] = [
         {
             "cellId": _truncate(item.cell_id, 256),

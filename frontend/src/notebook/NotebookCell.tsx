@@ -161,12 +161,11 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
   const undoRef = useRef(onUndoOperation);
   keepRef.current = onKeepOperation;
   undoRef.current = onUndoOperation;
-  const reviewable_ = Boolean(change) && !stale && Boolean(onKeepOperation) && Boolean(onUndoOperation);
+  const hunkReviewEnabled = Boolean(change) && !stale && Boolean(onKeepOperation) && Boolean(onUndoOperation);
   const previousSource = change?.previousSource;
   const hunkControls = useMemo<HunkControls | undefined>(() => {
-    if (!reviewable_ || previousSource === undefined) return undefined;
-    const parsed = hunkSignature ? hunkOps : [];
-    const overlays = hunkOverlays(previousSource, parsed);
+    if (!hunkReviewEnabled || previousSource === undefined) return undefined;
+    const overlays = hunkOverlays(previousSource, hunkOps);
     if (!overlays.length) return undefined;
     return {
       overlays,
@@ -176,7 +175,7 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
     };
     // hunkSignature stands in for hunkOps; see the note above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reviewable_, previousSource, hunkSignature, dependentDisabled]);
+  }, [hunkReviewEnabled, previousSource, hunkSignature, dependentDisabled]);
   // Outputs are suspect only until the cell is executed again. Deriving this
   // from the ledger alone would pin the warning forever, since the operation
   // stays rejected no matter how many times the user re-runs. Remember the

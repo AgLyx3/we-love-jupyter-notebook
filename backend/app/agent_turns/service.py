@@ -876,6 +876,11 @@ class AgentTurnService:
                     if item.kind not in (KIND_SOURCE_HUNK, KIND_STRUCTURAL_ADD)
                 }
                 if unhandled:
+                    # Deliberately not a NotebookDomainError: this is a
+                    # programmer error (a kind was added to the ledger without
+                    # teaching reject how to undo it), not something a client
+                    # did wrong. It should surface as a 500 and be fixed, not
+                    # be dressed up as a 4xx the caller can act on.
                     raise NotImplementedError(
                         f"reject_operations cannot undo operation kinds: "
                         f"{sorted(unhandled)}"
