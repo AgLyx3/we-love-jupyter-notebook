@@ -106,14 +106,35 @@ describe("per-operation review", () => {
     // one hunk made the whole cell's diff — including this pending one — vanish.
     const operations = [operation(0, "rejected"), operation(1, "pending")];
     mount(turnWith(operations), notebookFor(operations));
-    expect(await screen.findByLabelText("Revert agent change to code cell 1")).toBeInTheDocument();
+    expect(await screen.findByText("Agent changed this cell")).toBeInTheDocument();
   });
 
   it("clears the cell diff once every operation is settled", async () => {
     const operations = [operation(0, "accepted"), operation(1, "rejected")];
     mount(turnWith(operations), notebookFor(operations));
     await screen.findByLabelText("Source for code cell 1");
+    expect(screen.queryByText("Agent changed this cell")).not.toBeInTheDocument();
+  });
+
+  it("does not repeat Keep/Undo in the cell header when hunk controls are shown", async () => {
+    // Per-hunk widgets act on the same change, so a header pair beside them is
+    // duplication. The header keeps only the label.
+    const operations = [operation(0, "pending"), operation(1, "pending")];
+    mount(turnWith(operations), notebookFor(operations));
+    expect(await screen.findByText("Agent changed this cell")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Keep agent change to code cell 1")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Revert agent change to code cell 1")).not.toBeInTheDocument();
+  });
+
+  it("keeps header Keep/Undo for an added cell, which has no hunks to attach to", async () => {
+    const add: AgentOperation = {
+      operationId: "turn-1:code-1:0", cellId: "code-1", kind: "structural_add",
+      ordinal: 0, state: "pending", previousRange: null, nextRange: null,
+    };
+    mount(turnWith([add]), notebook);
+    expect(await screen.findByText("Agent added this cell")).toBeInTheDocument();
+    expect(screen.getByLabelText("Keep agent change to code cell 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("Revert agent change to code cell 1")).toBeInTheDocument();
   });
 
   it("sends accept-all without an expected revision", async () => {
@@ -213,9 +234,13 @@ describe("per-operation review", () => {
 
   it("keeps a whole cell's changes in one batched request", async () => {
     // Previously one request per hunk, which was N round trips and left the
-    // cell half-kept if one failed mid-loop.
-    const calls = mount(turnWith([operation(0, "pending"), operation(1, "pending")]));
-    await userEvent.click(await screen.findByLabelText("Keep agent change to code cell 1"));
+    // cell half-kept if one failed mid-loop. Uses a previewed Markdown cell:
+    // no editor is rendered, so the header pair is the review surface there.
+    const operations = [operation(0, "pending"), operation(1, "pending")];
+    const markdown = { ...notebookFor(operations) };
+    markdown.cells = [{ ...markdown.cells[0], cellType: "markdown" as const }];
+    const calls = mount(turnWith(operations), markdown);
+    await userEvent.click(await screen.findByLabelText("Keep agent change to markdown cell 1"));
     const accepts = await waitFor(() => {
       const found = calls.filter((item) => item.path.includes("/operations/"));
       expect(found).toHaveLength(1);

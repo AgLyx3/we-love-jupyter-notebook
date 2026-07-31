@@ -181,6 +181,11 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
   // from the ledger alone would pin the warning forever, since the operation
   // stays rejected no matter how many times the user re-runs. Remember the
   // execution count seen when the undo first appeared and clear once it moves.
+  // Whether the per-hunk Keep/Undo widgets are actually on screen for this
+  // cell: they live inside the editor, so a previewed Markdown cell has none
+  // even when the ledger has hunks.
+  const editorVisible = cell.cellType === "code" || cell.cellType === "raw" || editingMarkdown;
+  const hunksVisible = Boolean(hunkControls) && editorVisible;
   const undone = operations.some((item) => item.state === "rejected");
   const undoneAt = useRef<number | null | undefined>(undefined);
   if (!undone) undoneAt.current = undefined;
@@ -223,9 +228,17 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
           // bug; the change is still in the cell, it just can no longer be
           // separated from the edits made on top of it.
           ? <span className="cell-review-stale" role="note">This cell changed after the agent edited it — undo the whole turn or edit it by hand.</span>
+          // Header controls only when the in-editor hunk widgets cannot cover
+          // the review. With them visible, a header pair would act on exactly
+          // the same change and just duplicate the buttons a few lines below.
+          // Still needed for: a whole cell the agent added (no hunks to attach
+          // to), a Markdown cell being previewed (no editor rendered), and
+          // pre-ledger turns whose changes have no operations.
+          : hunksVisible
+          ? null
           : <>
-            {onKeep && <button className="cell-review-keep" disabled={dependentDisabled} title="Keep this agent change" aria-label={`Keep agent change to ${description}`} onClick={onKeep}><Check /> Keep</button>}
-            <button className="cell-review-undo" disabled={dependentDisabled} title="Undo this agent change" aria-label={`Revert agent change to ${description}`} onClick={onRevert}><RotateCcw /> Undo</button>
+            {onKeep && <button className="review-action keep" disabled={dependentDisabled} title={added ? "Keep this cell" : "Keep this agent change"} aria-label={`Keep agent change to ${description}`} onClick={onKeep}><Check /> Keep</button>}
+            <button className="review-action undo" disabled={dependentDisabled} title={added ? "Remove this added cell" : "Undo this agent change"} aria-label={`Revert agent change to ${description}`} onClick={onRevert}><RotateCcw /> Undo</button>
           </>}
       </div>}
       {outputsStale && cell.outputs.length > 0 && <p className="cell-stale-outputs" role="note">Outputs are from code you undid — re-run this cell.</p>}

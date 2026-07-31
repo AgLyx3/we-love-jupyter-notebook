@@ -50,18 +50,34 @@ class HunkWidget extends WidgetType {
     bar.className = "cm-hunk-actions";
     bar.setAttribute("role", "toolbar");
     bar.setAttribute("aria-label", "Review this change");
-    const make = (label: string, className: string, onClick: () => void) => {
+    // Same markup and classes as the cell-header pair (icon + label, shared
+    // .review-action styling), so a Keep here and a Keep there are visibly the
+    // same control acting at different scopes.
+    const make = (label: string, variant: string, icon: string, onClick: () => void) => {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = className;
-      button.textContent = label;
+      button.className = `review-action ${variant}`;
       button.disabled = this.disabled;
       button.setAttribute("aria-label", `${label} this change`);
+      const glyph = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      glyph.setAttribute("viewBox", "0 0 24 24");
+      glyph.setAttribute("fill", "none");
+      glyph.setAttribute("stroke", "currentColor");
+      glyph.setAttribute("stroke-width", "2");
+      glyph.setAttribute("stroke-linecap", "round");
+      glyph.setAttribute("stroke-linejoin", "round");
+      glyph.setAttribute("aria-hidden", "true");
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", icon);
+      glyph.appendChild(path);
+      button.appendChild(glyph);
+      button.appendChild(document.createTextNode(label));
       button.addEventListener("click", (event) => { event.preventDefault(); onClick(); });
       bar.appendChild(button);
     };
-    make("Keep", "cm-hunk-keep", () => this.onKeep(this.overlay.operationId));
-    make("Undo", "cm-hunk-undo", () => this.onUndo(this.overlay.operationId));
+    // lucide "check" and "rotate-ccw", matching the header icons.
+    make("Keep", "keep", "M20 6 9 17l-5-5", () => this.onKeep(this.overlay.operationId));
+    make("Undo", "undo", "M3 7v6h6M21 17a9 9 0 0 0-15-6.7L3 13", () => this.onUndo(this.overlay.operationId));
     wrap.appendChild(bar);
     return wrap;
   }
