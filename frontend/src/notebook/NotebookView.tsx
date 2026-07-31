@@ -3,6 +3,16 @@ import type { AgentTurn, NotebookSnapshot, TurnScope } from "../api/client";
 import NotebookCell from "./NotebookCell";
 import type { CellSelection } from "./selectionEdit";
 
+// A Trusted turn can change a cell's type. That is invisible in the diff — a
+// pure retype edits no source — while silently clearing outputs, so the cell
+// has to say so itself.
+function retypeOf(turn: AgentTurn | null, cellId: string): { from: string; to: string } | undefined {
+  const op = (turn?.structuralOps ?? []).find((item) => item.op === "retype" && item.cellId === cellId);
+  if (!op) return undefined;
+  const { from, to } = op.detail as { from?: unknown; to?: unknown };
+  return typeof from === "string" && typeof to === "string" ? { from, to } : undefined;
+}
+
 export default function NotebookView({ notebook, scope, turn, trusted = false, disabled, sourceActionsDisabled, autoSave, focusRequest, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert, onKeepCell, onKeepOperation, onUndoOperation, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
   notebook: NotebookSnapshot; scope: TurnScope; turn: AgentTurn | null; trusted?: boolean;
   disabled: boolean; sourceActionsDisabled: boolean; autoSave: boolean; focusRequest: { cellId: string; requestId: number } | null;
@@ -125,6 +135,7 @@ export default function NotebookView({ notebook, scope, turn, trusted = false, d
       cellRef={(node) => { if (node) refs.current.set(cell.cellId, node); else refs.current.delete(cell.cellId); }}
       change={turn?.changes.find((change) => change.cellId === cell.cellId)}
       operations={(turn?.operations ?? []).filter((item) => item.cellId === cell.cellId)}
+      retyped={retypeOf(turn, cell.cellId)}
       // T1: on a Trusted turn a cell is individually revertible exactly when it
       // carries ledger operations (edit on a surviving same-type cell, or an
       // add). Cells involved in delete/move/retype have none and stay

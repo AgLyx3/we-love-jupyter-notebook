@@ -319,6 +319,46 @@ describe("per-operation review", () => {
     expect(screen.getByText(/Part of a whole-notebook edit/)).toBeInTheDocument();
   });
 
+  it("announces a retype and the outputs it cleared", async () => {
+    // Moving a cell off `code` discards its outputs and execution count, and a
+    // retype is as often a slip while rewriting structure.json as it is
+    // deliberate — so the cell has to say so rather than let it be found later.
+    const turn: AgentTurn = {
+      ...turnWith([]),
+      writeScope: "trusted",
+      changes: [{ cellId: "code-1", previousSource: PREVIOUS, nextSource: NEXT }],
+      structuralOps: [{ op: "retype", cellId: "code-1", detail: { from: "code", to: "markdown" } }],
+    };
+    mount(turn, notebookFor([]));
+    expect(await screen.findByText(/changed this cell to markdown/)).toBeInTheDocument();
+    expect(screen.getByText(/outputs and execution count were cleared/)).toBeInTheDocument();
+  });
+
+  it("announces a pure retype, which changes no source at all", async () => {
+    // The case that was previously invisible: no source change means no diff
+    // and no ledger entry, so without this the cell rendered nothing.
+    const turn: AgentTurn = {
+      ...turnWith([]),
+      writeScope: "trusted",
+      changes: [],
+      structuralOps: [{ op: "retype", cellId: "code-1", detail: { from: "code", to: "raw" } }],
+    };
+    mount(turn, notebookFor([]));
+    expect(await screen.findByText(/changed this cell to raw/)).toBeInTheDocument();
+  });
+
+  it("does not claim outputs were cleared when the cell was not code", async () => {
+    const turn: AgentTurn = {
+      ...turnWith([]),
+      writeScope: "trusted",
+      changes: [],
+      structuralOps: [{ op: "retype", cellId: "code-1", detail: { from: "markdown", to: "code" } }],
+    };
+    mount(turn, notebookFor([]));
+    expect(await screen.findByText(/changed this cell to code/)).toBeInTheDocument();
+    expect(screen.queryByText(/were cleared/)).not.toBeInTheDocument();
+  });
+
   it("falls back to source comparison for turns served without a ledger", async () => {
     const legacy = turnWith([]);
     delete (legacy as { operations?: unknown }).operations;

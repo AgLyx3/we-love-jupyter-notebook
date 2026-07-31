@@ -112,9 +112,10 @@ export function Outputs({ outputs, disabled = false, onAddErrorToChat, onHoverCh
   })}</div>;
 }
 
-export default function NotebookCell({ cell, focused, selected, dragIds, editable, context, trusted = false, change, operations = [], revertable = true, disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onKeep, onKeepOperation, onUndoOperation, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
+export default function NotebookCell({ cell, focused, selected, dragIds, editable, context, trusted = false, change, operations = [], retyped, revertable = true, disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onKeep, onKeepOperation, onUndoOperation, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
   cell: NotebookCellData; focused: boolean; selected: boolean; dragIds: string[]; editable: boolean; context: boolean; trusted?: boolean; change?: AgentChange; revertable?: boolean;
   operations?: AgentOperation[];
+  retyped?: { from: string; to: string };
   disabled: boolean; sourceActionsDisabled: boolean; autoSave: boolean; cellRef: (node: HTMLElement | null) => void;
   onFocus: () => void; onSelect: (event: MouseEvent) => void; onContextMenu: (event: MouseEvent) => void; onDirtyChange: (dirty: boolean) => void; onSave: (source: string) => void; onRun: () => void; onAddEditable: () => void; onAddContext: () => void; onRevert: () => void; onKeep?: () => void;
   onKeepOperation?: (operationId: string) => void; onUndoOperation?: (operationId: string) => void;
@@ -141,7 +142,14 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
   // T1: an added cell carries a structural_add operation and no `change`
   // (it has no previous source to diff), so the review bar keys off either.
   const added = operations.some((item) => item.kind === "structural_add");
-  const reviewable = Boolean(change)
+  // A retype is worth announcing on its own. It is as likely to be a slip while
+  // the agent rewrote structure.json for some other reason as it is deliberate,
+  // and moving a cell off `code` silently discards its outputs and execution
+  // count. A pure retype changes no source, so without this the cell would
+  // render no review surface at all and the loss would only be noticed later.
+  const retypedTo = retyped?.to;
+  const outputsCleared = retyped?.from === "code";
+  const reviewable = Boolean(change) || Boolean(retyped)
     || operations.some((item) => item.state === "pending" || item.state === "stale");
   // Per-hunk Keep/Undo inside the editor. Only when the ledger is live for this
   // cell: a stale cell keeps the read-only legacy diff (the review bar explains
@@ -240,6 +248,9 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
             <button className="review-action undo" disabled={dependentDisabled} title={added ? "Remove this added cell" : "Undo this agent change"} aria-label={`Revert agent change to ${description}`} onClick={onRevert}><RotateCcw /> Undo</button>
           </>}
       </div>}
+      {retypedTo && <p className="cell-retyped" role="note">
+        Agent changed this cell to {retypedTo}{outputsCleared ? " — its outputs and execution count were cleared" : ""}. Undo the turn to restore it.
+      </p>}
       {outputsStale && cell.outputs.length > 0 && <p className="cell-stale-outputs" role="note">Outputs are from code you undid — re-run this cell.</p>}
       {cell.cellType === "code" || cell.cellType === "raw" || editingMarkdown ? <CellEditor value={source} label={`Source for ${description}`} disabled={disabled} language={cell.cellType} change={change} hunkControls={hunkControls} cellId={cell.cellId} interactionsDisabled={dependentDisabled} onChange={setSource} onSave={() => dirty && onSave(source)} onRun={onRun} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} /> : <MarkdownPreview source={source} cellId={cell.cellId} disabled={dependentDisabled} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} onHoverChange={setSuppressDrag} />}
       <Outputs outputs={cell.outputs} disabled={dependentDisabled} onAddErrorToChat={onAddErrorToChat} onHoverChange={setSuppressDrag} />
