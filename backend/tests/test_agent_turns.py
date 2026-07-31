@@ -228,6 +228,64 @@ def test_completed_turn_memory_is_bounded(notebook_payload):
     assert history[-1].prompt == "turn 5"
 
 
+def test_undo_records_an_outcome_that_survives_checkpoint_clearing(notebook_payload):
+    documents, scopes, turns, snapshot = _services(
+        notebook_payload,
+        [FakeAttempt(edits={"editable/cell_editable.py": "values = [1]\n"})],
+    )
+    turn = turns.start(
+        prompt="edit", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    applied = turns.get(turn.turn_id)
+    assert applied.undone_at is None
+    turns.undo(
+        turn.turn_id, session_id=applied.session_id,
+        expected_revision=applied.applied_revision,
+    )
+    undone = turns.get(turn.turn_id)
+    # undo() clears the checkpoint and leaves state == "completed", so neither
+    # can carry this: the outcome has to be recorded explicitly.
+    assert undone.checkpoint is None
+    assert undone.state == "completed"
+    assert undone.undone_at is not None
+
+
+def test_pruned_checkpoint_is_not_mistaken_for_an_undo(notebook_payload):
+    documents, scopes, turns, snapshot = _services(
+        notebook_payload,
+        [
+            FakeAttempt(edits={"editable/cell_editable.py": "values = [1]\n"}),
+            FakeAttempt(edits={"editable/cell_editable.py": "values = [2]\n"}),
+        ],
+    )
+    first = turns.start(
+        prompt="first", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    current = documents.get_snapshot()
+    scopes.add("editable", editable=True)
+    turns.start(
+        prompt="second", session_id=current.session_id,
+        expected_revision=current.revision, background=False,
+    )
+    superseded = turns.get(first.turn_id)
+    assert superseded.checkpoint is None  # cleared by pruning, not by undo
+    assert superseded.undone_at is None
+
+
+def test_turn_serialization_does_not_expose_the_undo_outcome():
+    turn = AgentTurn(
+        turn_id="turn-undone", session_id="session-undone", base_revision=1,
+        prompt="p", state="completed",
+    )
+    baseline = serialize_turn(turn)
+    turn.undone_at = turn.created_at
+    # P0 is backend-only: the feed reads this field, no client surface does.
+    assert serialize_turn(turn) == baseline
+    assert not any("undone" in key.lower() for key in baseline)
+
+
 def test_large_turn_history_keeps_only_latest_undo_checkpoint(notebook_payload):
     documents = NotebookDocumentService()
     snapshot = documents.import_notebook(notebook_payload())

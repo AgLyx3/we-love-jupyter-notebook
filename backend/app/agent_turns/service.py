@@ -123,6 +123,10 @@ class AgentTurn:
     error: dict[str, Any] | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
+    # Undo is a recorded outcome, not the absence of a checkpoint: pruning also
+    # clears `checkpoint`, so the two are otherwise indistinguishable and `state`
+    # stays "completed" either way. Set only by undo(), never cleared.
+    undone_at: datetime | None = None
     accepted_cancel_revision: int | None = None
     accepted_cancel_lineage_revision: int | None = None
     cancel_event: Event = field(default_factory=Event, repr=False)
@@ -721,6 +725,7 @@ class AgentTurnService:
                 self._latest_applied_turn_id = None
                 stored = self._turns.get(turn_id)
                 if stored is not None:
+                    stored.undone_at = datetime.now(timezone.utc)
                     stored.checkpoint = None
                     # Restoring the checkpoint reverses every change the turn
                     # made, so its ledger is settled by definition. Leaving the
