@@ -1,4 +1,4 @@
-import { Check, ChevronRight, RotateCcw } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import type { AgentOperation } from "../api/client";
 
@@ -15,9 +15,9 @@ import type { AgentOperation } from "../api/client";
 //   * undo-all asks for confirmation once anything has been kept, because that
 //     is the point where it starts discarding decisions rather than just
 //     undoing the agent.
-export default function ReviewBar({ total, reviewed, keptCount, undoableCount, disabled, onNext, onKeepAll, onUndoAll }: {
+export default function ReviewBar({ total, reviewed, keptCount, undoableCount, disabled, onPrevious, onNext, onKeepAll, onUndoAll }: {
   total: number; reviewed: number; keptCount: number; undoableCount: number; disabled: boolean;
-  onNext: () => void; onKeepAll: () => void; onUndoAll: () => void;
+  onPrevious: () => void; onNext: () => void; onKeepAll: () => void; onUndoAll: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
   if (total === 0) return null;
@@ -39,7 +39,15 @@ export default function ReviewBar({ total, reviewed, keptCount, undoableCount, d
         <button type="button" className="review-bar-danger" disabled={disabled} onClick={undoAll}>Undo them</button>
       </div>
       : <div className="review-bar-actions">
-        <button type="button" disabled={disabled} onClick={onNext}><ChevronRight /> Next change</button>
+        {/* Both directions: reviewing means moving back over a change as often
+            as forward, and a one-way control forces a full wrap to revisit the
+            one you just passed. Icon-only is the exception the labelled rule
+            allows — a paired ‹ › is self-describing and non-destructive — so
+            they carry titles and accessible names instead of visible text. */}
+        <span className="review-bar-nav">
+          <button type="button" disabled={disabled} title="Previous change" aria-label="Previous change" onClick={onPrevious}><ChevronLeft /></button>
+          <button type="button" disabled={disabled} title="Next change" aria-label="Next change" onClick={onNext}><ChevronRight /></button>
+        </span>
         <button type="button" disabled={disabled} onClick={onKeepAll}><Check /> Keep all</button>
         <button type="button" className="review-bar-danger" disabled={disabled || undoableCount === 0} onClick={undoAll}><RotateCcw /> Undo all</button>
       </div>}

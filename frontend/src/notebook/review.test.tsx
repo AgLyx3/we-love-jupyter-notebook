@@ -187,6 +187,48 @@ describe("per-operation review", () => {
     expect(calls.some((item) => item.path.includes("/reject"))).toBe(false);
   });
 
+  it("steps through changes in both directions, wrapping at each end", async () => {
+    const scrollInto = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollInto });
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+
+    const ops: AgentOperation[] = [
+      { ...operation(0, "pending"), cellId: "code-1" },
+      { ...operation(1, "pending"), operationId: "turn-1:code-2:0", cellId: "code-2" },
+    ];
+    const turn: AgentTurn = {
+      ...turnWith(ops),
+      changes: [
+        { cellId: "code-1", previousSource: PREVIOUS, nextSource: NEXT },
+        { cellId: "code-2", previousSource: "old\n", nextSource: "new\n" },
+      ],
+    };
+    const twoCells = { ...notebookFor(ops) };
+    twoCells.cells = [
+      twoCells.cells[0],
+      { ...twoCells.cells[0], cellId: "code-2", index: 1, source: "new\n" },
+    ];
+    mount(turn, twoCells);
+    await screen.findByRole("region", { name: "Review agent changes" });
+    const focused = () => document.activeElement?.getAttribute("aria-label");
+
+    // Nothing focused yet, so back starts at the *last* change — otherwise the
+    // first press lands nowhere useful.
+    await userEvent.click(screen.getByLabelText("Previous change"));
+    await waitFor(() => expect(focused()).toBe("code cell 2"));
+
+    // Forward from the last wraps to the first.
+    await userEvent.click(screen.getByLabelText("Next change"));
+    await waitFor(() => expect(focused()).toBe("code cell 1"));
+
+    // And back again wraps the other way.
+    await userEvent.click(screen.getByLabelText("Previous change"));
+    await waitFor(() => expect(focused()).toBe("code cell 2"));
+
+    expect(scrollInto).toHaveBeenCalled();
+    expect(focus).toHaveBeenCalled();
+  });
+
   it("hides the review bar once every change is settled", async () => {
     // The counter used to include settled operations, so the bar stayed on
     // screen at "2 of 2 reviewed" with a live no-op Undo all.

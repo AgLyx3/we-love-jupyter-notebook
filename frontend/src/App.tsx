@@ -368,16 +368,22 @@ export default function App() {
   // because Keep needs no composition guard even when Undo can no longer apply.
   const reviewUnsettled = reviewOperations.filter((item) => item.state === "pending" || item.state === "stale");
   const reviewKept = reviewOperations.filter((item) => item.state === "accepted").length;
-  // Walk to the next cell that still has something unreviewed, wrapping around.
-  // Reuses the existing chat-to-cell focus plumbing rather than adding a second
-  // way to scroll the notebook. Stale cells are included: landing on one is how
-  // the user finds out why it can no longer be undone.
-  const focusNextChange = () => {
+  // Step through the cells that still have something unreviewed, in either
+  // direction, wrapping at both ends. Reuses the existing chat-to-cell focus
+  // plumbing rather than adding a second way to scroll the notebook. Stale
+  // cells are included: landing on one is how the user finds out why it can no
+  // longer be undone.
+  const focusChange = (direction: 1 | -1) => {
     if (!notebook || !reviewUnsettled.length) return;
     const order = notebook.cells.map((cell) => cell.cellId).filter((cellId) => reviewUnsettled.some((item) => item.cellId === cellId));
     if (!order.length) return;
     const from = order.indexOf(focusRequest?.cellId ?? "");
-    requestCellFocus(order[(from + 1) % order.length]);
+    // Nothing focused yet: forward starts at the first change, back at the last,
+    // so the first press lands somewhere useful either way.
+    const next = from < 0
+      ? (direction === 1 ? 0 : order.length - 1)
+      : (from + direction + order.length) % order.length;
+    requestCellFocus(order[next]);
   };
   return <div className="app-shell">
     <header className="topbar">
@@ -401,7 +407,8 @@ export default function App() {
         total={reviewOperations.length} reviewed={reviewOperations.length - reviewUnsettled.length} keptCount={reviewKept}
         undoableCount={reviewUnsettled.filter((item) => item.state === "pending").length}
         disabled={mutationsDisabled || busy || hasDirtyDrafts}
-        onNext={focusNextChange}
+        onPrevious={() => focusChange(-1)}
+        onNext={() => focusChange(1)}
         onKeepAll={() => acceptOperations(notebook, selectedTurn.turnId)}
         onUndoAll={() => rejectOperations(notebook, selectedTurn.turnId)} />}
       <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} trusted={trustedScope} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} autoSave={autoSave} focusRequest={focusRequest}
