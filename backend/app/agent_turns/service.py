@@ -119,9 +119,11 @@ class AgentTurn:
     attempts: int = 0
     final_output: str = ""
     changes: tuple[CandidateCellSourceChange, ...] = ()
-    # Source-hunk ledger, populated for Blocking turns only. Trusted turns edit
-    # the notebook structurally (add/delete/reorder/retype), which the ledger has
-    # no representation for, so they stay whole-turn undo only — see revert_cell.
+    # Source-hunk ledger. Populated for Blocking turns, and (since T1) for the
+    # reviewable part of a Trusted turn: source edits to surviving same-type
+    # cells, plus whole-cell adds. Retyped, deleted, and moved cells get no
+    # operations — rejecting those needs anchor math over an ordering other ops
+    # also changed — so they stay whole-turn undo only; see revert_cell.
     operations: tuple[TurnOperation, ...] = ()
     structural_ops: tuple[StructuralOp, ...] = ()
     applied_revision: int | None = None
@@ -133,6 +135,11 @@ class AgentTurn:
     # Undo is a recorded outcome, not the absence of a checkpoint: pruning also
     # clears `checkpoint`, so the two are otherwise indistinguishable and `state`
     # stays "completed" either way. Set only by undo(), never cleared.
+    #
+    # For a cell the ledger covers, undo() also settles its operations to
+    # `rejected`, so this marker is redundant there. It is load-bearing for the
+    # cells the ledger has no kind for — retyped, deleted, and moved cells in a
+    # Trusted turn — where it is the only record that the change was reversed.
     undone_at: datetime | None = None
     accepted_cancel_revision: int | None = None
     accepted_cancel_lineage_revision: int | None = None
@@ -192,7 +199,7 @@ class AgentTurnService:
                 # Frozen alongside the scope and the snapshot: all three boundary
                 # retries must see identical memory, or a retry becomes a
                 # different turn.
-                memory = self._thread_memory_or_empty(session_id)
+                memory = self._thread_memory_or_empty(session_id, snapshot)
                 turn = AgentTurn(
                     turn_id=turn_id, session_id=session_id,
                     base_revision=expected_revision, prompt=prompt,
@@ -246,13 +253,26 @@ class AgentTurnService:
             return result
 
     def thread_memory(
-        self, session_id: str, *, limit: int = THREAD_MEMORY_TURNS,
+        self, session_id: str, *, limit: int = THREAD_MEMORY_TURNS, snapshot=None,
     ) -> tuple[MemoryEntry, ...]:
         """Past turns of this session, oldest first, as the agent will see them.
 
         Only settled turns qualify: an in-flight turn has no outcome to report.
         Status is derived here, at read time, and never cached on the entry.
+
+        Callers holding a snapshot should pass it: staleness is derived per turn
+        and taking one deep-copies the notebook.
         """
+        # Read the document before taking our lock, and pass the result down
+        # explicitly. The document service calls back into this service under
+        # its own lock when a session is replaced, so reaching for the document
+        # lock while holding ours inverts the order (same rule as
+        # is_undo_eligible). A snapshot we cannot read costs staleness only.
+        if snapshot is None:
+            try:
+                snapshot = self.documents.get_snapshot()
+            except NotebookDomainError:
+                snapshot = None
         with self._lock:
             settled = sorted(
                 (
@@ -261,10 +281,19 @@ class AgentTurnService:
                 ),
                 key=lambda item: item.completed_at or item.created_at,
             )[-limit:]
-            return tuple(self._memory_entry(turn) for turn in settled)
+            return tuple(
+                self._memory_entry(
+                    turn,
+                    self.stale_cell_ids(turn, snapshot)
+                    if snapshot is not None else frozenset(),
+                )
+                for turn in settled
+            )
 
     @classmethod
-    def _memory_entry(cls, turn: AgentTurn) -> MemoryEntry:
+    def _memory_entry(
+        cls, turn: AgentTurn, stale: frozenset[str] = frozenset(),
+    ) -> MemoryEntry:
         if turn.state == "cancelled":
             turn_status = "CANCELLED"
         elif turn.state in ("failed", "validation_incomplete"):
@@ -284,14 +313,16 @@ class AgentTurnService:
                 for change in turn.changes
             )
         else:
-            operations = cls._memory_operations(turn)
+            operations = cls._memory_operations(turn, stale)
         return MemoryEntry(
             prompt=turn.prompt, mode=turn.mode, operations=operations,
             reply="" if operations else turn.final_output, turn_status=turn_status,
         )
 
     @staticmethod
-    def _memory_operations(turn: AgentTurn) -> tuple[MemoryOperation, ...]:
+    def _memory_operations(
+        turn: AgentTurn, stale: frozenset[str] = frozenset(),
+    ) -> tuple[MemoryOperation, ...]:
         """Split each cell change by what the ledger says actually survived.
 
         A cell whose hunks were reviewed differently yields two entries: one for
@@ -317,6 +348,7 @@ class AgentTurnService:
                     status="UNDONE" if turn.undone_at else "APPLIED",
                     previous_source=change.previous_source,
                     next_source=change.next_source,
+                    stale=change.cell_id in stale,
                 ))
                 continue
             surviving = [
@@ -336,6 +368,7 @@ class AgentTurnService:
                     # description covers the surviving hunks only. The body is
                     # never rendered for these (D2), just the summary line.
                     previous_source=change.previous_source, next_source=current,
+                    stale=change.cell_id in stale,
                 ))
             if len(surviving) < len(operations):
                 # What the cell would hold had the rejected hunks stood. The
@@ -353,13 +386,16 @@ class AgentTurnService:
                 entries.append(MemoryOperation(
                     cell_id=change.cell_id, status="UNDONE",
                     previous_source=current, next_source=restored,
+                    stale=change.cell_id in stale,
                 ))
         return tuple(entries)
 
-    def _thread_memory_or_empty(self, session_id: str) -> tuple[MemoryEntry, ...]:
+    def _thread_memory_or_empty(
+        self, session_id: str, snapshot=None,
+    ) -> tuple[MemoryEntry, ...]:
         """Memory is advisory: a failure here must never fail the turn."""
         try:
-            return self.thread_memory(session_id)
+            return self.thread_memory(session_id, snapshot=snapshot)
         except Exception:
             logger.exception(
                 "Failed to build thread memory for session %s; running without it",

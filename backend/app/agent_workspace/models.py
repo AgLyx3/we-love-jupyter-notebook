@@ -134,6 +134,11 @@ class MemoryOperation:
     status: str  # "KEPT" | "APPLIED" | "UNDONE"
     previous_source: str
     next_source: str
+    # The user has hand-edited this cell since. Orthogonal to status rather than
+    # a fourth value of it: a hunk can be kept *and* since overwritten, and the
+    # agent needs both facts. Without it the feed asserts an account of the cell
+    # that the document no longer matches.
+    stale: bool = False
 
 
 @dataclass(frozen=True)

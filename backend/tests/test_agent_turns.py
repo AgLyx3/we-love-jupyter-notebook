@@ -638,6 +638,38 @@ def test_partly_undone_cell_reports_both_outcomes_under_one_header(notebook_payl
     assert "+ first = 100" not in memory
 
 
+def test_hand_edited_cell_is_flagged_stale_without_losing_its_outcome(notebook_payload):
+    # A manual edit reaches the document through a path the ledger knows nothing
+    # about. Without this the feed keeps asserting an account of the cell that
+    # the notebook no longer matches.
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    recorder = _RecordingFakeAdapter([
+        FakeAttempt(edits={"editable/cell_editable.py": "value = 2\n"}),
+        FakeAttempt(),
+    ])
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=recorder, timeout=2,
+    )
+    scopes.add("editable", editable=True)
+    turns.start(
+        prompt="bump it", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    current = documents.get_snapshot()
+    documents.update_cell_source(
+        cell_id="editable", source="value = 99  # mine now\n",
+        expected_session_id=current.session_id,
+        expected_revision=current.revision, owner="user",
+    )
+
+    memory = _memory_of_next_turn(documents, scopes, turns, recorder)
+    assert "STALE: the user has edited this cell by hand since" in memory
+    # The outcome is still reported; staleness qualifies it, it does not erase it.
+    assert "STATUS: APPLIED but not yet reviewed by the user" in memory
+
+
 def test_boundary_violation_retries_in_fresh_workspace(notebook_payload):
     attempts = [
         FakeAttempt(creates={"outside.txt": "bad"}),

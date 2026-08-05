@@ -157,6 +157,14 @@ def _render_entry(entry: MemoryEntry, distance: int, indexed: dict) -> list[str]
                     f"{prefix}STATUS: APPLIED but not yet reviewed by the user. The "
                     "result is in notebook.ipynb; read it there."
                 )
+            if operation.stale:
+                # Said after the status, not instead of it: the outcome above is
+                # still what the user chose. This only warns that the cell has
+                # moved on since, so the account above no longer describes it.
+                lines.append(
+                    f"{prefix}STALE: the user has edited this cell by hand since. "
+                    "notebook.ipynb is the only reliable source for it."
+                )
     if entry.turn_status == "CANCELLED" and entry.operations:
         lines.append(
             "STATUS: CANCELLED. Whether these changes are in the notebook is not"
