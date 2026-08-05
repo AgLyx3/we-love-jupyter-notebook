@@ -4,7 +4,7 @@ import copy
 import hashlib
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from threading import Event, RLock, Thread, current_thread
 from typing import Any, Sequence
@@ -263,8 +263,8 @@ class AgentTurnService:
             )[-limit:]
             return tuple(self._memory_entry(turn) for turn in settled)
 
-    @staticmethod
-    def _memory_entry(turn: AgentTurn) -> MemoryEntry:
+    @classmethod
+    def _memory_entry(cls, turn: AgentTurn) -> MemoryEntry:
         if turn.state == "cancelled":
             turn_status = "CANCELLED"
         elif turn.state in ("failed", "validation_incomplete"):
@@ -274,18 +274,87 @@ class AgentTurnService:
         # A turn that did not settle cleanly gets no per-operation status: _run
         # can apply changes and *then* cancel, so whether they survived is not
         # recorded anywhere and must not be guessed.
-        status = "" if turn_status else ("UNDONE" if turn.undone_at else "KEPT")
-        operations = tuple(
-            MemoryOperation(
-                cell_id=change.cell_id, status=status,
-                previous_source=change.previous_source, next_source=change.next_source,
+        if turn_status:
+            operations = tuple(
+                MemoryOperation(
+                    cell_id=change.cell_id, status="",
+                    previous_source=change.previous_source,
+                    next_source=change.next_source,
+                )
+                for change in turn.changes
             )
-            for change in turn.changes
-        )
+        else:
+            operations = cls._memory_operations(turn)
         return MemoryEntry(
             prompt=turn.prompt, mode=turn.mode, operations=operations,
             reply="" if operations else turn.final_output, turn_status=turn_status,
         )
+
+    @staticmethod
+    def _memory_operations(turn: AgentTurn) -> tuple[MemoryOperation, ...]:
+        """Split each cell change by what the ledger says actually survived.
+
+        A cell whose hunks were reviewed differently yields two entries: one for
+        the hunks still in the notebook and one for the hunks the user undid.
+        Reporting a single verdict per cell would have to round one of them off,
+        and rounding *towards* KEPT is the dangerous direction — it tells the
+        agent its rejected code is live and invites it to build on code that is
+        not there.
+        """
+        by_cell: dict[str, list[TurnOperation]] = {}
+        for operation in turn.operations:
+            if operation.hunk is not None:
+                by_cell.setdefault(operation.cell_id, []).append(operation)
+        entries: list[MemoryOperation] = []
+        for change in turn.changes:
+            operations = by_cell.get(change.cell_id, [])
+            if not operations:
+                # No ledger coverage: a retyped cell in a Trusted turn, or a
+                # delete/move that the ledger has no kind for. The whole-turn
+                # marker is all there is, which is exactly what it is for.
+                entries.append(MemoryOperation(
+                    cell_id=change.cell_id,
+                    status="UNDONE" if turn.undone_at else "APPLIED",
+                    previous_source=change.previous_source,
+                    next_source=change.next_source,
+                ))
+                continue
+            surviving = [
+                item for item in operations if item.state in APPLIED_STATES
+            ]
+            current = compose(
+                previous_source=change.previous_source,
+                next_source=change.next_source, operations=operations,
+            )
+            if surviving:
+                entries.append(MemoryOperation(
+                    cell_id=change.cell_id,
+                    status="KEPT" if all(
+                        item.state == ACCEPTED for item in surviving
+                    ) else "APPLIED",
+                    # Diffed against what the cell actually holds now, so the
+                    # description covers the surviving hunks only. The body is
+                    # never rendered for these (D2), just the summary line.
+                    previous_source=change.previous_source, next_source=current,
+                ))
+            if len(surviving) < len(operations):
+                # What the cell would hold had the rejected hunks stood. The
+                # diff current -> restored *is* the undone content, and it is
+                # the only place that content still exists.
+                restored = compose(
+                    previous_source=change.previous_source,
+                    next_source=change.next_source,
+                    operations=[
+                        replace(item, state=ACCEPTED)
+                        if item.state == REJECTED else item
+                        for item in operations
+                    ],
+                )
+                entries.append(MemoryOperation(
+                    cell_id=change.cell_id, status="UNDONE",
+                    previous_source=current, next_source=restored,
+                ))
+        return tuple(entries)
 
     def _thread_memory_or_empty(self, session_id: str) -> tuple[MemoryEntry, ...]:
         """Memory is advisory: a failure here must never fail the turn."""

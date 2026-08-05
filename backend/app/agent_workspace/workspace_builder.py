@@ -109,6 +109,16 @@ def _cell_reference(cell_id: str, indexed: dict) -> str:
     return f"cell {found[0]} (id {cell_id})"
 
 
+def _by_cell(
+    operations: tuple[MemoryOperation, ...],
+) -> list[tuple[str, list[MemoryOperation]]]:
+    """Group by cell, preserving first-appearance order."""
+    grouped: dict[str, list[MemoryOperation]] = {}
+    for operation in operations:
+        grouped.setdefault(operation.cell_id, []).append(operation)
+    return list(grouped.items())
+
+
 def _render_entry(entry: MemoryEntry, distance: int, indexed: dict) -> list[str]:
     lead, note = _prompt_lead(entry.prompt)
     lines = [
@@ -116,22 +126,37 @@ def _render_entry(entry: MemoryEntry, distance: int, indexed: dict) -> list[str]
         f'You asked: "{lead}"{note}',
     ]
     indent = "  " if len(entry.operations) > 1 else ""
-    for operation in entry.operations:
-        body = _diff_body(operation)
-        lines.append(
-            f"It edited {_cell_reference(operation.cell_id, indexed)}: "
-            f"{_describe(operation, body)}."
-        )
-        if operation.status == "UNDONE":
+    # One header per cell, then a status line per operation under it. A cell
+    # reviewed hunk by hunk produces two operations with opposing outcomes;
+    # repeating "It edited cell 2" above each reads like two separate edits.
+    for cell_id, operations in _by_cell(entry.operations):
+        reference = _cell_reference(cell_id, indexed)
+        split = len(operations) > 1
+        if split:
+            lines.append(f"It edited {reference}, and the parts were reviewed separately:")
+        for operation in operations:
+            body = _diff_body(operation)
+            described = _describe(operation, body)
             lines.append(
-                f"{indent}STATUS: UNDONE by the user. This code is NOT in the "
-                "notebook. Do not re-propose it."
+                f"  - {described}." if split
+                else f"It edited {reference}: {described}."
             )
-            lines.extend(_diff_lines(body))
-        elif operation.status == "KEPT":
-            lines.append(
-                f"{indent}STATUS: KEPT. The result is in notebook.ipynb; read it there."
-            )
+            prefix = "    " if split else indent
+            if operation.status == "UNDONE":
+                lines.append(
+                    f"{prefix}STATUS: UNDONE by the user. This code is NOT in the "
+                    "notebook. Do not re-propose it."
+                )
+                lines.extend(_diff_lines(body))
+            elif operation.status == "KEPT":
+                lines.append(
+                    f"{prefix}STATUS: KEPT. The result is in notebook.ipynb; read it there."
+                )
+            elif operation.status == "APPLIED":
+                lines.append(
+                    f"{prefix}STATUS: APPLIED but not yet reviewed by the user. The "
+                    "result is in notebook.ipynb; read it there."
+                )
     if entry.turn_status == "CANCELLED" and entry.operations:
         lines.append(
             "STATUS: CANCELLED. Whether these changes are in the notebook is not"

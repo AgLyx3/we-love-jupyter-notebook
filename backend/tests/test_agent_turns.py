@@ -535,6 +535,109 @@ def test_an_undone_change_reaches_the_next_turn_with_its_diff(notebook_payload):
     assert second.splitlines()[0] == "try again"
 
 
+def _memory_of_next_turn(documents, scopes, turns, recorder, prompt="what next"):
+    current = documents.get_snapshot()
+    scopes.add("editable", editable=True)
+    turns.start(
+        prompt=prompt, session_id=current.session_id,
+        expected_revision=current.revision, background=False,
+    )
+    return recorder.instructions[-1]
+
+
+def test_unreviewed_change_is_reported_as_applied_not_kept(notebook_payload):
+    # Operations rest at PENDING until the user reviews them, so "completed"
+    # is not consent. Reporting an unreviewed hunk as KEPT would tell the agent
+    # the user approved something they have not looked at.
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    recorder = _RecordingFakeAdapter([
+        FakeAttempt(edits={"editable/cell_editable.py": "value = 2\n"}),
+        FakeAttempt(),
+    ])
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=recorder, timeout=2,
+    )
+    scopes.add("editable", editable=True)
+    first = turns.start(
+        prompt="bump it", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    assert all(item.state == "pending" for item in turns.get(first.turn_id).operations)
+
+    memory = _memory_of_next_turn(documents, scopes, turns, recorder)
+    assert "STATUS: APPLIED but not yet reviewed by the user" in memory
+    assert "STATUS: KEPT" not in memory
+
+
+def test_accepting_an_operation_reports_it_as_kept(notebook_payload):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    recorder = _RecordingFakeAdapter([
+        FakeAttempt(edits={"editable/cell_editable.py": "value = 2\n"}),
+        FakeAttempt(),
+    ])
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=recorder, timeout=2,
+    )
+    scopes.add("editable", editable=True)
+    first = turns.start(
+        prompt="bump it", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    applied = turns.get(first.turn_id)
+    turns.accept_operations(first.turn_id, None, session_id=applied.session_id)
+
+    memory = _memory_of_next_turn(documents, scopes, turns, recorder)
+    assert "STATUS: KEPT" in memory
+    assert "not yet reviewed" not in memory
+
+
+def test_partly_undone_cell_reports_both_outcomes_under_one_header(notebook_payload):
+    # The failure this guards: one verdict per cell. Rounding a half-rejected
+    # cell to KEPT tells the agent its rejected code is live.
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(
+        notebook_payload(sources={"editable": "first = 1\nsecond = 2\nthird = 3\n"})
+    )
+    scopes = TurnScopeService(documents)
+    recorder = _RecordingFakeAdapter([
+        FakeAttempt(edits={
+            "editable/cell_editable.py": "first = 100\nsecond = 2\nthird = 300\n",
+        }),
+        FakeAttempt(),
+    ])
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=recorder, timeout=2,
+    )
+    scopes.add("editable", editable=True)
+    first = turns.start(
+        prompt="scale the numbers", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    applied = turns.get(first.turn_id)
+    assert len(applied.operations) == 2, "expected one hunk per changed line"
+    turns.reject_operations(
+        first.turn_id, [applied.operations[1].operation_id],
+        session_id=applied.session_id,
+        expected_revision=applied.applied_revision,
+    )
+
+    memory = _memory_of_next_turn(documents, scopes, turns, recorder)
+    assert "reviewed separately" in memory
+    # One header for the cell, not two.
+    assert memory.count("It edited cell 1") == 1
+    assert "STATUS: UNDONE by the user" in memory
+    assert "STATUS: APPLIED but not yet reviewed by the user" in memory
+    # Only the rejected hunk is carried as a change. The surviving hunk is in
+    # the notebook, so it appears as diff context at most, never as an edit the
+    # agent might read as still pending.
+    assert "+ third = 300" in memory
+    assert "+ first = 100" not in memory
+
+
 def test_boundary_violation_retries_in_fresh_workspace(notebook_payload):
     attempts = [
         FakeAttempt(creates={"outside.txt": "bad"}),

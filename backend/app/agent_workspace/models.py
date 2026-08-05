@@ -115,10 +115,23 @@ class ReturnedStructureEntry:
 
 @dataclass(frozen=True)
 class MemoryOperation:
-    """One source change a past turn made, with its outcome as known now."""
+    """One source change a past turn made, with its outcome as known now.
+
+    Outcome comes from the per-operation ledger, so a single cell can produce
+    two of these: the hunks that survived and the hunks the user undid are
+    different facts with different statuses, and collapsing them would report
+    one of the two wrongly.
+
+    - ``KEPT``: the user reviewed it and kept it.
+    - ``APPLIED``: it is in the notebook but the user has not reviewed it yet.
+      Distinct from ``KEPT`` on purpose — an unreviewed change carries no signal
+      of approval, and reporting it as kept would invent one.
+    - ``UNDONE``: the user rejected it. This is the only status that carries a
+      diff, because it is the only content that exists nowhere else.
+    """
 
     cell_id: str
-    status: str  # "KEPT" | "UNDONE"
+    status: str  # "KEPT" | "APPLIED" | "UNDONE"
     previous_source: str
     next_source: str
 

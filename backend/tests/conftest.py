@@ -8,7 +8,10 @@ from backend.app.main import create_app
 
 @pytest.fixture
 def notebook_payload():
-    def build(*, cell_ids=("intro", "editable")) -> bytes:
+    def build(*, cell_ids=("intro", "editable"), sources=None) -> bytes:
+        # `sources` overrides a cell's body by id, for tests that need more than
+        # one diff hunk in a cell.
+        sources = sources or {}
         cells = [
             {
                 "cell_type": "markdown",
@@ -25,6 +28,9 @@ def notebook_payload():
                 "outputs": [],
             },
         ]
+        for cell in cells:
+            if cell["id"] in sources:
+                cell["source"] = [sources[cell["id"]]]
         return json.dumps(
             {
                 "cells": cells,
