@@ -510,6 +510,30 @@ Caveats: one scenario, one run, non-deterministic model. This shows the feed
 reaches the agent and is acted on; it is not a measurement of how reliably that
 holds across prompts.
 
+**2026-08-04 — real Claude CLI 2.1.220, re-validated after rebasing onto the
+shipped ledger (D11′, D21–D25).**
+
+The 2026-07-31 run went through whole-turn `undo()`. The rebase made
+per-operation reject the ordinary path, and it reaches the feed through
+different code — `reject_operations` settles the hunk to `rejected`, and the
+undone diff is recomposed from the ledger rather than read off the turn's
+changes. Same scenario, that path instead:
+
+1. Same append loop.
+2. Turn 1 applied `squares = [n * n for n in range(10)]`. Operation state
+   `pending` — confirming D21's premise that completed is not reviewed.
+3. `reject_operations(..., None)` — per-op undo, not whole-turn. Cell restored.
+4. Turn 2: "Make this cell faster."
+
+Result: the agent again declined and named the reason unprompted — *"The one
+standard rewrite — collapsing it into a list comprehension — is what you undid
+last turn, so I'm leaving it alone."* It offered the `append` local-binding
+micro-optimisation and NumPy vectorisation instead, and correctly judged that
+neither was worth it at n=10. Cell left byte-identical.
+
+Same caveats as above. What this adds over the first run is only that the
+ledger-derived feed carries the rejection as legibly as the whole-turn one did.
+
 ---
 
 ## 10. Decision log
