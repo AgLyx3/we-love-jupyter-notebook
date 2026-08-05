@@ -555,8 +555,14 @@ unmerged. These supersede or add to the decisions above.
 
 ## 11. Spec changes required
 
-- `docs/notebook-agent-editor-spec.md` — the turn-isolation section needs to
-  state that isolation constrains **write scope**, not recall, and that a turn's
-  `INSTRUCTIONS.md` may reference operations on cells outside its frozen scope.
-- The agent-turn lifecycle section needs `undone_at` and the statement that undo
-  is a recorded outcome, not merely the absence of a checkpoint.
+All applied to `docs/notebook-agent-editor-spec.md`:
+
+- **Turn Scope → Rules.** Isolation constrains **write scope**, not recall; a
+  turn's `INSTRUCTIONS.md` may reference operations on cells outside its frozen
+  scope.
+- **Undo And Checkpoints → whole-turn undo.** Undo is a recorded outcome, not
+  merely the absence of a checkpoint — the ledger records it for covered cells
+  and `undone_at` for the rest, and pruning clears neither.
+- **Per-operation review.** The ledger is what the agent is told: outcomes reach
+  the next turn through thread memory, and `pending` is reported as applied
+  rather than kept.

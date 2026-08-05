@@ -178,6 +178,14 @@ Responsibilities:
 Rules:
 
 - Permissions are turn-level, not thread-level.
+- **Isolation constrains write scope, not recall.** A turn may only write to the
+  cells frozen into its scope, and that is unchanged. It may still be *told*
+  about operations on cells outside that scope: the agent receives a thread
+  memory feed covering the whole session, so a turn's `INSTRUCTIONS.md` can
+  reference cells it has no permission to touch. Recall without write access is
+  the intended shape — the agent needs to know what it already tried in this
+  notebook, and scoping it to the current turn's cells would make the feed
+  forget most of the conversation. See `docs/plans/2026-07-31-agent-thread-memory.md`.
 - A cell mentioned as editable in one turn is not editable in the next turn unless
   explicitly added again — **except** when the intervening turn applied no changes.
 - **No-op scope preservation.** When a turn ends without applying any change (for
@@ -1361,6 +1369,13 @@ Whole-turn undo:
   The UI must say so rather than implying it only undoes outstanding work.
 - Settles the turn's operation ledger: after a restore no operation may remain
   pending, or the cells keep advertising changes that are already gone.
+- **Undo is a recorded outcome, not merely the absence of a checkpoint.** History
+  pruning also clears a turn's checkpoint and leaves its state `completed`, so
+  the two are otherwise indistinguishable. Settling the ledger to `rejected`
+  records the reversal for every cell the ledger covers; `undone_at` on the turn
+  records it for the cells it does not (retyped, deleted, and moved cells, which
+  stay whole-turn undo). Neither is cleared by pruning. Both are backend-only —
+  the turn API serializes explicit keys, so nothing new reaches the frontend.
 
 Per-operation review (the operation ledger):
 
@@ -1393,6 +1408,14 @@ mechanisms; the granularity ladder is turn → cell → operation.
 - The ledger stores line ranges (and a fixed-size hash for adds), never copies
   of source text — the sources are already retained on the turn's changes, and
   duplicating them would double per-turn memory against the retention budget.
+- **The ledger is what the agent is told.** Thread memory reports each past
+  operation's outcome from its ledger state, so review decisions reach the next
+  turn: `accepted` renders as kept, `rejected` as undone (carrying the diff,
+  since that content exists nowhere else), and `pending` as applied-but-
+  unreviewed. `pending` is deliberately not reported as kept — the change is in
+  the notebook, but the user has not affirmed it, and saying otherwise invents
+  an approval. Derived staleness is carried alongside the outcome, not instead
+  of it.
 
 Composition guard:
 
