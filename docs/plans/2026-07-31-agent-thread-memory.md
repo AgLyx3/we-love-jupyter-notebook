@@ -156,7 +156,8 @@ Consequences accepted:
   not what goal it was serving, so it can avoid the code and repeat the
   misunderstanding.
 - Cell id, index resolved at build time, and a one-line operation description.
-- Status: `KEPT`, `UNDONE`, `FAILED (<code>)`, `CANCELLED`, or `STALE` (§4.7).
+- Status: `KEPT`, `APPLIED`, `UNDONE`, `FAILED (<code>)`, or `CANCELLED`, plus an
+  orthogonal `STALE` qualifier (§4.7).
 - **Full diff for undone operations only.** Kept results are already readable in
   `notebook.ipynb`; duplicating them inflates the feed for nothing.
 - **The agent's reply only for turns that produced no operations.** For turns
@@ -166,21 +167,26 @@ Consequences accepted:
 
 ### 4.4 Excluded
 
-- **Pending operations.** With per-op accept, operations can sit unreviewed
-  indefinitely. Telling the agent "you proposed this, the user has not decided"
-  invites it to re-litigate rather than wait.
-- **Manual user edits.** If a user silently rewrites the agent's output by hand,
-  that is arguably a stronger rejection signal than pressing undo — but in a
-  thread model it is not a thread event; nobody said anything. Recorded as a
-  known gap (§8).
-- **`revert_cell()` still records nothing.** C1 removes per-cell revert
-  entirely, so adding an outcome marker there would be building something we are
-  about to delete. Accepted blind spot until the per-op branch lands.
+- ~~**Pending operations.**~~ **Superseded by D21.** Written when "pending" meant
+  an undecided proposal that had not landed. Under the shipped ledger,
+  `APPLIED_STATES = {pending, accepted}` — a pending operation is already in the
+  notebook and merely unreviewed. Excluding those would empty the feed, since
+  `pending` is where operations rest until the user acts.
+- ~~**Manual user edits.**~~ **Superseded by D22.** `stale_cell_ids()` derives
+  this from the ledger, so the fact is now available and is carried.
+- ~~**`revert_cell()` records nothing.**~~ **Still true, and no longer excused.**
+  D13 assumed C1 would delete per-cell revert; it did not. See §8.
 - **No retention priority for undone turns.** Pruning treats them like any
   other. In practice the feed window (10 turns) is far tighter than
   `MAX_TERMINAL_TURNS` (50), so count-based eviction cannot reach a turn the
   feed still wants; only the 2 MB byte cap could, and only with unusually large
-  payloads.
+  payloads. `MAX_PENDING_REVIEW_TURNS` (10) protects unreviewed turns from
+  eviction outright, which can only help the feed.
+- **The content of a rejected structural add.** The ledger stores a
+  `source_hash` for added cells, deliberately not the text (a fixed-size guard,
+  not retained content). If the user rejects an add, the cell is deleted and its
+  source is unrecoverable, so the feed can report the fact but not the code. See
+  §8.
 
 ### 4.5 Turns are labelled relatively, and plan turns are included
 
@@ -223,16 +229,21 @@ the user's intent, and the bulky payload never repeats.
   and *then* return `"cancelled"` (`service.py:372`), so its edits may or may not
   be live — and the feed does not guess. It states what the turn did and that it
   was cancelled, and points at `notebook.ipynb` for current truth.
-- **`STALE`** is carried through from the per-op ledger's derived staleness
-  (P2). A stale operation is factual information; suppressing it would be its own
-  kind of inference.
-- **Mixed-status turns are fine.** A turn with three operations, two kept and one
-  undone, renders one header and three status lines. This is history, not a
+- **Applied is not kept.** An operation resting at `pending` is in the notebook
+  but unreviewed. Rendering it as `KEPT` would manufacture an approval the user
+  never gave, which is the same class of error as guessing at a cancelled turn.
+  It gets its own status: `APPLIED but not yet reviewed by the user`.
+- **`STALE`** is carried through from the ledger's derived staleness, as a
+  qualifier *beside* the status rather than as a replacement for it — a hunk can
+  be kept and since overwritten, and both facts matter. Suppressing it would be
+  its own kind of inference.
+- **Mixed-status cells are fine.** A cell with two hunks, one kept and one
+  undone, renders one header and two status lines. This is history, not a
   verdict — it does not need to reduce to a single status. **Supersedes D7.**
-- **The thread changes retroactively.** Pending operations are excluded (D6), so
-  an operation that was pending during turn N+1 is invisible then and appears as
-  kept or undone in turn N+2. Accepted and stated deliberately: the feed reflects
-  what is known now, not what was known then.
+- **The thread changes retroactively.** An operation reviewed between turn N+1
+  and N+2 is reported as `APPLIED` in the first and `KEPT` or `UNDONE` in the
+  second. Accepted and stated deliberately: the feed reflects what is known now,
+  not what was known then.
 
 ---
 
@@ -260,8 +271,14 @@ class AgentTurn:
 ```
 
 Set in `undo()` alongside the existing bookkeeping, and never cleared by
-pruning. Once C1 lands, per-operation status supersedes this at the operation
-level (§7, P2).
+pruning.
+
+**Post-C1 revision.** The shipped `undo()` also settles the turn's operations to
+`rejected`, and pruning does not touch `operations`. For any cell the ledger
+covers, undo is therefore derivable and this field is redundant — D11's original
+rationale no longer holds as stated. It survives with a narrower job: the ledger
+has no kind for retyped, deleted, or moved cells (they stay whole-turn undo), so
+for those `undone_at` is the only record that the change was reversed. See D11′.
 
 **This change is backend-only, with no frontend surface.** That holds for free:
 `agent_turn_routes.py:42` builds the API response field-by-field with explicit
@@ -277,7 +294,8 @@ def thread_memory(self, session_id: str, *, limit: int = 10) -> tuple[MemoryEntr
 Read-only. Walks `self._turns` under `self._lock`, oldest → newest. Returns
 immutable `MemoryEntry` values.
 
-Excluded: non-terminal turns, the in-flight turn itself, and pending operations.
+Excluded: non-terminal turns and the in-flight turn itself. Pending operations
+are *included* — see D21.
 
 Status is derived at read time (A5), never stored on the entry.
 
@@ -369,17 +387,24 @@ It made no changes. It replied: "Cell 7 loads the raw CSV and ..."
 - **P1 — the feed.** `thread_memory()` + `build(memory=)` + rendering. Depends
   only on P0.
 - **P2 — ledger reconciliation.** Replace turn-level status with per-operation
-  status once C1 lands, so `KEPT` / `UNDONE` is per-op rather than per-turn.
+  status once C1 lands, so the outcome is per-op rather than per-turn.
 
 P0 and P1 do not have to wait for the per-op branch. P2 is the merge point.
+
+**Status: all three are done.** C1 shipped to `main` in PR #15 while this branch
+sat unmerged, and P2 turned out to be required rather than optional: the ledger
+made turn-level status actively wrong, not merely coarse. Rebasing also
+surfaced a fourth item the phasing had not anticipated — `build()` grew a second
+instruction writer for Trusted turns (`_build_trusted`), and memory reaching
+only the Blocking one would have failed silently. See D23.
 
 ---
 
 ## 8. Known gaps
 
-- **Manual user edits are invisible** (§4.4). If the user rewrites the agent's
-  output by hand, the agent reads it as neutral current state. Likely belongs
-  with the per-op ledger's staleness rules rather than here.
+- ~~**Manual user edits are invisible**~~ — **closed.** It did belong with the
+  ledger's staleness rules: `stale_cell_ids()` derives it, and the feed now
+  carries a `STALE` qualifier (D22).
 - **Execution errors are only *automatically* out of scope.** Tracebacks already
   reach the agent today via the `error`-kind attachment
   (`AgentChatPanel.tsx:83`), composed into the prompt by hand. What is missing is
@@ -392,7 +417,17 @@ P0 and P1 do not have to wait for the per-op branch. P2 is the merge point.
   or "new thread" control. When memory poisons results — the agent fixating on an
   approach you rejected — the only exit is closing the notebook. This needs a
   UI surface, which is why it is not in this backend-only change.
-- **`revert_cell()` records nothing** (§4.4). Blind spot until C1 lands.
+- **`revert_cell()` records nothing** (§4.4). C1 shipped without removing
+  per-cell revert, so D13's "we are about to delete it" no longer excuses this.
+  A cell reverted that way is reported by its ledger state, which the revert did
+  not touch — the one remaining way for the feed to be confidently wrong. It
+  needs either an outcome marker or the removal D13 assumed.
+- **A rejected structural add loses its content.** The ledger keeps a
+  `source_hash` for added cells, not the source, so once the user rejects an add
+  the cell's text is gone everywhere. The feed can say an added cell was removed
+  but cannot show what was in it — the one place D2's "undone content exists
+  nowhere else" argument cannot be honoured without changing the ledger's memory
+  profile.
 - **No cross-session memory.** Reopen the notebook tomorrow and the thread is gone.
 - **No standing preferences** ("this notebook uses polars"). That is durable
   configuration, not turn history.
@@ -425,8 +460,18 @@ P0 and P1 do not have to wait for the per-op branch. P2 is the merge point.
   `(+N referenced selections)` (§4.6). A prompt without the delimiter is
   unchanged.
 - A cancelled turn that applied changes renders `CANCELLED`, never `KEPT` (§4.7).
-- A turn with mixed per-op outcomes renders one header and per-op status lines.
 - Relative labels count contiguously from the newest entry (§4.5).
+
+**Post-C1 (D21–D25):**
+
+- An unreviewed operation renders `APPLIED`, never `KEPT` (D21). This is the one
+  that would otherwise have shipped as a silent lie.
+- An accepted operation renders `KEPT`.
+- A cell with one hunk rejected and one kept renders **one** header and both
+  status lines, and carries only the rejected hunk's content (D24).
+- A hand-edited cell renders `STALE` *in addition to* its outcome (D22).
+- A Trusted turn's `INSTRUCTIONS.md` carries the same feed as a Blocking one,
+  without displacing its structural rules (D23).
 
 **Integration:**
 
@@ -481,9 +526,9 @@ holds across prompts.
 | D8 | Hand-built feed, keep `--no-session-persistence` | CLI `--resume`; hybrid resume + corrections | `--resume` gives *false* memory — the transcript records edits succeeding, with no representation of undo. Also forces disk persistence and carries stale workspace paths |
 | D9 | Thread-shaped and unfiltered | Per-cell grouping (D3) | User reframe: memory should be "what it did in the whole thread, like how you chat with Claude." Accepts that a scoped turn can recall out-of-scope cells; A6 keeps write-scope unchanged |
 | D10 | Include the reply for no-op turns only, truncated | Omit no-op turns; keep content-free stubs; include every reply | D5 left read-only turns as empty stubs once the model became a thread. Recording that the user spoke while discarding what was said defeats the purpose |
-| D11 | Add `undone_at` to `AgentTurn` | Derive undo from existing fields | Not derivable: `undo()` and `_prune_history_locked()` both null the checkpoint and leave `state == "completed"` |
+| D11 | ~~Add `undone_at` to `AgentTurn`~~ | Derive undo from existing fields | **Rationale falsified by C1** — see D11′ |
 | D12 | No retention priority for undone turns | Protect them from pruning like `_latest_applied_turn_id` | The feed window (10) is far tighter than `MAX_TERMINAL_TURNS` (50), so count-based eviction cannot reach a turn the feed wants. Not worth complicating pruning for the byte-cap edge case |
-| D13 | `revert_cell()` records nothing | Add an outcome marker there too | C1 deletes per-cell revert; building a marker for it now is building something we are about to remove |
+| D13 | ~~`revert_cell()` records nothing~~ | Add an outcome marker there too | **Premise falsified.** C1 shipped and `revert_cell()` is still there (`service.py:1029`), so "we are about to remove it" was wrong. The blind spot is now unexcused; §8 carries it |
 | D14 | Backend-only, no frontend change | Expose `undone_at` in the turn API | Not needed by any surface. Holds for free — `agent_turn_routes.py:42` serializes explicit keys, so nothing leaks |
 | D15 | Relative labels (`3 turns ago`) | Stable session ordinal | `AgentTurn` has no ordinal; a synthetic counter would have to survive pruning. Labels are computed at build time and memory is frozen per turn, so drift is harmless |
 | D16 | State status, never infer it: `CANCELLED` is its own status, mixed-status turns render per-op lines, `STALE` is carried through | Collapse cancelled into `KEPT`/`FAILED`; reduce mixed turns to one verdict; suppress `STALE` | `_run` can apply changes and *then* cancel (`service.py:372`), so any collapse is a guess. The feed is factual history, not a verdict. Supersedes D7 |
@@ -491,6 +536,20 @@ holds across prompts.
 | D18 | Include plan-mode turns, reply capped at ~1500 chars | Exclude them; apply the 500-char cap | A plan is the entire content of a plan turn; truncating it to two sentences is worse than omitting it |
 | D19 | The thread may change retroactively | Freeze each turn's view of history permanently | Pending ops are excluded (D6), so an op becomes visible only once decided. The feed reflects what is known now — stated deliberately rather than left as an accident |
 | D20 | Escape hatch ("clear memory" / "new thread") deferred | Build it with P1 | Needs a UI surface; this change is backend-only. Its own worktree |
+
+### 10.1 Revisions after rebasing onto the shipped ledger
+
+C1 (per-operation accept/undo) landed on `main` in PR #15 while this branch was
+unmerged. These supersede or add to the decisions above.
+
+| # | Decision | Alternatives considered | Why |
+|---|---|---|---|
+| D11′ | Keep `undone_at`, but as the marker for cells the ledger cannot represent | Delete it as redundant; keep D11's original framing | `undo()` now settles operations to `rejected` and pruning leaves `operations` alone, so undo *is* derivable for covered cells. But retyped/deleted/moved cells get no operations by design, and for those the field is the only record |
+| D21 | Include pending operations, as `APPLIED` rather than `KEPT` | Exclude them (D6); fold them into `KEPT` | `pending` no longer means "undecided proposal" — `APPLIED_STATES = {pending, accepted}`, so the change is already in the notebook. Excluding it empties the feed, since `pending` is where operations rest until the user acts. Folding it into `KEPT` invents an approval. **Supersedes D6** |
+| D22 | Carry `STALE` as a qualifier beside the status | A fourth status value; suppress it | A hunk can be kept *and* since hand-edited; those are two facts, and a single field would have to drop one. Closes the §8 manual-edit gap using `stale_cell_ids()` |
+| D23 | Render memory in both instruction writers | Blocking only; extract one shared writer | `_build_trusted()` is a second `INSTRUCTIONS.md` path. Memory reaching only one fails *silently* — a Trusted turn would just quietly forget the thread. Extracting a shared writer is the better end state but a larger change than this branch should carry |
+| D24 | Split a mixed cell into two entries under one header | One verdict per cell; one entry per hunk | Rounding a half-rejected cell to a single verdict has to be wrong in one direction, and rounding towards `KEPT` tells the agent its rejected code is live. Per-hunk entries were the alternative; per-outcome keeps the common single-outcome rendering unchanged |
+| D25 | Recover undone content by composing the ledger with rejected hunks restored | Store the rejected text on the operation | `compose` is already a pure function of pre-turn source and states, so the content is recomputable. Storing it would duplicate what `changes` already holds and contradict the ledger's "index ranges only, never copies of the line text" rule |
 
 ---
 
