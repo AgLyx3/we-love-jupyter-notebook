@@ -417,11 +417,13 @@ only the Blocking one would have failed silently. See D23.
   or "new thread" control. When memory poisons results — the agent fixating on an
   approach you rejected — the only exit is closing the notebook. This needs a
   UI surface, which is why it is not in this backend-only change.
-- **`revert_cell()` records nothing** (§4.4). C1 shipped without removing
-  per-cell revert, so D13's "we are about to delete it" no longer excuses this.
-  A cell reverted that way is reported by its ledger state, which the revert did
-  not touch — the one remaining way for the feed to be confidently wrong. It
-  needs either an outcome marker or the removal D13 assumed.
+- ~~**`revert_cell()` records nothing**~~ — **closed, and it was never going to
+  need a marker.** C1 did not delete per-cell revert as D13 predicted; it did
+  something better and rewrote it to delegate to `reject_operations`, so there
+  is one reject path rather than a parallel hash-guarded one. A cell reverted
+  that way settles its operations to `rejected` like any other, and the feed
+  reports it as `UNDONE` with its diff. D13 reached the right call for a reason
+  that turned out to be wrong twice over.
 - **A rejected structural add loses its content.** The ledger keeps a
   `source_hash` for added cells, not the source, so once the user rejects an add
   the cell's text is gone everywhere. The feed can say an added cell was removed
@@ -552,7 +554,7 @@ ledger-derived feed carries the rejection as legibly as the whole-turn one did.
 | D10 | Include the reply for no-op turns only, truncated | Omit no-op turns; keep content-free stubs; include every reply | D5 left read-only turns as empty stubs once the model became a thread. Recording that the user spoke while discarding what was said defeats the purpose |
 | D11 | ~~Add `undone_at` to `AgentTurn`~~ | Derive undo from existing fields | **Rationale falsified by C1** — see D11′ |
 | D12 | No retention priority for undone turns | Protect them from pruning like `_latest_applied_turn_id` | The feed window (10) is far tighter than `MAX_TERMINAL_TURNS` (50), so count-based eviction cannot reach a turn the feed wants. Not worth complicating pruning for the byte-cap edge case |
-| D13 | ~~`revert_cell()` records nothing~~ | Add an outcome marker there too | **Premise falsified.** C1 shipped and `revert_cell()` is still there (`service.py:1029`), so "we are about to remove it" was wrong. The blind spot is now unexcused; §8 carries it |
+| D13 | ~~`revert_cell()` records nothing~~ | Add an outcome marker there too | **Premise wrong, conclusion right.** C1 neither removed per-cell revert nor left it unrecorded — it re-expressed it on the ledger, so a revert settles operations to `rejected` and reaches the feed for free. Building a marker would have been wasted either way |
 | D14 | Backend-only, no frontend change | Expose `undone_at` in the turn API | Not needed by any surface. Holds for free — `agent_turn_routes.py:42` serializes explicit keys, so nothing leaks |
 | D15 | Relative labels (`3 turns ago`) | Stable session ordinal | `AgentTurn` has no ordinal; a synthetic counter would have to survive pruning. Labels are computed at build time and memory is frozen per turn, so drift is harmless |
 | D16 | State status, never infer it: `CANCELLED` is its own status, mixed-status turns render per-op lines, `STALE` is carried through | Collapse cancelled into `KEPT`/`FAILED`; reduce mixed turns to one verdict; suppress `STALE` | `_run` can apply changes and *then* cancel (`service.py:372`), so any collapse is a guess. The feed is factual history, not a verdict. Supersedes D7 |

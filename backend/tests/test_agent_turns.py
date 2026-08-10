@@ -638,6 +638,37 @@ def test_partly_undone_cell_reports_both_outcomes_under_one_header(notebook_payl
     assert "+ first = 100" not in memory
 
 
+def test_per_cell_revert_reaches_the_feed_like_any_other_reject(notebook_payload):
+    # revert_cell is a second entry point, not a second mechanism: it delegates
+    # to reject_operations. Pinning that, because the design doc spent two
+    # revisions assuming this path recorded nothing.
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    recorder = _RecordingFakeAdapter([
+        FakeAttempt(edits={"editable/cell_editable.py": "value = 2\n"}),
+        FakeAttempt(),
+    ])
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=recorder, timeout=2,
+    )
+    scopes.add("editable", editable=True)
+    first = turns.start(
+        prompt="bump it", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    applied = turns.get(first.turn_id)
+    turns.revert_cell(
+        first.turn_id, "editable", session_id=applied.session_id,
+        expected_revision=applied.applied_revision,
+    )
+    assert [item.state for item in turns.get(first.turn_id).operations] == ["rejected"]
+
+    memory = _memory_of_next_turn(documents, scopes, turns, recorder)
+    assert "STATUS: UNDONE by the user" in memory
+    assert "+ value = 2" in memory
+
+
 def test_hand_edited_cell_is_flagged_stale_without_losing_its_outcome(notebook_payload):
     # A manual edit reaches the document through a path the ledger knows nothing
     # about. Without this the feed keeps asserting an account of the cell that
