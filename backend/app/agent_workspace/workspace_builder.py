@@ -135,14 +135,26 @@ def _render_entry(entry: MemoryEntry, distance: int, indexed: dict) -> list[str]
         if split:
             lines.append(f"It edited {reference}, and the parts were reviewed separately:")
         for operation in operations:
-            body = _diff_body(operation)
-            described = _describe(operation, body)
+            is_add = operation.kind == "add"
+            body = [] if is_add else _diff_body(operation)
+            described = "added this whole cell" if is_add else _describe(operation, body)
             lines.append(
                 f"  - {described}." if split
+                else f"It added {reference} as a new cell." if is_add
                 else f"It edited {reference}: {described}."
             )
             prefix = "    " if split else indent
-            if operation.status == "UNDONE":
+            if is_add and operation.status == "UNDONE":
+                # The ledger stores a hash of the added source, not the source,
+                # so unlike an undone edit there is no diff to show. Say that
+                # outright rather than leaving the agent to assume the cell is
+                # still there.
+                lines.append(
+                    f"{prefix}STATUS: UNDONE by the user — the cell was removed. "
+                    "Its content is not recorded here. Do not add it back unless "
+                    "the request asks for it again."
+                )
+            elif operation.status == "UNDONE":
                 lines.append(
                     f"{prefix}STATUS: UNDONE by the user. This code is NOT in the "
                     "notebook. Do not re-propose it."

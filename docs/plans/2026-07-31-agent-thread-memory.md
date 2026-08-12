@@ -426,10 +426,10 @@ only the Blocking one would have failed silently. See D23.
   that turned out to be wrong twice over.
 - **A rejected structural add loses its content.** The ledger keeps a
   `source_hash` for added cells, not the source, so once the user rejects an add
-  the cell's text is gone everywhere. The feed can say an added cell was removed
-  but cannot show what was in it — the one place D2's "undone content exists
-  nowhere else" argument cannot be honoured without changing the ledger's memory
-  profile.
+  the cell's text is gone everywhere. The feed reports the removal and says
+  outright that the content is not recorded — the one place D2's "undone content
+  exists nowhere else" argument cannot be honoured without changing the ledger's
+  memory profile. Reporting the *fact* is not optional though: see D26.
 - **No cross-session memory.** Reopen the notebook tomorrow and the thread is gone.
 - **No standing preferences** ("this notebook uses polars"). That is durable
   configuration, not turn history.
@@ -575,6 +575,7 @@ unmerged. These supersede or add to the decisions above.
 | D22 | Carry `STALE` as a qualifier beside the status | A fourth status value; suppress it | A hunk can be kept *and* since hand-edited; those are two facts, and a single field would have to drop one. Closes the §8 manual-edit gap using `stale_cell_ids()` |
 | D23 | Render memory in both instruction writers | Blocking only; extract one shared writer | `_build_trusted()` is a second `INSTRUCTIONS.md` path. Memory reaching only one fails *silently* — a Trusted turn would just quietly forget the thread. Extracting a shared writer is the better end state but a larger change than this branch should carry |
 | D24 | Split a mixed cell into two entries under one header | One verdict per cell; one entry per hunk | Rounding a half-rejected cell to a single verdict has to be wrong in one direction, and rounding towards `KEPT` tells the agent its rejected code is live. Per-hunk entries were the alternative; per-outcome keeps the common single-outcome rendering unchanged |
+| D26 | Structural adds get their own memory entry, described rather than diffed | Leave them out (they are not in `changes`); synthesise a diff from `""` | Found in review: an add-only Trusted turn rendered as "It made no changes", contradicting its own reply and inviting the agent to add the cell again. Adds carry no before/after pair and the ledger keeps a hash rather than the text, so the entry states what happened and, when rejected, that the content is gone |
 | D25 | Recover undone content by composing the ledger with rejected hunks restored | Store the rejected text on the operation | `compose` is already a pure function of pre-turn source and states, so the content is recomputable. Storing it would duplicate what `changes` already holds and contradict the ledger's "index ranges only, never copies of the line text" rule |
 
 ---

@@ -388,6 +388,26 @@ class AgentTurnService:
                     previous_source=current, next_source=restored,
                     stale=change.cell_id in stale,
                 ))
+        # Cells a Trusted turn added are absent from `changes` — they have no
+        # origin id, so there is no before/after pair to record — and live only
+        # on the ledger. Without this an add-only turn reports "no changes",
+        # which is worse than silence: it is a false statement the agent may act
+        # on by adding the same cell again.
+        for operation in turn.operations:
+            if operation.kind != KIND_STRUCTURAL_ADD:
+                continue
+            entries.append(MemoryOperation(
+                cell_id=operation.cell_id, kind="add",
+                status=(
+                    "UNDONE" if operation.state == REJECTED
+                    else "KEPT" if operation.state == ACCEPTED else "APPLIED"
+                ),
+                # The ledger keeps a hash of the added source, not the source.
+                # A kept add is readable in the notebook; a rejected one is gone
+                # for good, so the feed reports the fact without the content.
+                previous_source="", next_source="",
+                stale=operation.cell_id in stale,
+            ))
         return tuple(entries)
 
     def _thread_memory_or_empty(

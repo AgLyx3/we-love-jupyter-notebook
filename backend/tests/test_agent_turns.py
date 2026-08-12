@@ -15,6 +15,8 @@ from backend.app.agent_turns.service import (
 from backend.app.api.agent_turn_routes import (
     MAX_TURN_SUMMARY_BYTES, StartTurnRequest, serialize_turn, serialize_turn_summary,
 )
+from backend.app.agent_turns.operations import build_add_operation, with_state
+from backend.app.agent_workspace.workspace_builder import _render_entry
 from backend.app.boundary_validation.validator import CandidateCellSourceChange
 from backend.app.agent_workspace.adapters import FakeAgentAdapter, FakeAttempt
 from backend.app.agent_workspace.models import (
@@ -636,6 +638,54 @@ def test_partly_undone_cell_reports_both_outcomes_under_one_header(notebook_payl
     # agent might read as still pending.
     assert "+ third = 300" in memory
     assert "+ first = 100" not in memory
+
+
+def _add_only_trusted_turn(state="pending"):
+    """The shape _run_trusted produces when the agent only added cells.
+
+    Adds have no origin id, so they are filtered out of `changes` and exist only
+    on the ledger.
+    """
+    turn = AgentTurn(
+        turn_id="t", session_id="s", base_revision=1, prompt="add a plotting cell",
+        write_scope="trusted", state="completed", final_output="Added a cell.",
+    )
+    operations = (build_add_operation(
+        turn_id="t", cell_id="new1", source="import matplotlib\n",
+    ),)
+    if state != "pending":
+        operations = with_state(operations, operations[0].operation_id, state)
+    turn.operations = operations
+    return turn
+
+
+def test_add_only_turn_is_not_reported_as_having_made_no_changes():
+    # An added cell is absent from `changes` and carries no hunk, so iterating
+    # either one alone loses it entirely — and the empty-operations branch then
+    # states "It made no changes", which is false and invites the agent to add
+    # the same cell again.
+    entry = AgentTurnService._memory_entry(_add_only_trusted_turn())
+    rendered = "\n".join(_render_entry(entry, 1, {"new1": (3, {})}))
+    assert "It made no changes" not in rendered
+    assert "added cell 3 (id new1) as a new cell" in rendered
+    assert "STATUS: APPLIED but not yet reviewed by the user" in rendered
+
+
+def test_rejected_add_reports_the_removal_and_admits_it_has_no_content():
+    # The ledger keeps a hash of the added source, not the source, so there is
+    # no diff to carry. Saying so is the point: silence would read as "the cell
+    # is still there".
+    entry = AgentTurnService._memory_entry(_add_only_trusted_turn("rejected"))
+    rendered = "\n".join(_render_entry(entry, 1, {}))
+    assert "the cell was removed" in rendered
+    assert "Its content is not recorded here" in rendered
+    assert "import matplotlib" not in rendered
+
+
+def test_accepted_add_is_reported_as_kept():
+    entry = AgentTurnService._memory_entry(_add_only_trusted_turn("accepted"))
+    rendered = "\n".join(_render_entry(entry, 1, {"new1": (3, {})}))
+    assert "STATUS: KEPT" in rendered
 
 
 def test_per_cell_revert_reaches_the_feed_like_any_other_reject(notebook_payload):
