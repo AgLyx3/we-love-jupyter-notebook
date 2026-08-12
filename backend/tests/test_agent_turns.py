@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from backend.app.agent_turns.service import (
     AgentTurn, AgentTurnNotFound, AgentTurnService, AgentTurnServiceShuttingDown,
     MAX_TURN_HISTORY_BYTES, RevertConflict, UndoConflict, UnknownAgentAdapter,
+    UnknownAgentModel,
 )
 from backend.app.api.agent_turn_routes import (
     MAX_TURN_SUMMARY_BYTES, StartTurnRequest, serialize_turn, serialize_turn_summary,
@@ -1247,6 +1248,60 @@ def test_service_requires_at_least_one_adapter():
         AgentTurnService(
             documents=documents, scopes=TurnScopeService(documents), adapters={},
         )
+
+
+def test_unknown_model_is_rejected_without_running(notebook_payload):
+    # Regression: `model` was a Literal until models became per-adapter, and
+    # widening it to a plain string meant a typo fell through to the CLI's own
+    # default — a silently wrong (and billed) turn. `agent` already 422s; match it.
+    class TwoModelAdapter:
+        auxiliary_paths = frozenset()
+        model_options = (
+            {"value": "default", "label": "Default"},
+            {"value": "gpt-5.5", "label": "GPT-5.5"},
+        )
+        call_count = 0
+
+        def run(self, workspace, *, timeout, cancel_event, model=None, permission_mode="acceptEdits"):
+            type(self).call_count += 1
+            return AdapterResult("ran")
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    adapter = TwoModelAdapter()
+    service = AgentTurnService(
+        documents=documents, scopes=scopes, adapters={"codex": adapter},
+        default_agent="codex", timeout=1,
+    )
+    with pytest.raises(UnknownAgentModel):
+        service.start(
+            prompt="explain", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision, model="gtp-5.5", background=False,
+        )
+    assert TwoModelAdapter.call_count == 0
+    # The rejected start must not leak the mutation lease.
+    turn = service.start(
+        prompt="explain", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, model="gpt-5.5", background=False,
+    )
+    assert turn.state == "completed", turn.error
+
+
+def test_unknown_model_surfaces_as_422(notebook_payload):
+    app = create_app(agent_adapter=FakeAgentAdapter())
+    with TestClient(app) as client:
+        uploaded = client.post(
+            "/notebooks/upload",
+            files={"file": ("sample.ipynb", notebook_payload(), "application/json")},
+        ).json()
+        response = client.post("/agent-turns", json={
+            "sessionId": uploaded["sessionId"],
+            "expectedDocumentRevision": uploaded["revision"],
+            "prompt": "explain", "model": "sonnet",
+        })
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "unknown_agent_model"
 
 
 def test_unknown_agent_is_rejected_without_running(notebook_payload):

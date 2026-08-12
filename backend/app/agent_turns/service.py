@@ -55,6 +55,12 @@ LINEAGE_ACTIONS = ("reject",)
 PERMISSION_MODE_BY_MODE = {"edit": "acceptEdits", "plan": "plan"}
 
 
+def _model_values(adapter: AgentAdapter) -> frozenset[str]:
+    """The model ids this adapter offers, the same list the UI is given."""
+    options = getattr(adapter, "model_options", ({"value": "default"},))
+    return frozenset(option["value"] for option in options)
+
+
 def _file_access_via_shell(adapter: AgentAdapter) -> bool:
     """Whether the turn's instructions must leave the shell open for file access.
 
@@ -113,6 +119,15 @@ class UnknownAgentAdapter(NotebookDomainError):
 
     def __init__(self, agent: str) -> None:
         super().__init__(agent=agent)
+
+
+class UnknownAgentModel(NotebookDomainError):
+    code = "unknown_agent_model"
+    message = "Requested model is not available for this agent"
+    status_code = 422
+
+    def __init__(self, agent: str, model: str) -> None:
+        super().__init__(agent=agent, model=model)
 
 
 @dataclass
@@ -206,6 +221,12 @@ class AgentTurnService:
                 raise AgentTurnServiceShuttingDown()
             if agent not in self.adapters:
                 raise UnknownAgentAdapter(agent)
+            # The request body cannot type-check the model any more — the valid
+            # set is per-adapter — so check it against the chosen adapter here.
+            # Otherwise a typo'd model silently ran on the CLI's own default and
+            # the user was billed for a turn they did not ask for.
+            if model not in _model_values(self.adapters[agent]):
+                raise UnknownAgentModel(agent, model)
             try:
                 lease = self.documents.coordinator.acquire(
                     operation_type="agent_turn", operation_id=turn_id
