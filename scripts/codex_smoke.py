@@ -3,6 +3,8 @@
 Usage:
     python3 scripts/codex_smoke.py             # editable turn
     python3 scripts/codex_smoke.py --read-only # read-only turn
+    python3 scripts/codex_smoke.py --trusted   # whole-notebook structural turn
+    python3 scripts/codex_smoke.py --plan      # plan turn (writes nothing)
     python3 scripts/codex_smoke.py --agent claude
 
 Runs the real CLI (spends tokens); requires a logged-in codex CLI.
@@ -27,6 +29,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--agent", default="codex")
     parser.add_argument("--read-only", action="store_true")
+    parser.add_argument("--trusted", action="store_true")
+    parser.add_argument("--plan", action="store_true")
     parser.add_argument("--timeout", type=float, default=600.0)
     args = parser.parse_args()
 
@@ -40,8 +44,10 @@ def main() -> int:
         upload.raise_for_status()
         snapshot = upload.json()
         session, revision = snapshot["sessionId"], snapshot["revision"]
-        if args.read_only:
+        if args.read_only or args.plan:
             prompt = "Explain what this notebook does in two sentences."
+        elif args.trusted:
+            prompt = "Add a markdown cell at the end summarizing what the notebook does."
         else:
             cell = next(c for c in snapshot["cells"] if c["cellType"] == "code")
             client.post("/turn-scope/editable-cells", json={
@@ -52,6 +58,8 @@ def main() -> int:
         started = client.post("/agent-turns", json={
             "sessionId": session, "expectedDocumentRevision": revision,
             "prompt": prompt, "agent": args.agent,
+            "writeScope": "trusted" if args.trusted else "blocking",
+            "mode": "plan" if args.plan else "edit",
         })
         started.raise_for_status()
         turn_id = started.json()["turnId"]
@@ -63,6 +71,7 @@ def main() -> int:
             time.sleep(2)
         print(f"agent: {turn['agent']}  state: {turn['state']}  attempts: {turn['attempts']}")
         print(f"changes: {[c['cellId'] for c in turn['changes']]}")
+        print(f"structural ops: {[(o['op'], o.get('cellId')) for o in turn.get('structuralOps') or []]}")
         print(f"error: {turn['error']}")
         print(f"final output:\n{turn['finalOutput']}")
         return 0 if turn["state"] == "completed" and not turn["error"] else 1
