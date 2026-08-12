@@ -161,10 +161,18 @@ class AgentTurnService:
     ) -> None:
         self.documents = documents
         self.scopes = scopes
-        self.adapters: dict[str, AgentAdapter] = (
-            dict(adapters) if adapters else {"default": adapter}
-        )
-        self.default_agent = default_agent if adapters else "default"
+        # Both arguments default to None so either calling style works, which
+        # also makes "neither was passed" constructible. Reject it here rather
+        # than let a registry of {"default": None} surface as an AttributeError
+        # mid-turn, after the turn has already taken the document lease.
+        if adapters:
+            self.adapters: dict[str, AgentAdapter] = dict(adapters)
+            self.default_agent = default_agent
+        elif adapter is not None:
+            self.adapters = {"default": adapter}
+            self.default_agent = "default"
+        else:
+            raise ValueError("AgentTurnService requires adapter or a non-empty adapters registry")
         if self.default_agent not in self.adapters:
             raise ValueError("default_agent must be a registered adapter")
         self.builder = builder or AgentWorkspaceBuilder()

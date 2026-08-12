@@ -1236,6 +1236,19 @@ def test_shell_file_access_reaches_instructions_on_every_turn_shape(notebook_pay
         assert "shell/exec tool only to read and write files" in instructions
 
 
+def test_service_requires_at_least_one_adapter():
+    # Regression: with neither argument supplied the registry became
+    # {"default": None} and construction succeeded, deferring the failure to an
+    # AttributeError inside a running turn that already held the document lease.
+    documents = NotebookDocumentService()
+    with pytest.raises(ValueError):
+        AgentTurnService(documents=documents, scopes=TurnScopeService(documents))
+    with pytest.raises(ValueError):
+        AgentTurnService(
+            documents=documents, scopes=TurnScopeService(documents), adapters={},
+        )
+
+
 def test_unknown_agent_is_rejected_without_running(notebook_payload):
     documents = NotebookDocumentService()
     snapshot = documents.import_notebook(notebook_payload())
