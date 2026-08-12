@@ -745,6 +745,34 @@ def test_codex_editable_turn_uses_workspace_write_sandbox(notebook_payload, monk
         builder.destroy(workspace)
 
 
+def test_codex_adapter_grants_write_sandbox_for_trusted_workspace(
+    monkeypatch, notebook_payload,
+):
+    # Regression: the adapter read workspace.manifest.editable_cells, which a
+    # Trusted (TrustedWorkspaceManifest) workspace does not have, so a Trusted turn
+    # crashed with AttributeError. It must get workspace-write (whole notebook is
+    # editable) — read-only would silently strand every structural edit.
+    builder, workspace = _trusted_workspace(notebook_payload)
+    captured = {}
+
+    class StubRunner:
+        def run(self, args, **kwargs):
+            captured["args"] = args
+            return "restructured", ""
+
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run", _codex_version_stub(),
+    )
+    try:
+        result = CodexAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event()
+        )
+        assert result.final_output == "restructured"
+        assert captured["args"][captured["args"].index("--sandbox") + 1] == "workspace-write"
+    finally:
+        builder.destroy(workspace)
+
+
 def test_codex_read_only_and_plan_turns_use_read_only_sandbox(notebook_payload, monkeypatch):
     captured = {}
 

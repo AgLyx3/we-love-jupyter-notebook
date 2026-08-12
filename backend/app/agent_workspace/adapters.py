@@ -228,9 +228,15 @@ class CodexAgentAdapter:
             prompt = CODEX_READ_HINT + prompt
         # Codex scopes writes by sandbox directory rather than per tool: an
         # editable turn gets workspace-write (the workspace audit still rejects
-        # writes outside editable/); read-only and plan turns get no write
-        # capability at all.
-        editable = bool(workspace.manifest.editable_cells) and permission_mode != "plan"
+        # writes outside the paths the turn owns); read-only and plan turns get
+        # no write capability at all. A Trusted workspace has no editable_cells
+        # because the whole notebook is editable, so it always needs write.
+        if permission_mode == "plan":
+            editable = False
+        elif workspace.is_trusted:
+            editable = True
+        else:
+            editable = bool(workspace.manifest.editable_cells)
         sandbox = "workspace-write" if editable else "read-only"
         with tempfile.TemporaryDirectory(prefix="codex-final-message-") as capture_dir:
             final_message_path = Path(capture_dir) / "final-message.txt"
