@@ -57,6 +57,6 @@ describe("AgentChatPanel selection attachments", () => {
     const onSubmit = vi.fn();
     render(panel({ attachments: [errorAttachment], onSubmit }));
     await userEvent.click(screen.getByRole("button", { name: /Send/ }));
-    expect(onSubmit).toHaveBeenCalledWith("", { model: "default", mode: "edit", writeScope: "blocking" });
+    expect(onSubmit).toHaveBeenCalledWith("", { agent: "default", model: "default", mode: "edit", writeScope: "blocking" });
   });
 });

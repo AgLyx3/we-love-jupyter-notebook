@@ -11,18 +11,24 @@ from ..notebook_document.models import NotebookDomainError
 from .notebook_routes import serialize_snapshot
 
 router = APIRouter(prefix="/agent-turns")
+adapters_router = APIRouter()
 MAX_TURN_SUMMARY_BYTES = 128 * 1024
+
+
+def _always_available() -> bool:
+    return True
 
 
 class StartTurnRequest(BaseModel):
     session_id: str = Field(alias="sessionId")
     expected_revision: int = Field(alias="expectedDocumentRevision")
     prompt: str = Field(min_length=1)
-    model: Literal["default", "opus", "sonnet", "haiku"] = "default"
+    model: str = Field(default="default", max_length=64)
     mode: Literal["edit", "plan"] = "edit"
     write_scope: Literal["blocking", "trusted"] = Field(
         default="blocking", alias="writeScope"
     )
+    agent: str = Field(default="default", max_length=64)
 
 
 class MutationRequest(BaseModel):
@@ -87,6 +93,7 @@ def serialize_turn(
         "model": turn.model,
         "mode": turn.mode,
         "writeScope": turn.write_scope,
+        "agent": turn.agent,
         "editableCellIds": list(turn.editable_cell_ids),
         "contextCellIds": list(turn.context_cell_ids),
         "undoEligible": undo_eligible,
@@ -215,6 +222,38 @@ def _serialize_current(service, turn: AgentTurn) -> dict[str, Any]:
     )
 
 
+@adapters_router.get("/agent-adapters")
+def list_agent_adapters(request: Request) -> dict[str, Any]:
+    service = request.app.state.agent_turn_service
+    # Both real adapters are registered on every start, so without this filter
+    # the composer offered an agent whose CLI is not installed and the turn only
+    # discovered that after taking the document lease. An adapter that declares
+    # no probe (the fakes) is assumed present.
+    available = {
+        agent_id: adapter
+        for agent_id, adapter in service.adapters.items()
+        if getattr(adapter, "is_available", _always_available)()
+    }
+    return {
+        # A default whose CLI is missing would leave the composer pointing at an
+        # agent it cannot offer, so fall back to whatever is actually there.
+        "defaultAgent": service.default_agent if service.default_agent in available
+        else next(iter(available), service.default_agent),
+        "agents": [
+            {
+                "id": agent_id,
+                "label": getattr(adapter, "display_label", agent_id.title()),
+                "models": list(getattr(
+                    adapter, "model_options",
+                    ({"value": "default", "label": "Default"},),
+                )),
+                "modes": ["edit", "plan"],
+            }
+            for agent_id, adapter in available.items()
+        ],
+    }
+
+
 @router.post("", status_code=202)
 def start_turn(body: StartTurnRequest, request: Request) -> dict[str, Any]:
     service = request.app.state.agent_turn_service
@@ -222,6 +261,7 @@ def start_turn(body: StartTurnRequest, request: Request) -> dict[str, Any]:
         prompt=body.prompt, session_id=body.session_id,
         expected_revision=body.expected_revision,
         model=body.model, mode=body.mode, write_scope=body.write_scope,
+        agent=body.agent,
     )
     return _serialize_current(service, turn)
 

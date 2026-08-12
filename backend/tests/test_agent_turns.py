@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 
 from backend.app.agent_turns.service import (
     AgentTurn, AgentTurnNotFound, AgentTurnService, AgentTurnServiceShuttingDown,
-    MAX_TURN_HISTORY_BYTES, RevertConflict, UndoConflict,
+    MAX_TURN_HISTORY_BYTES, RevertConflict, UndoConflict, UnknownAgentAdapter,
+    UnknownAgentModel,
 )
 from backend.app.api.agent_turn_routes import (
     MAX_TURN_SUMMARY_BYTES, StartTurnRequest, serialize_turn, serialize_turn_summary,
@@ -190,6 +191,12 @@ def test_session_status_persists_bounded_turn_history_with_frozen_scope(
         created = api.post("/agent-turns", json={
             **preconditions, "prompt": "remember this turn",
         }).json()
+        assert created["agent"] == "default"
+        rejected = api.post("/agent-turns", json={
+            **preconditions, "prompt": "remember this turn", "agent": "nope",
+        })
+        assert rejected.status_code == 422
+        assert rejected.json()["error"]["code"] == "unknown_agent_adapter"
         for _ in range(100):
             current = api.get(f"/agent-turns/{created['turnId']}").json()
             if current["state"] == "completed":
@@ -1167,3 +1174,192 @@ def test_trusted_plan_turn_writes_nothing_and_is_not_structural(notebook_payload
     assert turn.structural_ops == ()
     assert turn.applied_revision is None
     assert documents.get_snapshot().revision == snapshot.revision  # nothing applied
+
+
+def test_turn_routes_to_selected_adapter_and_serializes_agent(notebook_payload):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    claude_like = FakeAgentAdapter([FakeAttempt(final_output="from claude")])
+    codex_like = FakeAgentAdapter([FakeAttempt(final_output="from codex")])
+    service = AgentTurnService(
+        documents=documents, scopes=scopes,
+        adapters={"claude": claude_like, "codex": codex_like},
+        default_agent="claude", timeout=1,
+    )
+    turn = service.start(
+        prompt="explain", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, agent="codex", background=False,
+    )
+    assert turn.agent == "codex"
+    assert turn.final_output == "from codex"
+    assert codex_like.call_count == 1 and claude_like.call_count == 0
+
+    turn = service.start(
+        prompt="explain", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    assert turn.agent == "claude"
+    assert claude_like.call_count == 1
+
+
+def test_shell_file_access_reaches_instructions_on_every_turn_shape(notebook_payload):
+    # Regression: the earlier fix bolted a clarifying hint onto the prompt only
+    # on non-plan turns, so a plan turn — the one shape whose entire job is
+    # reading the notebook — was still told to keep away from the shell. The
+    # rule now comes from the adapter's own capability, so it holds for plan,
+    # edit and Trusted alike.
+    seen: list[str] = []
+
+    class ShellReadingAdapter:
+        auxiliary_paths = frozenset()
+        file_access_via_shell = True
+
+        def run(self, workspace, *, timeout, cancel_event, model=None, permission_mode="acceptEdits"):
+            seen.append((workspace.root / "INSTRUCTIONS.md").read_text())
+            return AdapterResult("answered")
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    service = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=ShellReadingAdapter(), timeout=1,
+    )
+    for kwargs in ({"mode": "plan"}, {}, {"write_scope": "trusted"}):
+        turn = service.start(
+            prompt="explain the notebook", session_id=documents.get_snapshot().session_id,
+            expected_revision=documents.get_snapshot().revision, background=False, **kwargs,
+        )
+        assert turn.state == "completed", turn.error
+    assert len(seen) == 3
+    for instructions in seen:
+        assert "Do not run shell commands." not in instructions
+        assert "shell/exec tool only to read and write files" in instructions
+
+
+def test_service_requires_at_least_one_adapter():
+    # Regression: with neither argument supplied the registry became
+    # {"default": None} and construction succeeded, deferring the failure to an
+    # AttributeError inside a running turn that already held the document lease.
+    documents = NotebookDocumentService()
+    with pytest.raises(ValueError):
+        AgentTurnService(documents=documents, scopes=TurnScopeService(documents))
+    with pytest.raises(ValueError):
+        AgentTurnService(
+            documents=documents, scopes=TurnScopeService(documents), adapters={},
+        )
+
+
+def test_unknown_model_is_rejected_without_running(notebook_payload):
+    # Regression: `model` was a Literal until models became per-adapter, and
+    # widening it to a plain string meant a typo fell through to the CLI's own
+    # default — a silently wrong (and billed) turn. `agent` already 422s; match it.
+    class TwoModelAdapter:
+        auxiliary_paths = frozenset()
+        model_options = (
+            {"value": "default", "label": "Default"},
+            {"value": "gpt-5.5", "label": "GPT-5.5"},
+        )
+        call_count = 0
+
+        def run(self, workspace, *, timeout, cancel_event, model=None, permission_mode="acceptEdits"):
+            type(self).call_count += 1
+            return AdapterResult("ran")
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    adapter = TwoModelAdapter()
+    service = AgentTurnService(
+        documents=documents, scopes=scopes, adapters={"codex": adapter},
+        default_agent="codex", timeout=1,
+    )
+    with pytest.raises(UnknownAgentModel):
+        service.start(
+            prompt="explain", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision, model="gtp-5.5", background=False,
+        )
+    assert TwoModelAdapter.call_count == 0
+    # The rejected start must not leak the mutation lease.
+    turn = service.start(
+        prompt="explain", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, model="gpt-5.5", background=False,
+    )
+    assert turn.state == "completed", turn.error
+
+
+def test_unknown_model_surfaces_as_422(notebook_payload):
+    app = create_app(agent_adapter=FakeAgentAdapter())
+    with TestClient(app) as client:
+        uploaded = client.post(
+            "/notebooks/upload",
+            files={"file": ("sample.ipynb", notebook_payload(), "application/json")},
+        ).json()
+        response = client.post("/agent-turns", json={
+            "sessionId": uploaded["sessionId"],
+            "expectedDocumentRevision": uploaded["revision"],
+            "prompt": "explain", "model": "sonnet",
+        })
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "unknown_agent_model"
+
+
+def test_unknown_agent_is_rejected_without_running(notebook_payload):
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    adapter = FakeAgentAdapter()
+    service = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=adapter, timeout=1,
+    )
+    with pytest.raises(UnknownAgentAdapter):
+        service.start(
+            prompt="explain", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision, agent="gemini", background=False,
+        )
+    assert adapter.call_count == 0
+    # The failed start must not leak the mutation lease: a follow-up default
+    # turn still runs.
+    turn = service.start(
+        prompt="explain", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    assert turn.agent == "default"
+
+
+def test_agent_adapters_endpoint_reflects_registry():
+    app = create_app(agent_adapter=FakeAgentAdapter())
+    client = TestClient(app)
+    body = client.get("/agent-adapters").json()
+    assert body["defaultAgent"] == "default"
+    assert [a["id"] for a in body["agents"]] == ["default"]
+    assert body["agents"][0]["modes"] == ["edit", "plan"]
+    assert body["agents"][0]["models"][0] == {"value": "default", "label": "Default"}
+
+
+def test_agent_adapters_endpoint_hides_agents_whose_cli_is_missing():
+    # Regression: both real adapters were registered unconditionally and
+    # availability was only checked at turn time, so the composer offered an
+    # agent with no CLI installed and the turn failed after taking the lease.
+    class Installed:
+        display_label = "Installed"
+
+        def is_available(self):
+            return True
+
+    class Missing:
+        display_label = "Missing"
+
+        def is_available(self):
+            return False
+
+    app = create_app(
+        agent_adapters={"installed": Installed(), "missing": Missing()},
+        default_agent="missing",
+    )
+    client = TestClient(app)
+    body = client.get("/agent-adapters").json()
+    assert [a["id"] for a in body["agents"]] == ["installed"]
+    # The configured default is gone, so the composer is pointed at a real one
+    # instead of an id absent from the list.
+    assert body["defaultAgent"] == "installed"

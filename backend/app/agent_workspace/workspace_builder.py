@@ -30,6 +30,23 @@ def _hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _shell_rule(file_access_via_shell: bool) -> str:
+    """The turn's shell rule, worded for how the agent actually reaches files.
+
+    The point of the rule is that a turn runs no arbitrary commands — no
+    installs, no network, no git. An agent with dedicated file tools can be told
+    that flatly. An agent whose *only* file API is its shell tool (Codex) reads
+    nothing at all under the flat wording, so it gets the same prohibition
+    scoped to everything except file access.
+    """
+    if file_access_via_shell:
+        return (
+            "Use your shell/exec tool only to read and write files in this "
+            "workspace; run no other commands."
+        )
+    return "Do not run shell commands."
+
+
 class AgentWorkspaceBuilder:
     def __init__(self, *, cleanup_attempts: int = 3, cleanup_delay: float = 0.05) -> None:
         self.cleanup_attempts = max(1, cleanup_attempts)
@@ -38,9 +55,13 @@ class AgentWorkspaceBuilder:
     def build(
         self, snapshot: NotebookSnapshot, scope: FrozenTurnScope,
         *, write_scope: str = "blocking", correction: str | None = None,
+        file_access_via_shell: bool = False,
     ) -> AgentWorkspace:
         if write_scope == "trusted":
-            return self._build_trusted(snapshot, scope, correction=correction)
+            return self._build_trusted(
+                snapshot, scope, correction=correction,
+                file_access_via_shell=file_access_via_shell,
+            )
         root = Path(tempfile.mkdtemp(prefix=f"notebook-turn-{scope.turn_id[:8]}-"))
         try:
             editable_dir = root / "editable"
@@ -108,13 +129,13 @@ class AgentWorkspaceBuilder:
                                 "request calls for a concrete edit, and explain any edit you make.",
                                 "Do not modify files that are not listed.",
                                 "Do not change notebook structure, metadata, outputs, or cell types.",
-                                "Do not run shell commands.", "", "Editable files:"]
+                                _shell_rule(file_access_via_shell), "", "Editable files:"]
                 instructions.extend(f"- {item.relative_path}" for item in manifest.editable_cells)
             else:
                 instructions = [scope.prompt, "", *notebook_context,
                                 "This is a read-only turn. Do not modify any file.",
                                 "Answer in your final message.",
-                                "Do not run shell commands.", ""]
+                                _shell_rule(file_access_via_shell), ""]
             if context:
                 instructions.extend([
                     "",
@@ -144,7 +165,7 @@ class AgentWorkspaceBuilder:
 
     def _build_trusted(
         self, snapshot: NotebookSnapshot, scope: FrozenTurnScope,
-        *, correction: str | None = None,
+        *, correction: str | None = None, file_access_via_shell: bool = False,
     ) -> AgentWorkspace:
         """Trusted turn: every cell is writable; structure.json is agent-owned.
 
@@ -193,7 +214,9 @@ class AgentWorkspaceBuilder:
                 json.dumps(snapshot.notebook, ensure_ascii=False, indent=1) + "\n",
                 encoding="utf-8",
             )
-            instructions = self._trusted_instructions(scope, manifest, correction)
+            instructions = self._trusted_instructions(
+                scope, manifest, correction, file_access_via_shell,
+            )
             (root / "INSTRUCTIONS.md").write_text("\n".join(instructions) + "\n", encoding="utf-8")
             protected = ["notebook.readonly.ipynb", "INSTRUCTIONS.md"]
             baseline = {name: _hash(root / name) for name in protected}
@@ -212,7 +235,7 @@ class AgentWorkspaceBuilder:
     @staticmethod
     def _trusted_instructions(
         scope: FrozenTurnScope, manifest: TrustedWorkspaceManifest,
-        correction: str | None,
+        correction: str | None, file_access_via_shell: bool = False,
     ) -> list[str]:
         lines = [
             scope.prompt,
@@ -229,7 +252,8 @@ class AgentWorkspaceBuilder:
             '  * Change type: change an existing entry\'s "cellType".',
             "- Editing is optional — permission is a grant, not a requirement. Answer the",
             "  request in your final message; only change files when the request calls for it.",
-            "- Do not run shell commands. Do not edit notebook.readonly.ipynb or INSTRUCTIONS.md.",
+            f"- {_shell_rule(file_access_via_shell)} Do not edit notebook.readonly.ipynb"
+            " or INSTRUCTIONS.md.",
             "- Each entry's source must be a distinct file directly under cells/.",
             "",
         ]

@@ -30,7 +30,7 @@ describe("AgentChatPanel write scope (Trusted mode)", () => {
     await userEvent.selectOptions(screen.getByLabelText("Write scope"), "trusted");
     await userEvent.type(screen.getByLabelText("Agent instruction"), "restructure it");
     await userEvent.click(screen.getByRole("button", { name: /Send/ }));
-    expect(onSubmit).toHaveBeenCalledWith("restructure it", { model: "default", mode: "edit", writeScope: "trusted" });
+    expect(onSubmit).toHaveBeenCalledWith("restructure it", { agent: "default", model: "default", mode: "edit", writeScope: "trusted" });
   });
 
   it("is sticky: a previously chosen Trusted scope is restored on mount", () => {

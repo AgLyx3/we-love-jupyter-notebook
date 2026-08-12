@@ -39,11 +39,14 @@ Setup requirements and dependency installation are in `README.md`. The common
 commands are:
 
 ```bash
-# Real Claude CLI adapter; FastAPI 8000, Vite 5173
+# Real Claude CLI adapter (default); FastAPI 8000, Vite 5173
 .venv/bin/python scripts/dev.py
 
+# Real Codex CLI adapter as the default agent
+NOTEBOOK_DEFAULT_AGENT=codex .venv/bin/python scripts/dev.py
+
 # Deterministic fake adapter
-.venv/bin/python scripts/dev.py --fake-agent
+.venv/bin/python scripts/dev.py --test-agent
 
 # Full verification
 .venv/bin/python -m pytest backend/tests -q
@@ -51,6 +54,19 @@ npm test -- --run
 npm run build
 npm run test:e2e
 ```
+
+`NOTEBOOK_DEFAULT_AGENT` only chooses which adapter is the *default* agent for
+a fresh turn; when it is `claude` or `codex`, both real adapters are
+registered and either is selectable per turn from the UI's agent selector
+regardless of which one is the default. Setting it to `fake` registers only
+the fake adapter (no real CLI is selectable). The old `NOTEBOOK_AGENT_ADAPTER`
+named the *only* adapter, so it is now rejected outright rather than
+reinterpreted.
+
+`GET /agent-adapters` reports only the agents whose CLI is actually installed:
+the availability probe (`<cli> --version`) is answered once per process, so
+installing a CLI while the server is running needs a restart before that agent
+appears in the selector.
 
 Playwright starts its own test-agent app on backend port 8001 and frontend port
 5174 by default. It runs serially in desktop Chrome and a Pixel 5 viewport. The
@@ -136,17 +152,39 @@ copies the full notebook into a temporary directory named like
 - `INSTRUCTIONS.md` containing the prompt and boundary instructions;
 - one writable `editable/cell_<id>.py` or `.md` file per editable cell.
 
-The production adapter runs the local `claude` executable non-interactively
-with `--no-session-persistence`, slash commands and Chrome disabled, and an
+There are two production adapters, both registered in an agent registry keyed
+by agent ID (`claude`, `codex`) and picked per turn by the `agent` field on the
+turn request; the app never assumes a single fixed adapter.
+
+The Claude adapter runs the local `claude` executable non-interactively with
+`--no-session-persistence`, slash commands and Chrome disabled, and an
 explicitly empty MCP configuration. Its tool list is `Read,Edit,Write`; the
 adapter does not expose Bash. Supported Claude CLI versions are deliberately
 fail-closed at `>=2.1.203,<2.2.0`, and the version is checked before every turn.
 
+The Codex adapter runs `codex exec <prompt>` with `--ephemeral
+--ignore-user-config --skip-git-repo-check --color never -C <workspace root>`,
+`--output-last-message <path>` writing the final response to a temp file
+outside the workspace, and `-c sandbox_workspace_write.network_access=false`.
+It maps the turn's permission mode to `--sandbox`: `workspace-write` when the
+turn is editable, `read-only` for read-only and plan turns. Unlike the Claude
+adapter's per-tool `Read,Edit,Write` allow-list, Codex's sandbox scopes writes
+to the workspace directory as a whole rather than per tool, so the
+within-workspace boundary on an editable Codex turn is enforced by the
+post-exit workspace audit (rejecting out-of-scope or protected-file changes)
+rather than by denying the write call itself. Supported Codex CLI versions are
+fail-closed at `>=0.133.0,<0.134.0`, checked before every turn, the same
+pattern as the Claude version gate. Codex model requests are restricted to an
+allow-list (`gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`); any other requested value is
+dropped and the CLI's own default model is used.
+
 `create_app()` itself defaults to `FakeAgentAdapter` so tests and injected app
 instances are deterministic. The module-level `backend.app.main:app` explicitly
-calls `configured_agent_adapter()` and defaults to real Claude. Alternate
+calls `configured_agent_adapters()`, which reads `NOTEBOOK_DEFAULT_AGENT`
+(`claude` default, or `codex`) to register both real adapters and pick the
+default agent, or registers only the fake adapter when set to `fake`. Alternate
 launchers must make this choice deliberately instead of assuming factory-created
-apps use the production adapter.
+apps use a production adapter.
 
 After the CLI exits, the workspace auditor rejects protected-file changes,
 unexpected files, out-of-scope edits, non-UTF-8 content, and size violations.
@@ -263,9 +301,14 @@ before changing behavior.
    evade static matching. Approval reduces accidental execution; it does not
    make code safe.
 4. **Real-agent compatibility is intentionally narrow.** A Claude CLI automatic
-   upgrade to 2.2 or later will stop all turns as unsupported until adapter
-   capability tests and the version range are updated. Do not widen the range
-   without verifying every required safety flag.
+   upgrade to 2.2 or later will stop Claude turns as unsupported until adapter
+   capability tests and the version range are updated. The same applies to
+   Codex: an automatic upgrade past 0.133.x will stop Codex turns (the other
+   agent, if selectable, is unaffected) until the `>=0.133.0,<0.134.0` gate is
+   re-verified against the new version and updated. Do not widen either range
+   without verifying every required safety flag. `scripts/codex_smoke.py` is
+   the manual smoke path for exercising the real Codex CLI adapter outside
+   pytest before deciding whether to widen the version gate.
 
 ### Product Limits To Preserve Or Revisit Explicitly
 

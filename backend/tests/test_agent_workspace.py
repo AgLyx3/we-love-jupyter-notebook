@@ -1,4 +1,5 @@
 import os
+import pathlib
 import sys
 import time
 from threading import Event
@@ -10,11 +11,12 @@ import pytest
 from backend.app.agent_workspace.models import WorkspaceBoundaryError, WorkspaceCleanupError
 from backend.app.agent_workspace.adapters import (
     ClaudeAgentAdapter,
+    CodexAgentAdapter,
     DevelopmentFakeAgentAdapter,
     FakeAgentAdapter,
     FakeAttempt,
 )
-from backend.app.main import configured_agent_adapter
+from backend.app.main import configured_agent_adapters
 from backend.app.agent_workspace.models import AgentAdapterError, AgentTimedOut
 from backend.app.agent_workspace.models import AgentCancelled
 from backend.app.agent_workspace.runner import ProcessRunner
@@ -22,6 +24,12 @@ from backend.app.agent_workspace.workspace_auditor import WorkspaceAuditor
 from backend.app.agent_workspace.workspace_builder import AgentWorkspaceBuilder
 from backend.app.notebook_document.service import NotebookDocumentService
 from backend.app.turn_scope.models import FrozenTurnScope, ScopeSelection
+
+
+@pytest.fixture(autouse=True)
+def _clean_agent_env(monkeypatch):
+    monkeypatch.delenv("NOTEBOOK_AGENT_ADAPTER", raising=False)
+    monkeypatch.delenv("NOTEBOOK_DEFAULT_AGENT", raising=False)
 
 
 def _workspace(notebook_payload):
@@ -516,6 +524,48 @@ def test_turn_instructions_include_notebook_reasoning_context(notebook_payload):
             builder.destroy(workspace)
 
 
+def test_shell_rule_is_adapter_aware_across_every_workspace_shape(notebook_payload):
+    # Regression: the flat "Do not run shell commands." is correct for an agent
+    # with dedicated file tools but denies Codex — whose only file API is the
+    # shell — any access to notebook.ipynb at all. Every shape that emits the
+    # rule must be able to relax it, and none may relax it by default.
+    shapes = [
+        (_workspace, {}),
+        (_read_only_workspace, {}),
+        (_trusted_workspace, {"write_scope": "trusted"}),
+    ]
+    for factory, kwargs in shapes:
+        builder, workspace = factory(notebook_payload)
+        try:
+            assert "Do not run shell commands." in (
+                workspace.root / "INSTRUCTIONS.md"
+            ).read_text()
+        finally:
+            builder.destroy(workspace)
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    builder = AgentWorkspaceBuilder()
+    for selection, kwargs in (
+        (ScopeSelection(("editable",), ("intro",)), {}),
+        (ScopeSelection((), ("intro",)), {}),
+        (ScopeSelection((), ("intro",)), {"write_scope": "trusted"}),
+    ):
+        scope = FrozenTurnScope.create(
+            turn_id="turn", session_id=snapshot.session_id,
+            notebook_revision=snapshot.revision, selection=selection, prompt="go",
+        )
+        workspace = builder.build(
+            snapshot, scope, file_access_via_shell=True, **kwargs
+        )
+        try:
+            instructions = (workspace.root / "INSTRUCTIONS.md").read_text()
+            assert "Do not run shell commands." not in instructions
+            assert "shell/exec tool only to read and write files" in instructions
+        finally:
+            builder.destroy(workspace)
+
+
 def test_claude_adapter_grants_write_tools_for_trusted_workspace(
     monkeypatch, notebook_payload,
 ):
@@ -652,14 +702,217 @@ def test_process_runner_shutdown_rejects_new_runs(tmp_path):
         )
 
 
-def test_configured_adapter_defaults_to_claude(monkeypatch):
-    monkeypatch.delenv("NOTEBOOK_AGENT_ADAPTER", raising=False)
-    assert isinstance(configured_agent_adapter(), ClaudeAgentAdapter)
+def test_configured_adapters_default_to_claude():
+    adapters, default = configured_agent_adapters()
+    assert default == "claude"
+    assert isinstance(adapters["claude"], ClaudeAgentAdapter)
+    assert isinstance(adapters["codex"], CodexAgentAdapter)
 
 
-def test_configured_adapter_requires_explicit_fake_mode(monkeypatch):
+def test_configured_adapters_codex_mode_registers_both(monkeypatch):
+    monkeypatch.setenv("NOTEBOOK_DEFAULT_AGENT", "codex")
+    adapters, default = configured_agent_adapters()
+    assert default == "codex"
+    assert set(adapters) == {"claude", "codex"}
+
+
+def test_configured_adapters_fake_and_invalid(monkeypatch):
+    monkeypatch.setenv("NOTEBOOK_DEFAULT_AGENT", "fake")
+    adapters, default = configured_agent_adapters()
+    assert default == "fake"
+    assert set(adapters) == {"fake"}
+    assert isinstance(adapters["fake"], DevelopmentFakeAgentAdapter)
+    monkeypatch.setenv("NOTEBOOK_DEFAULT_AGENT", "gemini")
+    with pytest.raises(RuntimeError, match="claude.*codex.*fake"):
+        configured_agent_adapters()
+
+
+def test_configured_adapters_rejects_the_old_variable(monkeypatch):
+    # It used to name the *only* adapter. Someone with NOTEBOOK_AGENT_ADAPTER=fake
+    # still exported must not silently get a real CLI instead.
     monkeypatch.setenv("NOTEBOOK_AGENT_ADAPTER", "fake")
-    assert isinstance(configured_agent_adapter(), DevelopmentFakeAgentAdapter)
-    monkeypatch.setenv("NOTEBOOK_AGENT_ADAPTER", "unknown")
-    with pytest.raises(RuntimeError, match="must be either"):
-        configured_agent_adapter()
+    with pytest.raises(RuntimeError, match="NOTEBOOK_DEFAULT_AGENT"):
+        configured_agent_adapters()
+
+
+def _codex_version_stub(version="codex-cli 0.133.0", returncode=0):
+    return lambda *args, **kwargs: SimpleNamespace(
+        returncode=returncode, stdout=version, stderr="",
+    )
+
+
+def test_codex_adapter_version_gate(monkeypatch):
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run",
+        _codex_version_stub("codex-cli 0.133.5"),
+    )
+    assert CodexAgentAdapter().verify_supported() == "0.133.5"
+    # A later 0.x minor is the ordinary release train, not a break: 0.135.0 is
+    # what a machine that auto-updated actually has, and it must still run.
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run",
+        _codex_version_stub("codex-cli 0.135.0"),
+    )
+    assert CodexAgentAdapter().verify_supported() == "0.135.0"
+    for bad in ("codex-cli 0.132.9", "codex-cli 1.0.0", "garbage"):
+        monkeypatch.setattr(
+            "backend.app.agent_workspace.adapters.subprocess.run",
+            _codex_version_stub(bad),
+        )
+        with pytest.raises(AgentAdapterError):
+            CodexAgentAdapter().verify_supported()
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run",
+        _codex_version_stub(returncode=1),
+    )
+    with pytest.raises(AgentAdapterError):
+        CodexAgentAdapter().verify_supported()
+
+
+def test_codex_editable_turn_uses_workspace_write_sandbox(notebook_payload, monkeypatch):
+    builder, workspace = _workspace(notebook_payload)
+    captured = {}
+
+    class StubRunner:
+        def run(self, args, **kwargs):
+            captured["args"] = args
+            # Simulate Codex writing the final message file.
+            out = args[args.index("--output-last-message") + 1]
+            pathlib.Path(out).write_text("codex finished\n", encoding="utf-8")
+            return "progress noise", ""
+
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run", _codex_version_stub(),
+    )
+    try:
+        result = CodexAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event()
+        )
+        assert result.final_output == "codex finished"
+        args = captured["args"]
+        assert args[:2] == ["codex", "exec"]
+        assert args[args.index("--sandbox") + 1] == "workspace-write"
+        assert "--ephemeral" in args
+        assert "--ignore-user-config" in args
+        assert "--skip-git-repo-check" in args
+        assert args[args.index("-c") + 1] == "sandbox_workspace_write.network_access=false"
+        assert args[args.index("-C") + 1] == str(workspace.root)
+        # Final-message capture must live outside the audited workspace.
+        out = pathlib.Path(args[args.index("--output-last-message") + 1])
+        assert workspace.root not in out.parents
+        assert "--model" not in args
+    finally:
+        builder.destroy(workspace)
+
+
+def test_cli_availability_is_probed_once_per_process(monkeypatch):
+    # The capabilities endpoint asks on every app load, and the probe shells out
+    # to `<cli> --version`, so the answer is remembered rather than re-run.
+    calls = []
+
+    def stub(*args, **kwargs):
+        calls.append(args[0])
+        return SimpleNamespace(returncode=0, stdout="codex-cli 0.135.0", stderr="")
+
+    monkeypatch.setattr("backend.app.agent_workspace.adapters.subprocess.run", stub)
+    adapter = CodexAgentAdapter()
+    assert adapter.is_available() is True
+    assert adapter.is_available() is True
+    assert len(calls) == 1
+
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("no such file")),
+    )
+    missing = CodexAgentAdapter()
+    assert missing.is_available() is False
+    # A separate instance must not inherit another's answer.
+    assert ClaudeAgentAdapter()._available is None
+
+
+def test_codex_adapter_grants_write_sandbox_for_trusted_workspace(
+    monkeypatch, notebook_payload,
+):
+    # Regression: the adapter read workspace.manifest.editable_cells, which a
+    # Trusted (TrustedWorkspaceManifest) workspace does not have, so a Trusted turn
+    # crashed with AttributeError. It must get workspace-write (whole notebook is
+    # editable) — read-only would silently strand every structural edit.
+    builder, workspace = _trusted_workspace(notebook_payload)
+    captured = {}
+
+    class StubRunner:
+        def run(self, args, **kwargs):
+            captured["args"] = args
+            return "restructured", ""
+
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run", _codex_version_stub(),
+    )
+    try:
+        result = CodexAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event()
+        )
+        assert result.final_output == "restructured"
+        assert captured["args"][captured["args"].index("--sandbox") + 1] == "workspace-write"
+    finally:
+        builder.destroy(workspace)
+
+
+def test_codex_read_only_and_plan_turns_use_read_only_sandbox(notebook_payload, monkeypatch):
+    captured = {}
+
+    class StubRunner:
+        def run(self, args, **kwargs):
+            captured["args"] = args
+            return "explanation", ""
+
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run", _codex_version_stub(),
+    )
+    builder, workspace = _read_only_workspace(notebook_payload)
+    try:
+        result = CodexAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event()
+        )
+        # No final-message file written -> falls back to stdout.
+        assert result.final_output == "explanation"
+        args = captured["args"]
+        assert args[args.index("--sandbox") + 1] == "read-only"
+    finally:
+        builder.destroy(workspace)
+    builder, workspace = _workspace(notebook_payload)
+    try:
+        CodexAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event(), permission_mode="plan",
+        )
+        args = captured["args"]
+        assert args[args.index("--sandbox") + 1] == "read-only"
+        assert args[2].startswith("You are operating in plan mode")
+    finally:
+        builder.destroy(workspace)
+
+
+def test_codex_model_allow_list(notebook_payload, monkeypatch):
+    captured = {}
+
+    class StubRunner:
+        def run(self, args, **kwargs):
+            captured["args"] = args
+            return "done", ""
+
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run", _codex_version_stub(),
+    )
+    builder, workspace = _workspace(notebook_payload)
+    try:
+        CodexAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event(), model="gpt-5.5",
+        )
+        args = captured["args"]
+        assert args[args.index("--model") + 1] == "gpt-5.5"
+        CodexAgentAdapter(runner=StubRunner()).run(
+            workspace, timeout=1, cancel_event=Event(), model="opus",
+        )
+        assert "--model" not in captured["args"]
+    finally:
+        builder.destroy(workspace)

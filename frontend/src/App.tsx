@@ -1,6 +1,6 @@
 import { AlertTriangle, BookOpen, PanelLeft, Save, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
-import { ApiError, api, connectEvents, type AgentOperation, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type KernelStatus, type NotebookSnapshot, type TurnScope, type WriteScope } from "./api/client";
+import { ApiError, api, connectEvents, type AgentAdaptersResponse, type AgentOperation, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type KernelStatus, type NotebookSnapshot, type TurnScope, type WriteScope } from "./api/client";
 import ReviewBar from "./notebook/ReviewBar";
 import AgentChatPanel from "./agentChat/AgentChatPanel";
 import type { TurnRecord } from "./agentChat/AgentChatPanel";
@@ -33,6 +33,8 @@ export default function App() {
   const [focusRequest, setFocusRequest] = useState<{ cellId: string; requestId: number } | null>(null);
   const [attachments, setAttachments] = useState<SelectionAttachment[]>([]);
   const [operation, setOperation] = useState<ExecutionOperation | null>(null);
+  const [agentAdapters, setAgentAdapters] = useState<AgentAdaptersResponse | null>(null);
+  useEffect(() => { api.getAgentAdapters().then(setAgentAdapters).catch(() => setAgentAdapters(null)); }, []);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ tone: "error" | "warning"; text: string } | null>(null);
@@ -449,7 +451,7 @@ export default function App() {
         })} />
       </div>
       <div className="editor-resizer" role="separator" aria-orientation="vertical" aria-label="Resize agent panel" tabIndex={0} onPointerDown={startAgentResize} onKeyDown={nudgeAgentResize} />
-      <AgentChatPanel notebook={notebook} scope={scope} turn={selectedTurn} activeTurn={activeTurn} history={history} operation={operation} busy={busy} mutationsDisabled={mutationsDisabled || hasDirtyDrafts}
+      <AgentChatPanel notebook={notebook} scope={scope} turn={selectedTurn} activeTurn={activeTurn} history={history} operation={operation} busy={busy} mutationsDisabled={mutationsDisabled || hasDirtyDrafts} agentAdapters={agentAdapters}
         onClearScope={() => void mutate(() => api.clearScope(notebook), { refreshAfter: false }, setScope)}
         onRemoveScopeCell={(cellId) => void mutate(() => api.removeScope(notebook, cellId), { refreshAfter: false }, setScope)}
         onSubmit={(prompt, options) => { const frozen = { ...scope, editableCellIds: [...scope.editableCellIds], contextCellIds: [...scope.contextCellIds] }; const composed = composeChatPrompt(prompt, attachments); const label = prompt.trim() || (attachments.length ? defaultAttachmentInstruction(attachments) : "Agent turn"); void mutate(() => api.startTurn(notebook, composed, options), { refreshAfter: false }, (result) => { setTurn(result); setSelectedTurnId(result.turnId); setHistory((items) => upsertRecord(items, result, frozen, label)); setAttachments([]); }); }}

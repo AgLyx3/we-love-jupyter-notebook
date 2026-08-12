@@ -55,6 +55,21 @@ LINEAGE_ACTIONS = ("reject",)
 PERMISSION_MODE_BY_MODE = {"edit": "acceptEdits", "plan": "plan"}
 
 
+def _model_values(adapter: AgentAdapter) -> frozenset[str]:
+    """The model ids this adapter offers, the same list the UI is given."""
+    options = getattr(adapter, "model_options", ({"value": "default"},))
+    return frozenset(option["value"] for option in options)
+
+
+def _file_access_via_shell(adapter: AgentAdapter) -> bool:
+    """Whether the turn's instructions must leave the shell open for file access.
+
+    Only adapters that opt in get the relaxed wording, so an adapter that never
+    declares the attribute keeps the strict "do not run shell commands" rule.
+    """
+    return bool(getattr(adapter, "file_access_via_shell", False))
+
+
 class AgentTurnNotFound(NotebookDomainError):
     code = "agent_turn_not_found"
     message = "Agent turn was not found"
@@ -97,6 +112,24 @@ class AgentTurnServiceShuttingDown(NotebookDomainError):
     status_code = 503
 
 
+class UnknownAgentAdapter(NotebookDomainError):
+    code = "unknown_agent_adapter"
+    message = "Requested agent backend is not available"
+    status_code = 422
+
+    def __init__(self, agent: str) -> None:
+        super().__init__(agent=agent)
+
+
+class UnknownAgentModel(NotebookDomainError):
+    code = "unknown_agent_model"
+    message = "Requested model is not available for this agent"
+    status_code = 422
+
+    def __init__(self, agent: str, model: str) -> None:
+        super().__init__(agent=agent, model=model)
+
+
 @dataclass
 class AgentTurn:
     turn_id: str
@@ -106,6 +139,7 @@ class AgentTurn:
     model: str = "default"
     mode: str = "edit"
     write_scope: str = "blocking"
+    agent: str = "default"
     editable_cell_ids: tuple[str, ...] = ()
     context_cell_ids: tuple[str, ...] = ()
     state: str = "created"
@@ -131,7 +165,10 @@ class AgentTurn:
 class AgentTurnService:
     def __init__(
         self, *, documents: NotebookDocumentService, scopes: TurnScopeService,
-        adapter: AgentAdapter, builder: AgentWorkspaceBuilder | None = None,
+        adapter: AgentAdapter | None = None,
+        adapters: dict[str, AgentAdapter] | None = None,
+        default_agent: str = "default",
+        builder: AgentWorkspaceBuilder | None = None,
         auditor: WorkspaceAuditor | None = None,
         validator: BoundaryValidator | None = None, timeout: float = 600,
         executions: KernelExecutionService | None = None,
@@ -139,7 +176,20 @@ class AgentTurnService:
     ) -> None:
         self.documents = documents
         self.scopes = scopes
-        self.adapter = adapter
+        # Both arguments default to None so either calling style works, which
+        # also makes "neither was passed" constructible. Reject it here rather
+        # than let a registry of {"default": None} surface as an AttributeError
+        # mid-turn, after the turn has already taken the document lease.
+        if adapters:
+            self.adapters: dict[str, AgentAdapter] = dict(adapters)
+            self.default_agent = default_agent
+        elif adapter is not None:
+            self.adapters = {"default": adapter}
+            self.default_agent = "default"
+        else:
+            raise ValueError("AgentTurnService requires adapter or a non-empty adapters registry")
+        if self.default_agent not in self.adapters:
+            raise ValueError("default_agent must be a registered adapter")
         self.builder = builder or AgentWorkspaceBuilder()
         self.auditor = auditor or WorkspaceAuditor()
         self.validator = validator or BoundaryValidator()
@@ -155,15 +205,28 @@ class AgentTurnService:
             self._on_session_replaced
         )
 
+    @property
+    def adapter(self) -> AgentAdapter:
+        return self.adapters[self.default_agent]
+
     def start(
         self, *, prompt: str, session_id: str, expected_revision: int,
-        model: str = "default", mode: str = "edit",
+        model: str = "default", mode: str = "edit", agent: str = "default",
         write_scope: str = "blocking", background: bool = True,
     ) -> AgentTurn:
         turn_id = uuid4().hex
+        agent = self.default_agent if agent in ("", "default") else agent
         with self._lock:
             if self._shutting_down:
                 raise AgentTurnServiceShuttingDown()
+            if agent not in self.adapters:
+                raise UnknownAgentAdapter(agent)
+            # The request body cannot type-check the model any more — the valid
+            # set is per-adapter — so check it against the chosen adapter here.
+            # Otherwise a typo'd model silently ran on the CLI's own default and
+            # the user was billed for a turn they did not ask for.
+            if model not in _model_values(self.adapters[agent]):
+                raise UnknownAgentModel(agent, model)
             try:
                 lease = self.documents.coordinator.acquire(
                     operation_type="agent_turn", operation_id=turn_id
@@ -182,6 +245,7 @@ class AgentTurnService:
                     turn_id=turn_id, session_id=session_id,
                     base_revision=expected_revision, prompt=prompt,
                     model=model, mode=mode, write_scope=write_scope,
+                    agent=agent,
                     editable_cell_ids=scope.editable_cell_ids,
                     context_cell_ids=scope.context_cell_ids,
                     checkpoint=copy.deepcopy(snapshot.notebook),
@@ -434,19 +498,21 @@ class AgentTurnService:
             return self._run_trusted(turn, scope, lease, frozen_snapshot)
         correction = None
         last_violation: WorkspaceBoundaryError | None = None
+        adapter = self.adapters[turn.agent]
         for attempt_number in range(1, 4):
             if turn.cancel_event.is_set():
                 raise AgentCancelled()
             self._set_state(turn, "agent_running")
             workspace = self.builder.build(
-                frozen_snapshot, scope, correction=correction
+                frozen_snapshot, scope, correction=correction,
+                file_access_via_shell=_file_access_via_shell(adapter),
             )
             attempt_error: BaseException | None = None
             cleanup_error: WorkspaceCleanupError | None = None
             try:
                 with self._lock:
                     turn.attempts = attempt_number
-                result = self.adapter.run(
+                result = adapter.run(
                     workspace, timeout=self.timeout, cancel_event=turn.cancel_event,
                     model=None if turn.model == "default" else turn.model,
                     permission_mode=PERMISSION_MODE_BY_MODE.get(turn.mode, "acceptEdits"),
@@ -455,7 +521,7 @@ class AgentTurnService:
                     turn.final_output = result.final_output
                 self._set_state(turn, "validating")
                 candidates = self.auditor.collect(
-                    workspace, auxiliary_paths=self.adapter.auxiliary_paths
+                    workspace, auxiliary_paths=adapter.auxiliary_paths
                 )
                 changes = self.validator.validate(
                     snapshot=self.documents.get_snapshot(), scope=scope,
@@ -564,19 +630,21 @@ class AgentTurnService:
         correction = None
         last_violation: WorkspaceBoundaryError | None = None
         plan = None
+        adapter = self.adapters[turn.agent]
         for attempt_number in range(1, 4):
             if turn.cancel_event.is_set():
                 raise AgentCancelled()
             self._set_state(turn, "agent_running")
             workspace = self.builder.build(
-                frozen_snapshot, scope, write_scope="trusted", correction=correction
+                frozen_snapshot, scope, write_scope="trusted", correction=correction,
+                file_access_via_shell=_file_access_via_shell(adapter),
             )
             attempt_error: BaseException | None = None
             cleanup_error: WorkspaceCleanupError | None = None
             try:
                 with self._lock:
                     turn.attempts = attempt_number
-                result = self.adapter.run(
+                result = adapter.run(
                     workspace, timeout=self.timeout, cancel_event=turn.cancel_event,
                     model=None if turn.model == "default" else turn.model,
                     permission_mode="acceptEdits",
@@ -1110,9 +1178,13 @@ class AgentTurnService:
         if self.executions is not None:
             for turn in active:
                 self.executions.cancel_parent(turn.turn_id)
-        adapter_shutdown = getattr(self.adapter, "shutdown", None)
-        if callable(adapter_shutdown):
-            adapter_shutdown()
+        for name, adapter in self.adapters.items():
+            adapter_shutdown = getattr(adapter, "shutdown", None)
+            if callable(adapter_shutdown):
+                try:
+                    adapter_shutdown()
+                except Exception:
+                    logger.exception("Adapter %r failed to shut down cleanly", name)
         for worker, _turn_id in workers:
             remaining = deadline - time.monotonic()
             if remaining <= 0:

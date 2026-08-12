@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +13,14 @@ from .models import (
     AdapterResult, AgentAdapterError, AgentCancelled, AgentTimedOut, AgentWorkspace,
 )
 from .runner import ProcessRunner
+
+
+PLAN_PREAMBLE = (
+    "You are operating in plan mode. Do not edit, create, or modify any file.\n"
+    "Investigate as needed, then respond in your final message with a concrete,\n"
+    "step-by-step plan for how you would carry out the request below. Stop after\n"
+    "presenting the plan.\n\n"
+)
 
 
 @dataclass
@@ -63,6 +72,8 @@ class DevelopmentFakeAgentAdapter:
     """Prompt-driven adapter used only by the explicit local fake mode."""
 
     auxiliary_paths = frozenset()
+    display_label = "Fake"
+    model_options = ({"value": "default", "label": "Default"},)
 
     def run(
         self, workspace: AgentWorkspace, *, timeout: float, cancel_event: Event,
@@ -88,18 +99,42 @@ class DevelopmentFakeAgentAdapter:
         return AdapterResult(output)
 
 
-class ClaudeAgentAdapter:
+class CliAvailability:
+    """Cached "is this CLI installed and supported?" probe.
+
+    verify_supported() shells out, and the capabilities endpoint is hit on every
+    app load, so the answer is remembered for the life of the process. Installing
+    a CLI while the server is running therefore needs a restart before that agent
+    is offered — the trade for never paying a subprocess per request.
+    """
+
+    _available: bool | None = None
+
+    def is_available(self) -> bool:
+        if self._available is None:
+            try:
+                self.verify_supported()
+            except AgentAdapterError:
+                self._available = False
+            else:
+                self._available = True
+        return self._available
+
+
+class ClaudeAgentAdapter(CliAvailability):
     auxiliary_paths = frozenset()
+    display_label = "Claude"
     _VERSION = re.compile(r"(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)")
     # Model aliases the UI may request. Anything else falls back to the CLI default.
     _MODEL_ALIASES = frozenset({"opus", "sonnet", "haiku"})
     # Permission modes the UI may request. Anything else falls back to acceptEdits.
     _PERMISSION_MODES = frozenset({"acceptEdits", "plan"})
-    _PLAN_PREAMBLE = (
-        "You are operating in plan mode. Do not edit, create, or modify any file.\n"
-        "Investigate as needed, then respond in your final message with a concrete,\n"
-        "step-by-step plan for how you would carry out the request below. Stop after\n"
-        "presenting the plan.\n\n"
+    _PLAN_PREAMBLE = PLAN_PREAMBLE
+    model_options = (
+        {"value": "default", "label": "Default"},
+        {"value": "opus", "label": "Opus"},
+        {"value": "sonnet", "label": "Sonnet"},
+        {"value": "haiku", "label": "Haiku"},
     )
 
     def __init__(self, executable: str = "claude", runner: ProcessRunner | None = None) -> None:
@@ -152,6 +187,95 @@ class ClaudeAgentAdapter:
             args, cwd=workspace.root, timeout=timeout, cancel_event=cancel_event
         )
         return AdapterResult(stdout.strip())
+
+    def shutdown(self) -> None:
+        self.runner.shutdown()
+
+
+class CodexAgentAdapter(CliAvailability):
+    auxiliary_paths = frozenset()
+    display_label = "Codex"
+    # Codex has no separate Read tool — it reaches files through its shell/exec
+    # tool — so the workspace instructions must scope the shell rule rather than
+    # ban the shell outright, or the agent cannot even open notebook.ipynb.
+    file_access_via_shell = True
+    _VERSION = re.compile(r"(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)")
+    # Model slugs the UI may request. Anything else falls back to the CLI default.
+    _MODEL_ALIASES = frozenset({"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"})
+    model_options = (
+        {"value": "default", "label": "Default"},
+        {"value": "gpt-5.5", "label": "GPT-5.5"},
+        {"value": "gpt-5.4", "label": "GPT-5.4"},
+        {"value": "gpt-5.4-mini", "label": "GPT-5.4 Mini"},
+    )
+    _PERMISSION_MODES = frozenset({"acceptEdits", "plan"})
+
+    def __init__(self, executable: str = "codex", runner: ProcessRunner | None = None) -> None:
+        self.executable = executable
+        self.runner = runner or ProcessRunner()
+
+    def verify_supported(self) -> str:
+        try:
+            result = subprocess.run(
+                [self.executable, "--version"], capture_output=True, text=True,
+                timeout=5, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise AgentAdapterError("Codex CLI is unavailable") from error
+        match = self._VERSION.search(result.stdout + result.stderr)
+        version = tuple(int(match.group(name)) for name in ("major", "minor", "patch")) if match else None
+        # Codex is pre-1.0 and ships minor bumps as its ordinary release train,
+        # so pinning a single minor meant a routine auto-update disabled Codex
+        # turns (0.133 was already three releases stale by the time this was
+        # reviewed). What the gate actually protects is the flag set the write
+        # boundary rests on — --ephemeral, --ignore-user-config, --sandbox,
+        # --output-last-message — and 1.0 is where a pre-1.0 CLI is entitled to
+        # restructure those. Floor stays at the first version verified by hand.
+        if result.returncode or version is None or not ((0, 133, 0) <= version < (1, 0, 0)):
+            raise AgentAdapterError("Unsupported Codex CLI version")
+        return match.group(0)
+
+    def run(
+        self, workspace: AgentWorkspace, *, timeout: float, cancel_event: Event,
+        model: str | None = None, permission_mode: str = "acceptEdits",
+    ) -> AdapterResult:
+        self.verify_supported()
+        prompt = (workspace.root / "INSTRUCTIONS.md").read_text(encoding="utf-8")
+        if permission_mode not in self._PERMISSION_MODES:
+            permission_mode = "acceptEdits"
+        if permission_mode == "plan":
+            prompt = PLAN_PREAMBLE + prompt
+        # Codex scopes writes by sandbox directory rather than per tool: an
+        # editable turn gets workspace-write (the workspace audit still rejects
+        # writes outside the paths the turn owns); read-only and plan turns get
+        # no write capability at all. A Trusted workspace has no editable_cells
+        # because the whole notebook is editable, so it always needs write.
+        if permission_mode == "plan":
+            editable = False
+        elif workspace.is_trusted:
+            editable = True
+        else:
+            editable = bool(workspace.manifest.editable_cells)
+        sandbox = "workspace-write" if editable else "read-only"
+        with tempfile.TemporaryDirectory(prefix="codex-final-message-") as capture_dir:
+            final_message_path = Path(capture_dir) / "final-message.txt"
+            args = [
+                self.executable, "exec", prompt,
+                "--ephemeral", "--ignore-user-config", "--skip-git-repo-check",
+                "--color", "never", "-C", str(workspace.root),
+                "--sandbox", sandbox,
+                "-c", "sandbox_workspace_write.network_access=false",
+                "--output-last-message", str(final_message_path),
+            ]
+            if model in self._MODEL_ALIASES:
+                args += ["--model", model]
+            stdout, _stderr = self.runner.run(
+                args, cwd=workspace.root, timeout=timeout, cancel_event=cancel_event
+            )
+            final_message = ""
+            if final_message_path.exists():
+                final_message = final_message_path.read_text(encoding="utf-8").strip()
+        return AdapterResult(final_message or stdout.strip())
 
     def shutdown(self) -> None:
         self.runner.shutdown()
