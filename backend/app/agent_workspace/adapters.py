@@ -202,7 +202,14 @@ class CodexAgentAdapter:
             raise AgentAdapterError("Codex CLI is unavailable") from error
         match = self._VERSION.search(result.stdout + result.stderr)
         version = tuple(int(match.group(name)) for name in ("major", "minor", "patch")) if match else None
-        if result.returncode or version is None or not ((0, 133, 0) <= version < (0, 134, 0)):
+        # Codex is pre-1.0 and ships minor bumps as its ordinary release train,
+        # so pinning a single minor meant a routine auto-update disabled Codex
+        # turns (0.133 was already three releases stale by the time this was
+        # reviewed). What the gate actually protects is the flag set the write
+        # boundary rests on — --ephemeral, --ignore-user-config, --sandbox,
+        # --output-last-message — and 1.0 is where a pre-1.0 CLI is entitled to
+        # restructure those. Floor stays at the first version verified by hand.
+        if result.returncode or version is None or not ((0, 133, 0) <= version < (1, 0, 0)):
             raise AgentAdapterError("Unsupported Codex CLI version")
         return match.group(0)
 

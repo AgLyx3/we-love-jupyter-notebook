@@ -734,7 +734,14 @@ def test_codex_adapter_version_gate(monkeypatch):
         _codex_version_stub("codex-cli 0.133.5"),
     )
     assert CodexAgentAdapter().verify_supported() == "0.133.5"
-    for bad in ("codex-cli 0.132.9", "codex-cli 0.134.0", "garbage"):
+    # A later 0.x minor is the ordinary release train, not a break: 0.135.0 is
+    # what a machine that auto-updated actually has, and it must still run.
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run",
+        _codex_version_stub("codex-cli 0.135.0"),
+    )
+    assert CodexAgentAdapter().verify_supported() == "0.135.0"
+    for bad in ("codex-cli 0.132.9", "codex-cli 1.0.0", "garbage"):
         monkeypatch.setattr(
             "backend.app.agent_workspace.adapters.subprocess.run",
             _codex_version_stub(bad),
