@@ -1202,6 +1202,40 @@ def test_turn_routes_to_selected_adapter_and_serializes_agent(notebook_payload):
     assert claude_like.call_count == 1
 
 
+def test_shell_file_access_reaches_instructions_on_every_turn_shape(notebook_payload):
+    # Regression: the earlier fix bolted a clarifying hint onto the prompt only
+    # on non-plan turns, so a plan turn — the one shape whose entire job is
+    # reading the notebook — was still told to keep away from the shell. The
+    # rule now comes from the adapter's own capability, so it holds for plan,
+    # edit and Trusted alike.
+    seen: list[str] = []
+
+    class ShellReadingAdapter:
+        auxiliary_paths = frozenset()
+        file_access_via_shell = True
+
+        def run(self, workspace, *, timeout, cancel_event, model=None, permission_mode="acceptEdits"):
+            seen.append((workspace.root / "INSTRUCTIONS.md").read_text())
+            return AdapterResult("answered")
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    service = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=ShellReadingAdapter(), timeout=1,
+    )
+    for kwargs in ({"mode": "plan"}, {}, {"write_scope": "trusted"}):
+        turn = service.start(
+            prompt="explain the notebook", session_id=documents.get_snapshot().session_id,
+            expected_revision=documents.get_snapshot().revision, background=False, **kwargs,
+        )
+        assert turn.state == "completed", turn.error
+    assert len(seen) == 3
+    for instructions in seen:
+        assert "Do not run shell commands." not in instructions
+        assert "shell/exec tool only to read and write files" in instructions
+
+
 def test_unknown_agent_is_rejected_without_running(notebook_payload):
     documents = NotebookDocumentService()
     snapshot = documents.import_notebook(notebook_payload())

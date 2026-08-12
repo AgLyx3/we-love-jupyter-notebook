@@ -55,6 +55,15 @@ LINEAGE_ACTIONS = ("reject",)
 PERMISSION_MODE_BY_MODE = {"edit": "acceptEdits", "plan": "plan"}
 
 
+def _file_access_via_shell(adapter: AgentAdapter) -> bool:
+    """Whether the turn's instructions must leave the shell open for file access.
+
+    Only adapters that opt in get the relaxed wording, so an adapter that never
+    declares the attribute keeps the strict "do not run shell commands" rule.
+    """
+    return bool(getattr(adapter, "file_access_via_shell", False))
+
+
 class AgentTurnNotFound(NotebookDomainError):
     code = "agent_turn_not_found"
     message = "Agent turn was not found"
@@ -460,19 +469,20 @@ class AgentTurnService:
             return self._run_trusted(turn, scope, lease, frozen_snapshot)
         correction = None
         last_violation: WorkspaceBoundaryError | None = None
+        adapter = self.adapters[turn.agent]
         for attempt_number in range(1, 4):
             if turn.cancel_event.is_set():
                 raise AgentCancelled()
             self._set_state(turn, "agent_running")
             workspace = self.builder.build(
-                frozen_snapshot, scope, correction=correction
+                frozen_snapshot, scope, correction=correction,
+                file_access_via_shell=_file_access_via_shell(adapter),
             )
             attempt_error: BaseException | None = None
             cleanup_error: WorkspaceCleanupError | None = None
             try:
                 with self._lock:
                     turn.attempts = attempt_number
-                adapter = self.adapters[turn.agent]
                 result = adapter.run(
                     workspace, timeout=self.timeout, cancel_event=turn.cancel_event,
                     model=None if turn.model == "default" else turn.model,
@@ -591,19 +601,21 @@ class AgentTurnService:
         correction = None
         last_violation: WorkspaceBoundaryError | None = None
         plan = None
+        adapter = self.adapters[turn.agent]
         for attempt_number in range(1, 4):
             if turn.cancel_event.is_set():
                 raise AgentCancelled()
             self._set_state(turn, "agent_running")
             workspace = self.builder.build(
-                frozen_snapshot, scope, write_scope="trusted", correction=correction
+                frozen_snapshot, scope, write_scope="trusted", correction=correction,
+                file_access_via_shell=_file_access_via_shell(adapter),
             )
             attempt_error: BaseException | None = None
             cleanup_error: WorkspaceCleanupError | None = None
             try:
                 with self._lock:
                     turn.attempts = attempt_number
-                result = self.adapters[turn.agent].run(
+                result = adapter.run(
                     workspace, timeout=self.timeout, cancel_event=turn.cancel_event,
                     model=None if turn.model == "default" else turn.model,
                     permission_mode="acceptEdits",

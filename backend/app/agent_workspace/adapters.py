@@ -22,18 +22,6 @@ PLAN_PREAMBLE = (
     "presenting the plan.\n\n"
 )
 
-# Codex's only file-access tool runs through its shell/exec tool, so the shared
-# "Do not run shell commands" instruction (written for Claude, which has a
-# separate non-shell Read tool) would otherwise stop Codex from reading the
-# notebook at all. Clarify the scope of that instruction for Codex specifically.
-CODEX_READ_HINT = (
-    "Note on \"do not run shell commands\" below: that restricts you to the file\n"
-    "operations this message explicitly permits (only editing the listed editable\n"
-    "files, nothing else). It does not prohibit using your shell/exec tool to read\n"
-    "files in this workspace, such as notebook.ipynb — do that as needed to answer\n"
-    "the request.\n\n"
-)
-
 
 @dataclass
 class FakeAttempt:
@@ -185,6 +173,10 @@ class ClaudeAgentAdapter:
 class CodexAgentAdapter:
     auxiliary_paths = frozenset()
     display_label = "Codex"
+    # Codex has no separate Read tool — it reaches files through its shell/exec
+    # tool — so the workspace instructions must scope the shell rule rather than
+    # ban the shell outright, or the agent cannot even open notebook.ipynb.
+    file_access_via_shell = True
     _VERSION = re.compile(r"(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)")
     # Model slugs the UI may request. Anything else falls back to the CLI default.
     _MODEL_ALIASES = frozenset({"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"})
@@ -224,8 +216,6 @@ class CodexAgentAdapter:
             permission_mode = "acceptEdits"
         if permission_mode == "plan":
             prompt = PLAN_PREAMBLE + prompt
-        else:
-            prompt = CODEX_READ_HINT + prompt
         # Codex scopes writes by sandbox directory rather than per tool: an
         # editable turn gets workspace-write (the workspace audit still rejects
         # writes outside the paths the turn owns); read-only and plan turns get

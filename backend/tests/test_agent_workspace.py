@@ -10,7 +10,6 @@ import pytest
 
 from backend.app.agent_workspace.models import WorkspaceBoundaryError, WorkspaceCleanupError
 from backend.app.agent_workspace.adapters import (
-    CODEX_READ_HINT,
     ClaudeAgentAdapter,
     CodexAgentAdapter,
     DevelopmentFakeAgentAdapter,
@@ -519,6 +518,48 @@ def test_turn_instructions_include_notebook_reasoning_context(notebook_payload):
             builder.destroy(workspace)
 
 
+def test_shell_rule_is_adapter_aware_across_every_workspace_shape(notebook_payload):
+    # Regression: the flat "Do not run shell commands." is correct for an agent
+    # with dedicated file tools but denies Codex — whose only file API is the
+    # shell — any access to notebook.ipynb at all. Every shape that emits the
+    # rule must be able to relax it, and none may relax it by default.
+    shapes = [
+        (_workspace, {}),
+        (_read_only_workspace, {}),
+        (_trusted_workspace, {"write_scope": "trusted"}),
+    ]
+    for factory, kwargs in shapes:
+        builder, workspace = factory(notebook_payload)
+        try:
+            assert "Do not run shell commands." in (
+                workspace.root / "INSTRUCTIONS.md"
+            ).read_text()
+        finally:
+            builder.destroy(workspace)
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    builder = AgentWorkspaceBuilder()
+    for selection, kwargs in (
+        (ScopeSelection(("editable",), ("intro",)), {}),
+        (ScopeSelection((), ("intro",)), {}),
+        (ScopeSelection((), ("intro",)), {"write_scope": "trusted"}),
+    ):
+        scope = FrozenTurnScope.create(
+            turn_id="turn", session_id=snapshot.session_id,
+            notebook_revision=snapshot.revision, selection=selection, prompt="go",
+        )
+        workspace = builder.build(
+            snapshot, scope, file_access_via_shell=True, **kwargs
+        )
+        try:
+            instructions = (workspace.root / "INSTRUCTIONS.md").read_text()
+            assert "Do not run shell commands." not in instructions
+            assert "shell/exec tool only to read and write files" in instructions
+        finally:
+            builder.destroy(workspace)
+
+
 def test_claude_adapter_grants_write_tools_for_trusted_workspace(
     monkeypatch, notebook_payload,
 ):
@@ -730,7 +771,6 @@ def test_codex_editable_turn_uses_workspace_write_sandbox(notebook_payload, monk
         assert result.final_output == "codex finished"
         args = captured["args"]
         assert args[:2] == ["codex", "exec"]
-        assert args[2].startswith(CODEX_READ_HINT)
         assert args[args.index("--sandbox") + 1] == "workspace-write"
         assert "--ephemeral" in args
         assert "--ignore-user-config" in args
@@ -793,7 +833,6 @@ def test_codex_read_only_and_plan_turns_use_read_only_sandbox(notebook_payload, 
         assert result.final_output == "explanation"
         args = captured["args"]
         assert args[args.index("--sandbox") + 1] == "read-only"
-        assert args[2].startswith(CODEX_READ_HINT)
     finally:
         builder.destroy(workspace)
     builder, workspace = _workspace(notebook_payload)
@@ -803,7 +842,6 @@ def test_codex_read_only_and_plan_turns_use_read_only_sandbox(notebook_payload, 
         )
         args = captured["args"]
         assert args[args.index("--sandbox") + 1] == "read-only"
-        # Plan mode's own preamble takes precedence over the read hint.
         assert args[2].startswith("You are operating in plan mode")
     finally:
         builder.destroy(workspace)
