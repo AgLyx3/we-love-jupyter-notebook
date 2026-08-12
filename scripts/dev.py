@@ -218,7 +218,7 @@ def run_commands(
 def main() -> int:
     args = parse_args()
     environment = os.environ.copy()
-    environment["NOTEBOOK_AGENT_ADAPTER"] = "fake" if args.test_agent else environment.get("NOTEBOOK_AGENT_ADAPTER", "claude")
+    environment["NOTEBOOK_DEFAULT_AGENT"] = "fake" if args.test_agent else environment.get("NOTEBOOK_DEFAULT_AGENT", "claude")
     environment["BACKEND_PORT"] = str(args.backend_port)
     python = ROOT / ".venv" / "bin" / "python"
     if not python.exists():

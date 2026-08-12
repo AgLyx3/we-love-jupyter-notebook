@@ -26,6 +26,12 @@ from backend.app.notebook_document.service import NotebookDocumentService
 from backend.app.turn_scope.models import FrozenTurnScope, ScopeSelection
 
 
+@pytest.fixture(autouse=True)
+def _clean_agent_env(monkeypatch):
+    monkeypatch.delenv("NOTEBOOK_AGENT_ADAPTER", raising=False)
+    monkeypatch.delenv("NOTEBOOK_DEFAULT_AGENT", raising=False)
+
+
 def _workspace(notebook_payload):
     documents = NotebookDocumentService()
     snapshot = documents.import_notebook(notebook_payload())
@@ -696,8 +702,7 @@ def test_process_runner_shutdown_rejects_new_runs(tmp_path):
         )
 
 
-def test_configured_adapters_default_to_claude(monkeypatch):
-    monkeypatch.delenv("NOTEBOOK_AGENT_ADAPTER", raising=False)
+def test_configured_adapters_default_to_claude():
     adapters, default = configured_agent_adapters()
     assert default == "claude"
     assert isinstance(adapters["claude"], ClaudeAgentAdapter)
@@ -705,20 +710,28 @@ def test_configured_adapters_default_to_claude(monkeypatch):
 
 
 def test_configured_adapters_codex_mode_registers_both(monkeypatch):
-    monkeypatch.setenv("NOTEBOOK_AGENT_ADAPTER", "codex")
+    monkeypatch.setenv("NOTEBOOK_DEFAULT_AGENT", "codex")
     adapters, default = configured_agent_adapters()
     assert default == "codex"
     assert set(adapters) == {"claude", "codex"}
 
 
 def test_configured_adapters_fake_and_invalid(monkeypatch):
-    monkeypatch.setenv("NOTEBOOK_AGENT_ADAPTER", "fake")
+    monkeypatch.setenv("NOTEBOOK_DEFAULT_AGENT", "fake")
     adapters, default = configured_agent_adapters()
     assert default == "fake"
     assert set(adapters) == {"fake"}
     assert isinstance(adapters["fake"], DevelopmentFakeAgentAdapter)
-    monkeypatch.setenv("NOTEBOOK_AGENT_ADAPTER", "gemini")
+    monkeypatch.setenv("NOTEBOOK_DEFAULT_AGENT", "gemini")
     with pytest.raises(RuntimeError, match="claude.*codex.*fake"):
+        configured_agent_adapters()
+
+
+def test_configured_adapters_rejects_the_old_variable(monkeypatch):
+    # It used to name the *only* adapter. Someone with NOTEBOOK_AGENT_ADAPTER=fake
+    # still exported must not silently get a real CLI instead.
+    monkeypatch.setenv("NOTEBOOK_AGENT_ADAPTER", "fake")
+    with pytest.raises(RuntimeError, match="NOTEBOOK_DEFAULT_AGENT"):
         configured_agent_adapters()
 
 

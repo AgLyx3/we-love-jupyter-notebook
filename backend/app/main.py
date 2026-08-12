@@ -119,13 +119,28 @@ def create_app(
 
 
 def configured_agent_adapters() -> tuple[dict[str, AgentAdapter], str]:
-    mode = os.getenv("NOTEBOOK_AGENT_ADAPTER", "claude").strip().lower()
-    if mode in ("claude", "codex"):
-        return {"claude": ClaudeAgentAdapter(), "codex": CodexAgentAdapter()}, mode
-    if mode == "fake":
+    """Register the agents this process can run and name the default one.
+
+    Claude and Codex are both registered whichever is named, because the agent
+    is chosen per turn from the composer; the variable only decides which one
+    is preselected. `fake` is the exception: it exists to stand the app up with
+    no CLI at all, so registering a real adapter alongside it would let a turn
+    reach a real CLI in a mode that promises none.
+    """
+    if os.getenv("NOTEBOOK_AGENT_ADAPTER"):
+        # It used to pick the only adapter; failing loudly beats silently
+        # running Claude for someone who asked for fake.
+        raise RuntimeError(
+            "NOTEBOOK_AGENT_ADAPTER is now NOTEBOOK_DEFAULT_AGENT: it selects the "
+            "default agent, not the only one"
+        )
+    default = os.getenv("NOTEBOOK_DEFAULT_AGENT", "claude").strip().lower()
+    if default in ("claude", "codex"):
+        return {"claude": ClaudeAgentAdapter(), "codex": CodexAgentAdapter()}, default
+    if default == "fake":
         return {"fake": DevelopmentFakeAgentAdapter()}, "fake"
     raise RuntimeError(
-        "NOTEBOOK_AGENT_ADAPTER must be one of 'claude', 'codex', or 'fake'"
+        "NOTEBOOK_DEFAULT_AGENT must be one of 'claude', 'codex', or 'fake'"
     )
 
 

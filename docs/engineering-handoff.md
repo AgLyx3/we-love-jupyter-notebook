@@ -43,10 +43,10 @@ commands are:
 .venv/bin/python scripts/dev.py
 
 # Real Codex CLI adapter as the default agent
-NOTEBOOK_AGENT_ADAPTER=codex .venv/bin/python scripts/dev.py
+NOTEBOOK_DEFAULT_AGENT=codex .venv/bin/python scripts/dev.py
 
 # Deterministic fake adapter
-.venv/bin/python scripts/dev.py --fake-agent
+.venv/bin/python scripts/dev.py --test-agent
 
 # Full verification
 .venv/bin/python -m pytest backend/tests -q
@@ -55,11 +55,18 @@ npm run build
 npm run test:e2e
 ```
 
-`NOTEBOOK_AGENT_ADAPTER` only chooses which adapter is the *default* agent for
+`NOTEBOOK_DEFAULT_AGENT` only chooses which adapter is the *default* agent for
 a fresh turn; when it is `claude` or `codex`, both real adapters are
 registered and either is selectable per turn from the UI's agent selector
 regardless of which one is the default. Setting it to `fake` registers only
-the fake adapter (no real CLI is selectable).
+the fake adapter (no real CLI is selectable). The old `NOTEBOOK_AGENT_ADAPTER`
+named the *only* adapter, so it is now rejected outright rather than
+reinterpreted.
+
+`GET /agent-adapters` reports only the agents whose CLI is actually installed:
+the availability probe (`<cli> --version`) is answered once per process, so
+installing a CLI while the server is running needs a restart before that agent
+appears in the selector.
 
 Playwright starts its own test-agent app on backend port 8001 and frontend port
 5174 by default. It runs serially in desktop Chrome and a Pixel 5 viewport. The
@@ -173,7 +180,7 @@ dropped and the CLI's own default model is used.
 
 `create_app()` itself defaults to `FakeAgentAdapter` so tests and injected app
 instances are deterministic. The module-level `backend.app.main:app` explicitly
-calls `configured_agent_adapters()`, which reads `NOTEBOOK_AGENT_ADAPTER`
+calls `configured_agent_adapters()`, which reads `NOTEBOOK_DEFAULT_AGENT`
 (`claude` default, or `codex`) to register both real adapters and pick the
 default agent, or registers only the fake adapter when set to `fake`. Alternate
 launchers must make this choice deliberately instead of assuming factory-created
