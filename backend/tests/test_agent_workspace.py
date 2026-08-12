@@ -792,6 +792,31 @@ def test_codex_editable_turn_uses_workspace_write_sandbox(notebook_payload, monk
         builder.destroy(workspace)
 
 
+def test_cli_availability_is_probed_once_per_process(monkeypatch):
+    # The capabilities endpoint asks on every app load, and the probe shells out
+    # to `<cli> --version`, so the answer is remembered rather than re-run.
+    calls = []
+
+    def stub(*args, **kwargs):
+        calls.append(args[0])
+        return SimpleNamespace(returncode=0, stdout="codex-cli 0.135.0", stderr="")
+
+    monkeypatch.setattr("backend.app.agent_workspace.adapters.subprocess.run", stub)
+    adapter = CodexAgentAdapter()
+    assert adapter.is_available() is True
+    assert adapter.is_available() is True
+    assert len(calls) == 1
+
+    monkeypatch.setattr(
+        "backend.app.agent_workspace.adapters.subprocess.run",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("no such file")),
+    )
+    missing = CodexAgentAdapter()
+    assert missing.is_available() is False
+    # A separate instance must not inherit another's answer.
+    assert ClaudeAgentAdapter()._available is None
+
+
 def test_codex_adapter_grants_write_sandbox_for_trusted_workspace(
     monkeypatch, notebook_payload,
 ):

@@ -15,6 +15,10 @@ adapters_router = APIRouter()
 MAX_TURN_SUMMARY_BYTES = 128 * 1024
 
 
+def _always_available() -> bool:
+    return True
+
+
 class StartTurnRequest(BaseModel):
     session_id: str = Field(alias="sessionId")
     expected_revision: int = Field(alias="expectedDocumentRevision")
@@ -221,8 +225,20 @@ def _serialize_current(service, turn: AgentTurn) -> dict[str, Any]:
 @adapters_router.get("/agent-adapters")
 def list_agent_adapters(request: Request) -> dict[str, Any]:
     service = request.app.state.agent_turn_service
+    # Both real adapters are registered on every start, so without this filter
+    # the composer offered an agent whose CLI is not installed and the turn only
+    # discovered that after taking the document lease. An adapter that declares
+    # no probe (the fakes) is assumed present.
+    available = {
+        agent_id: adapter
+        for agent_id, adapter in service.adapters.items()
+        if getattr(adapter, "is_available", _always_available)()
+    }
     return {
-        "defaultAgent": service.default_agent,
+        # A default whose CLI is missing would leave the composer pointing at an
+        # agent it cannot offer, so fall back to whatever is actually there.
+        "defaultAgent": service.default_agent if service.default_agent in available
+        else next(iter(available), service.default_agent),
         "agents": [
             {
                 "id": agent_id,
@@ -233,7 +249,7 @@ def list_agent_adapters(request: Request) -> dict[str, Any]:
                 )),
                 "modes": ["edit", "plan"],
             }
-            for agent_id, adapter in service.adapters.items()
+            for agent_id, adapter in available.items()
         ],
     }
 

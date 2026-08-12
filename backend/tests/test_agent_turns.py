@@ -1280,3 +1280,31 @@ def test_agent_adapters_endpoint_reflects_registry():
     assert [a["id"] for a in body["agents"]] == ["default"]
     assert body["agents"][0]["modes"] == ["edit", "plan"]
     assert body["agents"][0]["models"][0] == {"value": "default", "label": "Default"}
+
+
+def test_agent_adapters_endpoint_hides_agents_whose_cli_is_missing():
+    # Regression: both real adapters were registered unconditionally and
+    # availability was only checked at turn time, so the composer offered an
+    # agent with no CLI installed and the turn failed after taking the lease.
+    class Installed:
+        display_label = "Installed"
+
+        def is_available(self):
+            return True
+
+    class Missing:
+        display_label = "Missing"
+
+        def is_available(self):
+            return False
+
+    app = create_app(
+        agent_adapters={"installed": Installed(), "missing": Missing()},
+        default_agent="missing",
+    )
+    client = TestClient(app)
+    body = client.get("/agent-adapters").json()
+    assert [a["id"] for a in body["agents"]] == ["installed"]
+    # The configured default is gone, so the composer is pointed at a real one
+    # instead of an id absent from the list.
+    assert body["defaultAgent"] == "installed"

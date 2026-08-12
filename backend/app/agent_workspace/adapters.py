@@ -99,7 +99,29 @@ class DevelopmentFakeAgentAdapter:
         return AdapterResult(output)
 
 
-class ClaudeAgentAdapter:
+class CliAvailability:
+    """Cached "is this CLI installed and supported?" probe.
+
+    verify_supported() shells out, and the capabilities endpoint is hit on every
+    app load, so the answer is remembered for the life of the process. Installing
+    a CLI while the server is running therefore needs a restart before that agent
+    is offered — the trade for never paying a subprocess per request.
+    """
+
+    _available: bool | None = None
+
+    def is_available(self) -> bool:
+        if self._available is None:
+            try:
+                self.verify_supported()
+            except AgentAdapterError:
+                self._available = False
+            else:
+                self._available = True
+        return self._available
+
+
+class ClaudeAgentAdapter(CliAvailability):
     auxiliary_paths = frozenset()
     display_label = "Claude"
     _VERSION = re.compile(r"(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)")
@@ -170,7 +192,7 @@ class ClaudeAgentAdapter:
         self.runner.shutdown()
 
 
-class CodexAgentAdapter:
+class CodexAgentAdapter(CliAvailability):
     auxiliary_paths = frozenset()
     display_label = "Codex"
     # Codex has no separate Read tool — it reaches files through its shell/exec
