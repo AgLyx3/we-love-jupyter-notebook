@@ -1,20 +1,56 @@
 # Codex Agent Adapter — Handoff Note
 
-Date: 2026-07-27
+Date: 2026-07-27 (revised 2026-08-12)
 Branch: `feature/codex-agent-adapter`
 Issue: https://github.com/AgLyx3/we-love-jupyter-notebook/issues/3
 
 This note hands off an in-progress feature branch that adds an OpenAI Codex CLI
 agent adapter alongside the existing Claude adapter, selectable per turn from the
 chat composer. It was built with a spec → plan → subagent-driven execution flow.
-Five of six implementation tasks are fully committed and independently reviewed.
-The sixth (real-CLI smoke verification) is **not done**: it wrote the smoke
-utility and uncovered a real blocker — Codex will not read the notebook under the
-Claude-oriented "do not run shell commands" instruction — but the attempted fix
-is insufficient, so a real Codex turn does not yet do useful work. That work is
-uncommitted and unreviewed, and the end-to-end suite is unverified in this
-environment. **Do not treat this branch as ready to merge.** See "Task 6" below
-for the specific blocker and the recommended fix.
+
+## Revision 2026-08-12 — review pass
+
+The branch has been **rebased onto current main**, which had since gained
+Trusted mode (whole-notebook structural editing) and the per-operation review
+ledger. Seven review findings were fixed. The two that mattered:
+
+- **Trusted turns crashed before reaching the CLI.** The adapter read
+  `workspace.manifest.editable_cells`, which a `TrustedWorkspaceManifest` does
+  not have. Main had already fixed the identical bug for Claude by branching on
+  `workspace.is_trusted`; the same fix is now applied here.
+- **The read blocker below is fixed at the source.** The old `CODEX_READ_HINT`
+  prepended a countermand to the prompt, lost to the trailing instruction, and
+  was skipped entirely in plan mode — so the one turn shape whose whole job is
+  reading the notebook was still told to keep away from the shell. Adapters now
+  declare `file_access_via_shell`, and the builder words the shell rule
+  accordingly in all three places it is emitted (editable, read-only, Trusted).
+  The prohibition is unchanged — no installs, no network, no git — it is just
+  scoped to everything except file access.
+
+Also fixed: `/agent-adapters` no longer advertises an agent whose CLI is not
+installed; `NOTEBOOK_AGENT_ADAPTER` is renamed `NOTEBOOK_DEFAULT_AGENT` and the
+old name now fails loudly rather than being reinterpreted; the requested model
+is validated against the selected adapter instead of silently falling back;
+`AgentTurnService` refuses to construct with no adapter; and the version gate
+spans the pre-1.0 line rather than one minor version.
+
+**Real-CLI verification (codex 0.133.0, 2026-08-12).** Both previously
+unreachable shapes now work end to end:
+
+- `--plan`: completed, wrote nothing, and demonstrably *read* the notebook — the
+  plan quotes `values = [2, 4, 6]`, `total = sum(values)`, and the null
+  `execution_count`, none of which appear in the prompt. This is the exact case
+  the old hint failed to cover.
+- `--trusted`: completed and added a markdown cell, reporting
+  `structural ops: [('add', None)]` and touching neither
+  `notebook.readonly.ipynb` nor anything outside the workspace.
+
+Backend 460 tests, frontend 125 tests, all green. Every new regression test was
+verified by removing its fix and watching it fail.
+
+**Still WIP — do not merge yet.** Remaining: the editable and read-only smokes
+should be re-run against the rebased branch, and no one has exercised the
+per-operation review controls (Keep/Undo per hunk) on a Codex-authored turn.
 
 Authoritative companions:
 - Design spec: `docs/superpowers/specs/2026-07-23-codex-agent-adapter-design.md`
@@ -33,7 +69,7 @@ Authoritative companions:
   agents the backend actually registered. The chat composer gains an **Agent**
   selector (Claude | Codex); the Model options change with the selected agent;
   Mode (Edit | Plan) applies to both.
-- `NOTEBOOK_AGENT_ADAPTER` now accepts `claude` (default), `codex`, or `fake`.
+- `NOTEBOOK_DEFAULT_AGENT` accepts `claude` (default), `codex`, or `fake`.
   `claude`/`codex` both register *both* real adapters and only differ in which
   is the default; `fake` registers only the fake adapter. Invalid values raise a
   `RuntimeError` naming all three.
@@ -53,9 +89,9 @@ codex exec <prompt> --ephemeral --ignore-user-config --skip-git-repo-check
   per-tool allow-list (Claude uses `--tools Read`), so within-workspace
   protection on editable turns relies on the existing workspace audit rejecting
   any write outside `editable/`. Network is disabled explicitly.
-- **Version gate** `>=0.133.0,<0.134.0`, fail-closed, checked before every turn
-  (same deliberately narrow posture as Claude's `>=2.1.203,<2.2.0`). A Codex
-  auto-update past 0.133.x will stop Codex turns until the gate is re-verified.
+- **Version gate** spans the pre-1.0 line, fail-closed, checked before every
+  turn. It was `>=0.133.0,<0.134.0`, which a single Codex auto-update would have
+  broken; see the gate in `adapters.py` for the current range and reasoning.
 - **Structured final message** captured via `--output-last-message` into a temp
   dir *outside* the workspace (so the audit never sees it); falls back to stdout.
 - **Model allow-list** `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`; anything else uses

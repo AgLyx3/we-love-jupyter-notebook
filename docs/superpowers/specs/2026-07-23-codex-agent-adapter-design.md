@@ -24,8 +24,10 @@ In scope:
 - Per-turn adapter registry in `AgentTurnService` plus an `agent` field on the
   turn request/record.
 - `configured_agent_adapters()` wiring in `backend/app/main.py`
-  (`NOTEBOOK_AGENT_ADAPTER` = `claude` | `codex` | `fake` now selects the
-  *default* agent; `claude`/`codex` both register both real adapters).
+  (~~`NOTEBOOK_AGENT_ADAPTER`~~ **renamed `NOTEBOOK_DEFAULT_AGENT` on 2026-08-12**,
+  since it names the default rather than the only adapter; the old name now
+  raises rather than being reinterpreted) = `claude` | `codex` | `fake` selects
+  the *default* agent; `claude`/`codex` both register both real adapters.
 - `GET /agent-adapters` capabilities endpoint so the UI renders only what the
   backend actually has.
 - Frontend Agent selector with per-agent model options.
