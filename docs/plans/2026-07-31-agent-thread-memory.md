@@ -91,7 +91,7 @@ already exists, plus one genuinely missing field (§5.1).
 | # | Assumption | Status |
 |---|---|---|
 | A1 | **Budget:** last 10 turns, feed capped at ~16 KB, evicted from the oldest end only — never the middle — with an explicit `(earlier turns omitted)` marker. Individual diffs truncated at ~60 lines with an elision marker. Replies capped at ~500 chars, except plan-mode turns at ~1500 (§4.5). Replayed prompts carry the lead only (§4.6). | proposed |
-| A2 | **Performance:** built in-process from existing `AgentTurn` records. No I/O, no new process, sub-millisecond. Turn latency unchanged. | proposed |
+| A2 | **Performance:** built in-process from existing `AgentTurn` records. No I/O, no new process. ~~Sub-millisecond.~~ **Measured, and it is not: 2.5 ms for a full feed at a realistic worst case, because staleness is derived per turn. Still accepted — see D27.** | **measured** |
 | A3 | **Privacy:** undone source already lives in memory in `change.previous_source` / `next_source`. Writing it into the per-turn temp workspace and passing it to the CLI sends nothing that was not already sent when the code was first proposed. No new class of data crosses a boundary. | **confirmed by user** |
 | A4 | **Reliability:** the feed is advisory and best-effort. If history is missing, pruned, or raises, the turn runs exactly as it does today. A memory failure must never fail a turn. | proposed |
 | A5 | **Staleness:** status is derived at build time, never cached in the feed — the same rule as `stale` in the per-op design (§3.1.1 of that doc). | proposed |
@@ -471,7 +471,8 @@ only the Blocking one would have failed silently. See D23.
 - An accepted operation renders `KEPT`.
 - A cell with one hunk rejected and one kept renders **one** header and both
   status lines, and carries only the rejected hunk's content (D24).
-- A hand-edited cell renders `STALE` *in addition to* its outcome (D22).
+- A hand-edited cell renders `STALE` *in addition to* its outcome (D22) — including
+  on a turn that failed after applying, which has no outcome to qualify (D28).
 - A Trusted turn's `INSTRUCTIONS.md` carries the same feed as a Blocking one,
   without displacing its structural rules (D23).
 
@@ -576,6 +577,8 @@ unmerged. These supersede or add to the decisions above.
 | D23 | Render memory in both instruction writers | Blocking only; extract one shared writer | `_build_trusted()` is a second `INSTRUCTIONS.md` path. Memory reaching only one fails *silently* — a Trusted turn would just quietly forget the thread. Extracting a shared writer is the better end state but a larger change than this branch should carry |
 | D24 | Split a mixed cell into two entries under one header | One verdict per cell; one entry per hunk | Rounding a half-rejected cell to a single verdict has to be wrong in one direction, and rounding towards `KEPT` tells the agent its rejected code is live. Per-hunk entries were the alternative; per-outcome keeps the common single-outcome rendering unchanged |
 | D26 | Structural adds get their own memory entry, described rather than diffed | Leave them out (they are not in `changes`); synthesise a diff from `""` | Found in review: an add-only Trusted turn rendered as "It made no changes", contradicting its own reply and inviting the agent to add the cell again. Adds carry no before/after pair and the ledger keeps a hash rather than the text, so the entry states what happened and, when rejected, that the content is gone |
+| D27 | Leave the per-turn staleness derivation on the turn-start path as it is | Group `turn.operations` by cell once in `stale_cell_ids` (its inner loop rescans them per cell); cache staleness on the entry | Measured before deciding. A full feed of 10 turns each changing six 60-line cells at ten hunks a cell costs 2.5 ms, 0.9 ms of it in `stale_cell_ids`, against 8 ms for the workspace build the same turn then pays. The rescan is 0.1 ms of that 2.5 ms — the cost is `compose` over the sources, so the obvious fix buys 3%. Caching is ruled out by A5 regardless. Numbers recorded at the call site so the next reader need not re-derive them |
+| D28 | Carry `STALE` on cancelled and failed turns too | Leave it off, on the grounds that an unsettled turn has no outcome to qualify | Found in review. Staleness is not part of the outcome the cancelled/failed branch deliberately declines to guess at — it is read off the document. `changes` is only populated in the same breath as the apply, so a turn with changes to report did reach the notebook, and `FAILED` carries no "read notebook.ipynb" line of its own, so a hand-edited cell would have gone unflagged with nothing to contradict the feed's account of it |
 | D25 | Recover undone content by composing the ledger with rejected hunks restored | Store the rejected text on the operation | `compose` is already a pure function of pre-turn source and states, so the content is recomputable. Storing it would duplicate what `changes` already holds and contradict the ledger's "index ranges only, never copies of the line text" rule |
 
 ---

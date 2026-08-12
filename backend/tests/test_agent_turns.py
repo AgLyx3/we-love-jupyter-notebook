@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import time
 from threading import Event
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -749,6 +750,65 @@ def test_hand_edited_cell_is_flagged_stale_without_losing_its_outcome(notebook_p
     assert "STALE: the user has edited this cell by hand since" in memory
     # The outcome is still reported; staleness qualifies it, it does not erase it.
     assert "STATUS: APPLIED but not yet reviewed by the user" in memory
+
+
+class _FailAfterApplyExecutions:
+    """Enough of KernelExecutionService to fail a turn that already applied.
+
+    Downstream execution runs after the source changes are committed, so this is
+    how a turn reaches "failed" with its edits live in the notebook.
+    """
+
+    def __init__(self, documents):
+        self.documents = documents
+
+    def create_downstream(self, **kwargs):
+        return SimpleNamespace(operation_id="exec-1")
+
+    def run_downstream(self, operation_id, **kwargs):
+        return SimpleNamespace(
+            state="failed", error={"message": "kernel died"},
+            current_revision=self.documents.get_snapshot().revision,
+        )
+
+    def cancel_parent(self, turn_id):
+        pass
+
+
+def test_failed_turn_that_applied_reports_staleness_of_its_cells(notebook_payload):
+    # A failed turn gets no per-operation outcome — whether its edits survived
+    # is not recorded — but its cells can still go stale, and unlike CANCELLED
+    # the FAILED line says nothing about reading the notebook instead. Without
+    # the flag the feed asserts an account of a cell the user has since replaced,
+    # with nothing anywhere to contradict it.
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    recorder = _RecordingFakeAdapter([
+        FakeAttempt(edits={"editable/cell_editable.py": "value = 2\n"}),
+        FakeAttempt(),
+    ])
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=recorder, timeout=2,
+        executions=_FailAfterApplyExecutions(documents),
+    )
+    scopes.add("editable", editable=True)
+    failed = turns.start(
+        prompt="bump it", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    assert failed.state == "failed"
+    assert _source(documents.get_snapshot()) == "value = 2\n"
+    current = documents.get_snapshot()
+    documents.update_cell_source(
+        cell_id="editable", source="value = 99  # mine now\n",
+        expected_session_id=current.session_id,
+        expected_revision=current.revision, owner="user",
+    )
+
+    memory = _memory_of_next_turn(documents, scopes, turns, recorder)
+    assert "STATUS: FAILED (internal_error)" in memory
+    assert "STALE: the user has edited this cell by hand since" in memory
 
 
 def test_boundary_violation_retries_in_fresh_workspace(notebook_payload):

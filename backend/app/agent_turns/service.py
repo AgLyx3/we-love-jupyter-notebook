@@ -281,6 +281,15 @@ class AgentTurnService:
                 ),
                 key=lambda item: item.completed_at or item.created_at,
             )[-limit:]
+            # Deriving staleness per turn is the whole cost of this call, and it
+            # is paid on the turn-start path, holding both this lock and the
+            # document lease. Measured 2026-08-12 at a worst case of a full feed
+            # (10 turns) each changing six 60-line cells at ten hunks a cell:
+            # 2.5 ms for the feed, 0.9 ms of it here — against 8 ms for the
+            # workspace build the same turn goes on to pay before the agent even
+            # starts. Left as it is deliberately: of that 0.9 ms the per-cell
+            # rescan of `operations` is 0.1 ms, so grouping them first buys 3%
+            # of the feed and the real cost is compose() over the sources.
             return tuple(
                 self._memory_entry(
                     turn,
@@ -309,6 +318,14 @@ class AgentTurnService:
                     cell_id=change.cell_id, status="",
                     previous_source=change.previous_source,
                     next_source=change.next_source,
+                    # Staleness survives the omission above because it is read
+                    # off the document rather than inferred from the turn.
+                    # `changes` is only ever populated in the same breath as the
+                    # apply, so a turn with changes to report did reach the
+                    # notebook, and FAILED — unlike CANCELLED — carries no "read
+                    # notebook.ipynb" line to cover for its account of the cell
+                    # having since been overwritten by hand.
+                    stale=change.cell_id in stale,
                 )
                 for change in turn.changes
             )
