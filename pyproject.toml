@@ -20,6 +20,10 @@ dependencies = [
 test = [
   "httpx>=0.27,<1",
   "pytest>=8,<9",
+  # Test-only: the plot-tuning fixture notebook has to produce a real
+  # image/png output. The app itself never imports matplotlib — the user's
+  # kernel has whatever it has.
+  "matplotlib>=3.8,<4",
 ]
 
 [tool.setuptools.packages.find]
