@@ -16,6 +16,7 @@ from .api.turn_scope_routes import router as turn_scope_router
 from .api.execution_routes import router as execution_router
 from .api.event_routes import router as event_router
 from .api.session_routes import router as session_router
+from .api.tuning_routes import router as tuning_router
 from .agent_turns.service import AgentTurnService
 from .agent_workspace.adapters import ClaudeAgentAdapter, DevelopmentFakeAgentAdapter, FakeAgentAdapter
 from .agent_workspace.models import AgentAdapter
@@ -23,6 +24,8 @@ from .notebook_document.models import NotebookDomainError
 from .notebook_document.service import NotebookDocumentService
 from .turn_scope.service import TurnScopeService
 from .kernel_execution.service import KernelExecutionService
+from .plot_tuning.apply import TuningApplyService
+from .plot_tuning.panel import PlotTuningPanelService
 from .session_events.service import SessionEventService
 
 
@@ -42,7 +45,13 @@ def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
         try:
             _app.state.agent_turn_service.shutdown()
         finally:
-            _app.state.kernel_execution_service.shutdown()
+            try:
+                # Before the live kernel, so a shadow mid-replay is torn down by
+                # its owner rather than left holding a process nobody tracks.
+                _app.state.plot_tuning_panel_service.shutdown()
+                _app.state.plot_tuning_apply_service.shutdown()
+            finally:
+                _app.state.kernel_execution_service.shutdown()
 
     app = FastAPI(title="Local Notebook Agent Editor", lifespan=lifespan)
     app.add_middleware(
@@ -63,6 +72,14 @@ def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
         executions=app.state.kernel_execution_service,
         events=app.state.session_event_service,
     )
+    app.state.plot_tuning_panel_service = PlotTuningPanelService(
+        documents=app.state.notebook_service,
+    )
+    app.state.plot_tuning_apply_service = TuningApplyService(
+        documents=app.state.notebook_service,
+        executions=app.state.kernel_execution_service,
+        events=app.state.session_event_service,
+    )
     app.include_router(notebook_router)
     app.include_router(file_router)
     app.include_router(turn_scope_router)
@@ -70,6 +87,7 @@ def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
     app.include_router(execution_router)
     app.include_router(event_router)
     app.include_router(session_router)
+    app.include_router(tuning_router)
 
     @app.get("/health/ready")
     def health_ready() -> dict[str, str]:
