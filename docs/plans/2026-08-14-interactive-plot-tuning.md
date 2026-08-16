@@ -52,7 +52,12 @@ one value and confirm."* Playing is free. Confirming is what costs.
 
 **Non-goals.**
 
-- ipywidgets, Plotly/Bokeh interactivity, or any JS in outputs.
+- ipywidgets, Plotly/Bokeh interactivity, or any JS in outputs. Plotly in
+  particular emits `application/vnd.plotly.v1+json`, which the output renderer
+  has no branch for, so it falls through to the text fallback — and since the
+  Tune button is gated on an image output, a Plotly cell never offers tuning at
+  all. Its arguments *are* discovered correctly; it is the render path that
+  stops. Pinned in `test_plot_tuning_render.py`.
 - Pre-computed value sweeps and instant scrubbing. This is a later caching
   policy on the same machinery, not a different design (see D3).
 - Forking the live kernel process.
