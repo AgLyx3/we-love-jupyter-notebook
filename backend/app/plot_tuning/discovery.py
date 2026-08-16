@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
+from collections.abc import Sequence
 from typing import Any
 
 #: Cell magics whose body is still Python. We drop the magic line (keeping the
@@ -405,6 +406,33 @@ def _collect(cells: tuple[ChainCell, ...]) -> tuple[
     return bindings, disqualified, code_names, None
 
 
+def _live_bindings(name: str, items: Sequence[_Binding]) -> list[_Binding]:
+    """Drop the bindings a later rebinding overwrote.
+
+    Following *every* binding of a name leaks dependencies out of dead code.
+    A plot cell that opens with its own ``fig, ax = plt.subplots()`` would
+    inherit whatever an earlier cell's ``fig, ax = plt.subplots(figsize=FIGSIZE)``
+    read, and ``FIGSIZE`` would be offered as a knob for a cell that does not use
+    it — drag it, wait for the re-run, watch nothing change. That is the failure
+    this module exists to avoid, so the dead binding has to go.
+
+    A later binding kills the earlier one only when it does not read the name
+    itself. ``data = clean(data, THRESH)`` accumulates rather than replaces, so
+    everything the first ``data = load(N)`` depended on is still live and ``N``
+    stays reachable.
+
+    This governs the dependency walk only, not knob eligibility: a name assigned
+    twice is still rejected as `rebound`, because deciding *which* literal the
+    user meant to turn is a different question from which values reach the plot.
+    """
+    live = []
+    for index, binding in enumerate(items):
+        if any(name not in later.reads for later in items[index + 1:]):
+            continue
+        live.append(binding)
+    return live
+
+
 def discover(cells: tuple[ChainCell, ...], target_cell_id: str) -> Discovery:
     """Find the knobs the cell ``target_cell_id`` transitively depends on.
 
@@ -436,7 +464,7 @@ def discover(cells: tuple[ChainCell, ...], target_cell_id: str) -> Discovery:
         if name in closure:
             continue
         closure.add(name)
-        for binding in bindings.get(name, ()):
+        for binding in _live_bindings(name, bindings.get(name, ())):
             frontier |= binding.reads - closure
 
     knobs: list[Knob] = []

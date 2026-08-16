@@ -316,3 +316,43 @@ def test_knobs_are_ordered_by_position_in_the_notebook():
         "plt.plot(second, first, also)\n",
     ), "plot")
     assert [knob.name for knob in result.knobs] == ["second", "first", "also"]
+
+
+# Regression: dead bindings must not leak their dependencies into the closure.
+#
+# Found by running the scan over a gallery notebook where several cells each
+# open their own figure. Following *every* binding of a name meant a plot cell
+# that rebinds `fig, ax` itself inherited whatever an earlier cell's
+# `fig, ax = plt.subplots(figsize=FIGSIZE)` had read — so FIGSIZE was offered
+# for a cell that never uses it. Turning it re-runs the chain and changes
+# nothing, which is exactly the failure the rejection rules exist to prevent.
+def test_a_rebound_name_does_not_leak_the_dead_bindings_dependencies():
+    result = discover(chain(
+        "FIGSIZE = (6, 3)\nBINS = 20\n",
+        "fig, ax = plt.subplots(figsize=FIGSIZE)\nax.hist(d, bins=BINS)\n",
+        "fig, ax = plt.subplots()\nax.hist(d)\nplt.show()\n",
+    ), "plot")
+    assert names(result) == set()
+
+
+def test_the_live_binding_still_reaches_its_own_dependencies():
+    # The mirror image: the target uses the earlier figure rather than making
+    # its own, so FIGSIZE genuinely does control it and must survive.
+    result = discover(chain(
+        "FIGSIZE = (6, 3)\n",
+        "fig, ax = plt.subplots(figsize=FIGSIZE)\n",
+        "ax.set_title('t')\nfig\n",
+    ), "plot")
+    assert names(result) == {"FIGSIZE"}
+
+
+def test_an_accumulating_rebinding_keeps_the_earlier_dependency():
+    # `data = clean(data, THRESH)` reads `data`, so it refines rather than
+    # replaces: N must stay reachable through the first binding.
+    result = discover(chain(
+        "N = 100\nTHRESH = 0.5\n",
+        "data = load(N)\n",
+        "data = clean(data, THRESH)\n",
+        "plt.plot(data)\n",
+    ), "plot")
+    assert names(result) == {"N", "THRESH"}
