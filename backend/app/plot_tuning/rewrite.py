@@ -46,6 +46,22 @@ def render(kind: str, value: Any) -> str:
     raise RewriteError(f"No literal rendering for kind {kind!r}")
 
 
+def normalize(kind: str, value: Any) -> Any:
+    """Canonicalise a JSON-decoded value to the shape its knob kind expects.
+
+    JSON has no tuple, so a `tuple` knob always arrives from the browser as a
+    list. `render` then writes ``(10, 6)`` while `_verify` reads it back and
+    compares against ``[10, 6]``, so the rewrite is rejected and *every* tuple
+    Apply fails — while Preview, which normalises on its own path, works. Doing
+    it here instead of at one call site is what keeps the two from drifting.
+    """
+    if kind == "tuple" and isinstance(value, (list, tuple)):
+        return tuple(value)
+    if kind == "list" and isinstance(value, (list, tuple)):
+        return list(value)
+    return value
+
+
 def _offset(lines: list[str], lineno: int, col_offset: int) -> int:
     """Absolute character index in the joined source for an `ast` position."""
     absolute = sum(len(line) + 1 for line in lines[: lineno - 1])
@@ -63,6 +79,7 @@ def rewrite_cell(source: str, edits: list[tuple[Knob, Any]]) -> str:
     """
     if not edits:
         return source
+    edits = [(knob, normalize(knob.kind, value)) for knob, value in edits]
     lines = source.split("\n")
     spans = []
     for knob, value in edits:

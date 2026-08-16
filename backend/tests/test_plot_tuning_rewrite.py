@@ -155,3 +155,18 @@ def test_rewrite_chain_groups_edits_by_cell_and_returns_only_changes():
 ])
 def test_render(kind, value, expected):
     assert render(kind, value) == expected
+
+
+def test_a_tuple_knob_applies_from_a_json_list():
+    # JSON has no tuple, so the browser always sends a list. Preview normalised
+    # on its own path while apply did not, so every tuple Apply failed with
+    # "expected [10, 6]" while its preview had just rendered correctly.
+    source = "figsize = (7, 4)\n"
+    updated = rewrite_cell(source, [(knob_for(source, "figsize"), [10, 6])])
+    assert updated == "figsize = (10, 6)\n"
+
+
+def test_a_list_knob_applies_from_a_json_list():
+    source = "limits = [0, 10]\n"
+    updated = rewrite_cell(source, [(knob_for(source, "limits"), [2, 8])])
+    assert updated == "limits = [2, 8]\n"
