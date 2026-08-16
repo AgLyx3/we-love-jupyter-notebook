@@ -172,6 +172,47 @@ def _module_level_nodes(statement: ast.stmt):
         stack.extend(ast.iter_child_nodes(node))
 
 
+#: Methods that mutate their receiver and return nothing useful. Used only for
+#: the narrow in-place-call rule below, so the list is kept to names whose
+#: mutating meaning is unambiguous across the builtin containers.
+IN_PLACE_METHODS = frozenset({
+    "append", "extend", "insert", "update", "add", "remove", "discard",
+    "clear", "sort", "setdefault", "popitem",
+})
+
+
+def _in_place_receiver(statement: ast.stmt) -> str | None:
+    """The name a bare ``x.method(...)`` statement mutates, if it clearly does.
+
+    ``df.fillna(FILL, inplace=True)`` changes ``df`` without producing a single
+    AST store, so nothing in `_stored_names` can see it and ``FILL`` never
+    becomes reachable from a plot that reads ``df``. That is everyday pandas.
+
+    Deliberately narrow. The tempting general rule — "a bare expression
+    statement is there for its side effect, so treat it as mutating" — would
+    also swallow the notebook display idiom (a trailing ``df.head()`` renders a
+    table) and over-connect the graph, which is how a knob that controls nothing
+    gets offered. So we require an unambiguous signal: an ``inplace=True``
+    keyword, or one of the container methods that exist only to mutate.
+    """
+    if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+        return None
+    call = statement.value
+    if not isinstance(call.func, ast.Attribute):
+        return None
+    inplace = any(
+        keyword.arg == "inplace" and isinstance(keyword.value, ast.Constant)
+        and keyword.value.value is True
+        for keyword in call.keywords
+    )
+    if not inplace and call.func.attr not in IN_PLACE_METHODS:
+        return None
+    base = call.func.value
+    while isinstance(base, (ast.Subscript, ast.Attribute)):
+        base = base.value
+    return base.id if isinstance(base, ast.Name) else None
+
+
 def _stored_names(statement: ast.stmt) -> frozenset[str]:
     """Every module-level name a statement binds *or mutates in place*.
 
@@ -204,6 +245,10 @@ def _stored_names(statement: ast.stmt) -> frozenset[str]:
                     base = base.value
                 if isinstance(base, ast.Name):
                     found.add(base.id)
+        else:
+            receiver = _in_place_receiver(child) if isinstance(child, ast.stmt) else None
+            if receiver is not None:
+                found.add(receiver)
     return frozenset(found)
 
 
