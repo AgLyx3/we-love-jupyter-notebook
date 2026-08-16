@@ -474,7 +474,42 @@ control types.
 
 `matplotlib` added to the `[test]` extra — test-only; the app never imports it.
 
-Stages 1–5 not started.
+**Stages 1–5 — complete.** 576 backend tests, 165 frontend tests, 2 end-to-end
+tests passing against a real kernel and dev server, `tsc -b` clean.
+
+- **§3.1 shadow** (`plot_tuning/shadow.py`) — owns its own `KernelSession` and
+  imports nothing from `KernelExecutionService`; the load-bearing test asserts a
+  preview leaves both the document revision and the live kernel untouched.
+- **§3.4 apply** (`plot_tuning/apply.py`) — atomic multi-cell write-back through
+  `apply_source_changes_under_lease`, ledger reuse for per-hunk Keep/Undo, and
+  the `tune` origin. The §3.6 prefix guard resolves by *extending* the re-run to
+  the top when the live kernel has not executed the prefix, and reports having
+  done so (`reRanFromTop`) — "re-ran the whole notebook" is a different bill from
+  "re-ran from your edit down", and the user should be told which they got.
+- **§3.1 panel service** (`plot_tuning/panel.py`) — the analysis pass and the
+  one-shadow-at-a-time rule. `open_panel` starts nothing, which is what makes D5
+  real rather than decorative.
+- **§3.5 UI** (`frontend/src/plotTuning/`) — `dirty` is derived, never stored, so
+  the preview band cannot be present in one state and missing in another.
+
+Three defects were found by adversarial review of the frontend and fixed:
+
+- **A settled tuning record permanently captured its cells.** Routing keyed off
+  "does this cell appear in the record", but `with_state` keeps accepted and
+  rejected operations for ever and the record only clears on a session change.
+  After keeping a tune, the next *agent* edit to that cell rendered no review
+  bar, no diff and no per-cell Keep/Undo. This was a regression in the existing
+  agent flow, not the new feature. Routing now requires an unsettled operation.
+- **An in-flight warm-up leaked its kernel on unmount.** The panel is swapped out
+  wholesale rather than re-rendered closed, and at that moment the shadow id is
+  still unknown, so the warm resolved into a component nobody was watching and a
+  duplicate kernel survived to the idle timeout.
+- **A superseded preview could pin `preview-failed`** after a re-scan had already
+  reset every knob to its committed value.
+
+Both of the first two have regression tests, each verified by reverting the fix
+and watching them fail. The third is covered by the same token-retirement change
+but has no dedicated test.
 
 ## 6. Open Questions
 

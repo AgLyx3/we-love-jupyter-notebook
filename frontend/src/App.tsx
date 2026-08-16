@@ -1,6 +1,7 @@
 import { AlertTriangle, BookOpen, PanelLeft, Save, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
-import { ApiError, api, connectEvents, type AgentOperation, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type KernelStatus, type NotebookSnapshot, type TurnScope, type WriteScope } from "./api/client";
+import { ApiError, api, connectEvents, type AgentOperation, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type KernelStatus, type NotebookSnapshot, type TuningRecord, type TuningValue, type TurnScope, type WriteScope } from "./api/client";
+import { hasImageOutput } from "./notebook/NotebookCell";
 import ReviewBar from "./notebook/ReviewBar";
 import AgentChatPanel from "./agentChat/AgentChatPanel";
 import type { TurnRecord } from "./agentChat/AgentChatPanel";
@@ -33,6 +34,10 @@ export default function App() {
   const [focusRequest, setFocusRequest] = useState<{ cellId: string; requestId: number } | null>(null);
   const [attachments, setAttachments] = useState<SelectionAttachment[]>([]);
   const [operation, setOperation] = useState<ExecutionOperation | null>(null);
+  // The last Apply from a tuning panel. Held here rather than fetched with the
+  // rest of the session because a tune record has no live state to poll: it is
+  // created complete, and only this window's Keep/Undo moves it afterwards.
+  const [tuningRecord, setTuningRecord] = useState<TuningRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ tone: "error" | "warning"; text: string } | null>(null);
@@ -85,7 +90,7 @@ export default function App() {
   const mutationGenerationRef = useRef(0);
   useEffect(() => { snapshotRef.current = notebook; }, [notebook]);
   useEffect(() => { scopeRef.current = scope; }, [scope]);
-  useEffect(() => { setDirtyCellIds(new Set()); setAttachments([]); }, [notebook?.sessionId]);
+  useEffect(() => { setDirtyCellIds(new Set()); setAttachments([]); setTuningRecord(null); }, [notebook?.sessionId]);
   useEffect(() => {
     setCloseTarget((target) => target && (target.sessionId !== notebook?.sessionId || target.revision !== notebook.revision) ? null : target);
   }, [notebook?.sessionId, notebook?.revision]);
@@ -190,6 +195,65 @@ export default function App() {
     }, 1500);
     return () => window.clearInterval(timer);
   }, [polling, refresh, fetchTurn, fetchExecution]);
+
+  // Which cells are worth offering a Tune button on. §3.5 gates it on the scan
+  // having actually found knobs, not merely on there being a picture: a button
+  // that opens onto "nothing here can be tuned" is worse than no button.
+  // `POST /tuning/open` is pure analysis and starts no kernel, so this costs one
+  // request per plot cell, cached against a fingerprint of the source at and
+  // above that cell — the answer changes only when that source does, so running
+  // cells and bumping the revision do not re-ask.
+  const [tunableCellIds, setTunableCellIds] = useState<ReadonlySet<string>>(() => new Set<string>());
+  const tuningProbeRef = useRef(new Map<string, boolean>());
+  useEffect(() => {
+    const candidates = (notebook?.cells ?? []).filter((cell) => cell.cellType === "code" && hasImageOutput(cell.outputs));
+    if (!notebook || !candidates.length) { setTunableCellIds((current) => current.size ? new Set<string>() : current); return; }
+    const cache = tuningProbeRef.current;
+    // One entry per distinct source state; the cap stops a long editing session
+    // from growing the map without bound.
+    if (cache.size > 500) cache.clear();
+    const keys = new Map<string, string>();
+    let hash = 5381;
+    let length = 0;
+    // Rolling, and stopping at the last plot cell: this runs on every notebook
+    // refresh, and a run-all fires a lot of them, so it must not walk the whole
+    // source of a large notebook each time.
+    const last = candidates[candidates.length - 1].index;
+    for (const cell of notebook.cells) {
+      for (let index = 0; index < cell.source.length; index += 1) hash = ((hash * 33) ^ cell.source.charCodeAt(index)) >>> 0;
+      length += cell.source.length + 1;
+      keys.set(cell.cellId, `${notebook.sessionId}:${cell.cellId}:${length}:${hash.toString(36)}`);
+      if (cell.index >= last) break;
+    }
+    let live = true;
+    const settle = () => {
+      if (!live) return;
+      const next = new Set(candidates.filter((cell) => cache.get(keys.get(cell.cellId) ?? "")).map((cell) => cell.cellId));
+      setTunableCellIds((current) => current.size === next.size && [...next].every((id) => current.has(id)) ? current : next);
+    };
+    settle();
+    void (async () => {
+      for (const cell of candidates) {
+        const key = keys.get(cell.cellId) as string;
+        if (cache.has(key)) continue;
+        try {
+          const plan = await api.openTuning(notebook, cell.cellId);
+          cache.set(key, plan.knobs.length > 0);
+        } catch (error) {
+          // A stale-revision conflict says nothing about this cell — a newer
+          // snapshot is already on its way and will ask again. Caching it would
+          // hide the button for that source forever. Any other refusal (a
+          // markdown target, an unparsable chain) really is "no knobs", and
+          // none of this is worth a notice: the user did not ask for it.
+          if (error instanceof ApiError && error.isConflict) return;
+          cache.set(key, false);
+        }
+        if (!live) return;
+        settle();
+      }
+    })();
+    return () => { live = false; };
+  }, [notebook]);
 
   function showError(error: unknown) {
     const text = error instanceof Error ? error.message : "The operation could not be completed";
@@ -301,6 +365,28 @@ export default function App() {
       conflictText: "This cell changed after the agent edited it, so that change can no longer be undone individually.",
     }, setNotebook);
 
+  // Plot tuning. Scan, warm and preview are deliberately *not* routed through
+  // `mutate`: none of them touches the document, and `mutate`'s global `busy`
+  // would disable the very knobs being dragged. Apply is a document mutation
+  // like any other and goes through it.
+  const applyTuning = async (notebook: NotebookSnapshot, shadowId: string, values: Record<string, TuningValue>) => {
+    const record = await mutate(() => api.applyTuning(notebook, shadowId, values), {
+      conflictText: "The notebook changed while the tuning panel was open, so nothing was applied. Re-open Tune against the latest revision.",
+    }, (applied) => setTuningRecord(applied));
+    // `mutate` reports the failure and hands back null. The panel is still
+    // sitting in "applying" waiting on this promise, so turn that null back
+    // into a rejection rather than letting it render a record that never was.
+    if (!record) throw new Error("These values were not applied — see the message at the top of the window.");
+    return record;
+  };
+  const keepTunedOperations = (notebook: NotebookSnapshot, recordId: string, operationIds: string[]) =>
+    void mutate(() => api.acceptTuningOperations(notebook, recordId, operationIds), { refreshAfter: false },
+      (updated) => setTuningRecord(reconcileTuningChanges(updated, snapshotRef.current)));
+  const undoTunedOperations = (notebook: NotebookSnapshot, recordId: string, operationIds: string[]) =>
+    void mutate(() => api.rejectTuningOperations(notebook, recordId, operationIds), {
+      conflictText: "This cell changed after you tuned it, so those values can no longer be undone individually.",
+    }, (updated) => setTuningRecord(reconcileTuningChanges(updated, snapshotRef.current)));
+
   // Selection → "Add to agent chat": the containing cell becomes the editable
   // boundary and the selection is attached to the chat as a reference chip
   // (Cursor-style — cell/line label, not raw code). The code is sent to the
@@ -411,7 +497,21 @@ export default function App() {
         onNext={() => focusChange(1)}
         onKeepAll={() => acceptOperations(notebook, selectedTurn.turnId)}
         onUndoAll={() => rejectOperations(notebook, selectedTurn.turnId)} />}
-      <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} trusted={trustedScope} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} autoSave={autoSave} focusRequest={focusRequest}
+      <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} tuningRecord={tuningRecord} trusted={trustedScope} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} autoSave={autoSave} focusRequest={focusRequest}
+        tunableCellIds={tunableCellIds}
+        tuningControls={{
+          revision: notebook.revision,
+          onScan: (cellId) => api.openTuning(notebook, cellId),
+          onWarm: (cellId) => api.warmTuning(notebook, cellId),
+          onPreview: (shadowId, values) => api.previewTuning(shadowId, values),
+          onApply: (shadowId, values) => applyTuning(notebook, shadowId, values),
+          // Best-effort teardown: the shadow may already be gone (idle timeout,
+          // revision change), and that is the success case, not an error to
+          // report to someone who has closed the panel.
+          onDiscardShadow: (shadowId) => { void api.closeTuning(shadowId).catch(() => undefined); },
+        }}
+        onKeepTuned={(recordId, operationIds) => { if (operationIds.length) keepTunedOperations(notebook, recordId, operationIds); }}
+        onUndoTuned={(recordId, operationIds) => { if (operationIds.length) undoTunedOperations(notebook, recordId, operationIds); }}
         onKeepCell={(turnId, cellId) => {
           // One request per cell, not per hunk: keeping a cell is a single
           // settle, and a mid-loop failure used to leave it half-kept.
@@ -545,6 +645,19 @@ function reconcileTurnChanges(turn: AgentTurn, notebook: NotebookSnapshot | null
       // and the note explaining that only whole-turn undo applies.
       (governed.has(change.cellId) ? unsettled.has(change.cellId) : true)
       && notebook.cells.some((cell) => cell.cellId === change.cellId)),
+  };
+}
+
+// The tuning equivalent of reconcileTurnChanges: a record's diff stays on
+// screen while the cell still has something unreviewed. Simpler than the agent
+// version because every tuned change is governed by operations — a tune with no
+// ledger cannot exist — so there is no pre-ledger fallback to keep working.
+function reconcileTuningChanges(record: TuningRecord, notebook: NotebookSnapshot | null): TuningRecord {
+  if (!notebook) return record;
+  const unsettled = new Set(record.operations.filter((item) => item.state !== "accepted" && item.state !== "rejected").map((item) => item.cellId));
+  return {
+    ...record,
+    changes: record.changes.filter((change) => unsettled.has(change.cellId) && notebook.cells.some((cell) => cell.cellId === change.cellId)),
   };
 }
 
