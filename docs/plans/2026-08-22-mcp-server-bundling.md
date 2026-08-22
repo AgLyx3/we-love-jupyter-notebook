@@ -1,6 +1,6 @@
 # Bundling the editor as an MCP server
 
-Status: investigation complete, not built
+Status: investigation complete; phases 1-2 built, 3-7 outstanding
 Branch: `claude/app-mcp-browser-bundling-c11ed2`
 Date: 2026-08-22
 
@@ -338,11 +338,24 @@ bundled `claude-api` skill, `shared/agent-design.md`.
 
 Ordered so each phase is independently useful.
 
-1. **Serve the SPA from FastAPI** — mount `/api` + `StaticFiles` + SPA fallback,
-   behind a flag so `scripts/dev.py` is untouched. Proven in check 4; the PoC was
-   ~20 lines. Add a build step so `dist/` exists for the bundle.
-2. **Origin/Host validation + ephemeral port + launch token** (§5.5) — middleware
-   on the bundled app. Small, and everything else is unsafe to ship without it.
+1. **Serve the SPA from FastAPI** — ✅ **built.** `backend/app/bundled.py`
+   (`create_bundled_app`) mounts the API under `/api`, serves `dist/` at the
+   root with an SPA fallback, and refuses to start without a build. A separate
+   factory rather than a flag, so `scripts/dev.py` is untouched. Verified in a
+   browser: the real built SPA boots from it and drives a notebook. Two bugs
+   the build surfaced, both now fixed and covered: `create_app`'s adapter
+   default is the *test* fake, so the bundle must pass the configured one
+   explicitly or a human's agent turn gets canned answers; and Starlette does
+   not run a **mounted** app's lifespan, so the bundle delegates to it — without
+   that the kernel subprocess outlives the server (measured: 0 → 1 → 0 kernels
+   across a start/run/SIGTERM cycle).
+2. **Origin/Host validation** (§5.5) — ✅ **built**, in the same module, since
+   the bundle should not exist even briefly without it. A rebound `Host` or a
+   hostile `Origin` now gets 403 before reaching application logic;
+   `create_app` grew a `cors_origins` argument so the bundle drops the dev
+   server's cross-origin grant. **Still owed:** ephemeral port and per-launch
+   token — the token needs the SPA to read it from its own URL, so it lands
+   with the launcher in phase 5.
 3. **Gate model-initiated execution** (§5.1) — new operation `kind`, threaded to
    `prompt_for_risk`. The blocking/approval machinery already exists; this
    selects it. The one change that touches core execution code.

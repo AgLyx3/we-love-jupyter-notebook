@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 import os
 
@@ -29,7 +30,21 @@ from .plot_tuning.panel import PlotTuningPanelService
 from .session_events.service import SessionEventService
 
 
-def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
+DEV_SERVER_ORIGINS = ("http://127.0.0.1:5173", "http://localhost:5173")
+
+
+def create_app(
+    *,
+    agent_adapter: AgentAdapter | None = None,
+    cors_origins: Sequence[str] | None = None,
+) -> FastAPI:
+    """Build the API.
+
+    ``cors_origins`` defaults to the Vite dev server, which is the only
+    cross-origin caller in the two-process development layout. Pass ``()`` when
+    the API is served from the same origin as the frontend (see
+    ``bundled.create_bundled_app``), where the allowance is dead config.
+    """
     notebook_service = NotebookDocumentService()
     session_event_service = SessionEventService()
     kernel_execution_service = KernelExecutionService(
@@ -54,13 +69,17 @@ def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
                 _app.state.kernel_execution_service.shutdown()
 
     app = FastAPI(title="Local Notebook Agent Editor", lifespan=lifespan)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+    allowed_origins = list(
+        DEV_SERVER_ORIGINS if cors_origins is None else cors_origins
     )
+    if allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
     app.state.notebook_service = notebook_service
     app.state.session_event_service = session_event_service
     app.state.kernel_execution_service = kernel_execution_service
