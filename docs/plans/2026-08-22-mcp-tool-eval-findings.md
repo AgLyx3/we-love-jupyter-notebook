@@ -122,7 +122,53 @@ accident — it is now recorded as `could-not-run`.
 `add-a-cell` verified that the `data` cell was untouched, which an edit to
 `report` would have passed. It checks every pre-existing cell now.
 
-## 5. Still open
+## 5. First-run audit
+
+Separately from the model-behaviour tasks, the setup path was broken on purpose
+the ways a first-timer breaks it. One of the four was serious.
+
+**Forgetting `npm run build` hung the server permanently.** `EditorProcess`
+used a non-reentrant `threading.Lock`. `ensure_running` held it, the failed
+start called `stop()` to clean up, and that second acquire never returned — so
+the first tool call hung with nothing said, and every later call hung behind
+it. The lock was never released, so the server was bricked for the session. The
+child was exiting correctly in one second with a perfect message; nobody could
+ever see it. Now an `RLock`, and the failure surfaces in 0.6 seconds carrying
+the child's own words: *"No built frontend found. Run `npm run build`…"*.
+
+**A typo in `--workspace-root` was reported as an environment variable.** The
+launcher passes the flag to the child as `NOTEBOOK_WORKSPACE_ROOT`, so a
+mistyped path failed at the first tool call complaining about a variable the
+user had never heard of. The launcher validates its own flag now and fails at
+launch naming `--workspace-root`.
+
+**Nothing ever revealed the editor's URL.** `webbrowser.open` silently does
+nothing on a headless or remote host, and the port is ephemeral, so a person
+had no way to find the tab the whole design depends on. `notebook_open` returns
+`editorUrl` now, and its description tells the client to pass it on.
+
+**A client with no filesystem tools had to guess a filename.** Browsing is
+deliberately not a tool, and that stands — but a caller naming a notebook that
+is not there now gets the `.ipynb` files that *are* in the workspace, bounded
+and skipping checkpoint and dependency directories. Scoped to the root the
+editor is already confined to, which is what the human's picker shows anyway.
+
+### 5.1 The harness was measuring the wrong thing
+
+`answer-without-running` passed with **zero tool calls**. `--strict-mcp-config`
+limits which MCP servers load; it does not disable the client's own file
+reader, so the model answered by reading the notebook off disk and never
+touched this surface at all. A check meant to measure frugal tool use was
+passing on a run that used no tools.
+
+The harness now passes `--tools ""` so only MCP tools exist, and the check
+requires `notebook_open` to have been called. Re-run under those conditions it
+passes for the right reason: one call, `opened=True`.
+
+Worth keeping in mind for any task added later — a permissive client is a
+silent way for an eval to measure nothing.
+
+## 6. Still open
 
 **~~There is no way to add or delete a cell.~~ Closed.** This was the finding,
 and it was real: `/cells/{id}/source` edited an existing cell and structural

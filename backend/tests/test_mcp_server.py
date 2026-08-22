@@ -9,10 +9,12 @@ import pytest
 
 from backend.app.mcp.polling import await_execution
 from backend.app.mcp.server import (
+    MAX_SUGGESTED_NOTEBOOKS,
     EditorSession,
     ToolFailure,
     _explain,
     _added_cell,
+    available_notebooks,
     build_server,
     resolve_requested_path,
 )
@@ -398,3 +400,51 @@ def test_an_impossible_position_yields_nothing_rather_than_a_wrong_cell():
     """Better to return no id than confidently return someone else's."""
     assert _added_cell(snapshot_with("a"), 5) is None
     assert _added_cell({"cells": []}, None) is None
+
+
+# --- first-run clarity -------------------------------------------------------
+
+
+def test_the_workspace_notebooks_are_listed_for_a_caller_that_guessed(tmp_path):
+    """A client with no filesystem tools has to be told what is there.
+
+    Browsing is deliberately not in the tool surface, and this is not browsing:
+    it is `.ipynb` files inside the root the editor is already confined to,
+    offered only when a caller names a path that is not there.
+    """
+    (tmp_path / "analysis").mkdir()
+    (tmp_path / "first.ipynb").write_text("{}", encoding="utf-8")
+    (tmp_path / "analysis" / "second.ipynb").write_text("{}", encoding="utf-8")
+    assert available_notebooks(str(tmp_path)) == ["analysis/second.ipynb", "first.ipynb"]
+
+
+def test_checkpoint_and_dependency_directories_are_not_offered(tmp_path):
+    """`.ipynb_checkpoints` is full of notebooks nobody means."""
+    for noise in (".ipynb_checkpoints", "node_modules", ".git"):
+        (tmp_path / noise).mkdir()
+        (tmp_path / noise / "copy.ipynb").write_text("{}", encoding="utf-8")
+    (tmp_path / "real.ipynb").write_text("{}", encoding="utf-8")
+    assert available_notebooks(str(tmp_path)) == ["real.ipynb"]
+
+
+def test_the_listing_is_bounded(tmp_path):
+    for index in range(40):
+        (tmp_path / f"n{index:02d}.ipynb").write_text("{}", encoding="utf-8")
+    assert len(available_notebooks(str(tmp_path))) == MAX_SUGGESTED_NOTEBOOKS
+
+
+def test_no_workspace_means_no_suggestions(tmp_path):
+    """Unconfined, there is no bounded set to offer — and enumerating a whole
+    machine is exactly what the surface refuses to do."""
+    assert available_notebooks(None) == []
+    assert available_notebooks(str(tmp_path / "absent")) == []
+
+
+def test_open_tells_the_caller_where_a_person_can_watch(built):
+    """webbrowser.open silently does nothing on a headless or remote host, so
+    the URL has to come back in the answer or nobody ever learns it."""
+    server, _ = built
+    description = {
+        tool.name: tool.description for tool in asyncio.run(server.list_tools())
+    }["notebook_open"]
+    assert "editorUrl" in description

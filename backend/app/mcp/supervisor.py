@@ -69,7 +69,12 @@ class EditorProcess:
         self.startup_timeout = startup_timeout
         self._process: subprocess.Popen[bytes] | None = None
         self._port: int | None = None
-        self._lock = threading.Lock()
+        # Reentrant on purpose. A failed start tears itself down while
+        # `ensure_running` still holds this, and with a plain Lock that second
+        # acquire never returns — the first tool call hangs, and so does every
+        # call after it, because the lock is never released. The most likely
+        # first-run mistake (forgetting `npm run build`) took exactly that path.
+        self._lock = threading.RLock()
 
     @property
     def running(self) -> bool:

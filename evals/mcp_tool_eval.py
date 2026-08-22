@@ -110,8 +110,11 @@ def check_read_is_frugal(nb: dict[str, Any], run: Run) -> tuple[bool, str]:
     reads = run.count("notebook_read")
     ran = run.used("notebook_run_all") or run.used("notebook_run_cell")
     said_it = "steelblue" in run.text.lower()
-    ok = said_it and not ran and reads <= 2
-    return ok, f"reads={reads} ran={ran} answered={said_it}"
+    # `opened` guards against the answer arriving without this surface being
+    # used at all, which is how this check once passed with zero tool calls.
+    opened = run.used("notebook_open")
+    ok = said_it and opened and not ran and reads <= 2
+    return ok, f"opened={opened} reads={reads} ran={ran} answered={said_it}"
 
 
 def check_add_a_cell(nb: dict[str, Any], run: Run) -> tuple[bool, str]:
@@ -255,6 +258,12 @@ def run_task(task: Task, keep: Path | None = None) -> Run:
                     "--mcp-config", str(workspace / "mcp.json"), "--strict-mcp-config",
                     "--settings", str(workspace / "settings.json"),
                     "--permission-mode", "dontAsk",
+                    # No built-in tools. Without this the client can read the
+                    # notebook with its own file reader and never touch the MCP
+                    # server at all — a run measuring this surface then passes
+                    # having exercised none of it. Observed exactly that: a task
+                    # answered correctly with zero tool calls.
+                    "--tools", "",
                     "--no-session-persistence",
                     "--output-format", "stream-json", "--verbose",
                 ],

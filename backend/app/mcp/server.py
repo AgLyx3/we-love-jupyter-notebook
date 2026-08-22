@@ -113,6 +113,43 @@ def resolve_requested_path(path: str, workspace_root: str | None) -> str:
     return str(candidate.resolve())
 
 
+MAX_SUGGESTED_NOTEBOOKS = 20
+
+
+def available_notebooks(workspace_root: str | None, limit: int = MAX_SUGGESTED_NOTEBOOKS) -> list[str]:
+    """The notebooks inside the workspace, as paths relative to it.
+
+    Deliberately not a browsing tool — that is left out of the surface on
+    purpose, and this is not it. It is scoped to `.ipynb` files inside the root
+    the editor was already confined to, and used only to answer "which one?"
+    when a caller names a path that is not there. A client with no filesystem
+    tools of its own otherwise has to guess a filename, which is a poor first
+    run for something that only needs to be told once.
+    """
+    if not workspace_root:
+        return []
+    root = Path(workspace_root)
+    if not root.is_dir():
+        return []
+    found: list[str] = []
+    try:
+        for path in sorted(root.rglob("*.ipynb")):
+            if any(part.startswith(".") or part in _SKIPPED_DIRS for part in path.parts):
+                continue
+            found.append(str(path.relative_to(root)))
+            if len(found) >= limit:
+                break
+    except OSError:
+        return found
+    return found
+
+
+# Mirrors the file browser's prune list: never useful, sometimes enormous.
+_SKIPPED_DIRS = frozenset({
+    ".git", "node_modules", "__pycache__", ".venv", "venv", ".ipynb_checkpoints",
+})
+
+
 def _explain(status: int, body: dict[str, Any] | None, *, what: str) -> str:
     """Turn the API's error envelope into a next step.
 
@@ -245,7 +282,9 @@ def build_server(
             "tab. Starts the editor if it is not already running. `path` may be "
             "absolute, or relative to the workspace root this editor was started "
             "for. Returns the session and a summary of the notebook. Use this "
-            "once per notebook; to re-read one already open, use notebook_read."
+            "once per notebook; to re-read one already open, use notebook_read. "
+            "The returned editorUrl is where a person can watch and intervene — "
+            "tell them, especially if the tab did not open by itself."
         ),
     )
     def notebook_open(path: str) -> dict[str, Any]:
@@ -256,13 +295,17 @@ def build_server(
             # Replacing an open notebook needs the precondition, same as any
             # other mutation of the active session.
             body.update(tools.state.mutation())
-        snapshot = tools.request(
-            "POST", "/notebooks/open", json_body=body, what="Opening the notebook",
-        )
+        try:
+            snapshot = tools.request(
+                "POST", "/notebooks/open", json_body=body, what="Opening the notebook",
+            )
+        except ToolFailure as failure:
+            raise ToolFailure(_with_suggestions(str(failure), tools)) from failure
         tools.state.observe(snapshot)
         if open_browser:
             tools.show_in_browser()
         shaped = shape_notebook(snapshot)
+        shaped["editorUrl"] = tools.editor.base_url
         hint = budget_hint(shaped)
         if hint:
             shaped["note"] = hint
@@ -443,6 +486,16 @@ def build_server(
     return server, tools
 
 
+def _with_suggestions(message: str, tools: NotebookTools) -> str:
+    """Add "here is what is actually there" to a path failure."""
+    candidates = available_notebooks(tools.editor.workspace_root)
+    if not candidates:
+        return message
+    listed = "\n  ".join(candidates)
+    more = " (first 20)" if len(candidates) >= MAX_SUGGESTED_NOTEBOOKS else ""
+    return f"{message}\n\nNotebooks in this workspace{more}:\n  {listed}"
+
+
 def _added_cell(snapshot: dict[str, Any], index: int | None) -> dict[str, Any] | None:
     """Which cell the insert produced, so the caller gets an id to run.
 
@@ -508,6 +561,16 @@ def main() -> None:  # pragma: no cover - process entry point
         help="Do not open a browser tab automatically (notebook_show still does)",
     )
     args = parser.parse_args()
+
+    if args.workspace_root is not None:
+        root = Path(args.workspace_root).expanduser()
+        if not root.is_dir():
+            parser.error(
+                f"--workspace-root is not a directory: {root}\n"
+                "Point it at the folder holding the notebooks you want the "
+                "editor to reach."
+            )
+        args.workspace_root = str(root.resolve())
 
     server, tools = build_server(
         workspace_root=args.workspace_root, open_browser=not args.no_browser,

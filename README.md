@@ -120,11 +120,13 @@ scope are one server-side session, so a cell the client edits updates in front
 of you, and a cell you edit is a cell the client is then refused for editing
 against a stale read.
 
-Install the extra and point a client at the command:
+Install the extra and build the frontend — **both**, in this order. The tab is
+served from the built frontend, so skipping `npm run build` leaves the editor
+unable to start and the first tool call fails with exactly that message:
 
 ```bash
 .venv/bin/pip install -e '.[mcp]'
-npm run build            # the tab is served from the built frontend
+npm run build
 ```
 
 ```bash
@@ -133,10 +135,18 @@ claude mcp add notebook-editor -- \
   --workspace-root /absolute/path/to/your/project
 ```
 
-`--workspace-root` confines every path the editor will open, list, or write to
-that directory. It is optional and strongly recommended: without it the editor
-reaches anywhere you can. `--no-browser` stops the tab opening by itself; the
-`notebook_show` tool still opens it on request.
+Use absolute paths in both places — the client decides what directory the
+server starts in, so a relative one is ambiguous. `--workspace-root` confines
+every path the editor will open, list, or write to that directory; it is
+optional and strongly recommended, since without it the editor reaches
+anywhere you can. A typo fails at launch rather than at the first tool call.
+
+`--no-browser` stops the tab opening by itself. On a headless or remote
+machine no tab can open regardless, so `notebook_open` returns an `editorUrl`
+for the client to hand you, and `notebook_show` returns it again on request.
+
+If a client names a notebook that is not there, the error lists the `.ipynb`
+files that *are* in the workspace, so it can pick one rather than guess again.
 
 **The tools.** `notebook_open`, `notebook_read`, `notebook_status`,
 `notebook_set_cell_source`, `notebook_insert_cell`, `notebook_delete_cell`,
