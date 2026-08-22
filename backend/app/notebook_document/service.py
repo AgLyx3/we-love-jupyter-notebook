@@ -31,6 +31,7 @@ from .models import (
     RevisionConflict,
     SessionConflict,
 )
+from ..workspace_confinement import UNCONFINED, OutsideWorkspace, WorkspaceConfinement
 from .mutation_coordinator import MutationCoordinator
 
 
@@ -56,8 +57,16 @@ class NotebookDocumentService:
     when committing; no code may wait for a lease while holding the document lock.
     """
 
-    def __init__(self, coordinator: MutationCoordinator | None = None) -> None:
+    def __init__(
+        self,
+        coordinator: MutationCoordinator | None = None,
+        *,
+        confinement: WorkspaceConfinement = UNCONFINED,
+    ) -> None:
         self.coordinator = coordinator or MutationCoordinator()
+        # The boundary the caller cannot widen. A request may still name a
+        # narrower workspace inside it; see WorkspaceConfinement.narrow.
+        self.confinement = confinement
         self._lock = RLock()
         self._session_id: str | None = None
         self._filename = "notebook.ipynb"
@@ -120,6 +129,7 @@ class NotebookDocumentService:
         expected_session_id: str | None = None,
         expected_revision: int | None = None,
     ) -> NotebookSnapshot:
+        workspace_root = self._confined_root(workspace_root)
         resolved = self._resolve_notebook_path(path, workspace_root)
         if workspace_root is not None:
             bound_root = str(Path(workspace_root).resolve())
@@ -185,6 +195,19 @@ class NotebookDocumentService:
         if expected_session_id is None or expected_revision is None:
             raise ReplacementPreconditionRequired()
         self._check_preconditions(expected_session_id, expected_revision)
+
+    def _confined_root(self, requested: str | None) -> str | None:
+        """The effective workspace root for one request.
+
+        With no root configured this is the caller's own value, unchanged. With
+        one configured the caller may narrow it but never step outside, so an
+        omitted or over-wide value collapses to the configured root instead of
+        to no boundary at all.
+        """
+        try:
+            return self.confinement.narrow(requested)
+        except OutsideWorkspace as error:
+            raise NotebookPathError() from error
 
     def _resolve_notebook_path(
         self, path: str, workspace_root: str | None
@@ -489,6 +512,7 @@ class NotebookDocumentService:
         with self._lock:
             self._require_notebook()
             self._check_preconditions(expected_session_id, expected_revision)
+            workspace_root = self._confined_root(workspace_root)
             target = self._resolve_save_as_target(path, workspace_root)
             content = self._serialize_notebook(self._notebook)
 

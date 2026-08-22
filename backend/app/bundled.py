@@ -149,6 +149,7 @@ def create_bundled_app(
     *,
     dist_dir: Path | None = None,
     agent_adapter: AgentAdapter | None = None,
+    workspace_root: str | Path | None = None,
 ) -> FastAPI:
     """Serve the built SPA and the API from a single loopback origin.
 
@@ -158,6 +159,11 @@ def create_bundled_app(
 
     The API keeps its own routes unchanged; it is simply mounted under ``/api``,
     so ``/api/notebooks/current`` reaches ``GET /notebooks/current``.
+
+    ``workspace_root`` confines every local path the API will accept. Omitted,
+    nothing is confined, which is the behaviour a person driving the file
+    picker expects; a launcher that hands the editor to something else should
+    set it.
 
     ``agent_adapter`` defaults to the environment-configured one, the same as
     the module-level app in ``main``. It must not be left to ``create_app``'s
@@ -171,6 +177,7 @@ def create_bundled_app(
     api = create_app(
         agent_adapter=agent_adapter or configured_agent_adapter(),
         cors_origins=(),
+        workspace_root=workspace_root,
     )
 
     @asynccontextmanager

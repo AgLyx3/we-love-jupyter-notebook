@@ -1,6 +1,6 @@
 # Bundling the editor as an MCP server
 
-Status: investigation complete; phases 1-3 built, 7 partly built, 4-6 outstanding
+Status: investigation complete; phases 1-4 built, 7 partly built, 5-6 outstanding
 Branch: `claude/app-mcp-browser-bundling-c11ed2`
 Date: 2026-08-22
 
@@ -382,8 +382,26 @@ Ordered so each phase is independently useful.
    so a run the browser did not start still surfaces through `/session/status`,
    and the client already sends `turnId: operation.parentTurnId` as-is.
 
-4. **Confine paths to a workspace root** (§5.3) — server-side, in
-   `NotebookDocumentService.open` and `file_browser`.
+4. **Confine paths to a workspace root** (§5.3) — ✅ **built.** The containment
+   logic already existed; what it lacked was a root the caller could not
+   choose. `_resolve_notebook_path` and `_resolve_save_as_target` took their
+   boundary from the request's own `workspaceRoot`, so a caller that omitted it
+   had no boundary and one that sent `/` had the filesystem.
+
+   `WorkspaceConfinement` (`backend/app/workspace_confinement.py`) is now a
+   root fixed at startup and shared by the document service and the file
+   browser, so the browser and a tool caller cannot end up with different
+   boundaries. A request may still *narrow* it — that is what the file picker
+   sends when a person opens a project folder — but never widen it. Confined,
+   a listing starts at the root rather than `$HOME` and reports no parent at
+   the boundary, so the UI stops offering a step the server would refuse.
+
+   `create_app(workspace_root=...)`, `create_bundled_app(workspace_root=...)`,
+   and `NOTEBOOK_WORKSPACE_ROOT` for the module-level app `scripts/dev.py`
+   runs. All default to unconfined, so the existing development flow and every
+   existing test are unchanged — proven by a test that opens, lists and
+   searches outside the root on an unconfined server and expects success.
+
 5. **The MCP server itself** — process lifecycle (reuse `dev.py`'s teardown),
    browser launch, the 7 tools of §4 over `httpx`, response shaping (§5.4), and
    actionable error mapping including the 409 contract (§5.5).

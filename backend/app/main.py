@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 import os
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -28,6 +29,7 @@ from .kernel_execution.service import KernelExecutionService
 from .plot_tuning.apply import TuningApplyService
 from .plot_tuning.panel import PlotTuningPanelService
 from .session_events.service import SessionEventService
+from .workspace_confinement import UNCONFINED, WorkspaceConfinement
 
 
 DEV_SERVER_ORIGINS = ("http://127.0.0.1:5173", "http://localhost:5173")
@@ -37,6 +39,7 @@ def create_app(
     *,
     agent_adapter: AgentAdapter | None = None,
     cors_origins: Sequence[str] | None = None,
+    workspace_root: str | Path | None = None,
 ) -> FastAPI:
     """Build the API.
 
@@ -44,8 +47,16 @@ def create_app(
     cross-origin caller in the two-process development layout. Pass ``()`` when
     the API is served from the same origin as the frontend (see
     ``bundled.create_bundled_app``), where the allowance is dead config.
+
+    ``workspace_root`` confines every path the server will open, list, search
+    or write to that directory. Omitted, nothing is confined and the file
+    picker reaches the whole filesystem as before — right for a person driving
+    it, wrong once something else can call the same endpoints.
     """
-    notebook_service = NotebookDocumentService()
+    confinement = (
+        WorkspaceConfinement(workspace_root) if workspace_root is not None else UNCONFINED
+    )
+    notebook_service = NotebookDocumentService(confinement=confinement)
     session_event_service = SessionEventService()
     kernel_execution_service = KernelExecutionService(
         documents=notebook_service, events=session_event_service,
@@ -80,6 +91,7 @@ def create_app(
             allow_methods=["*"],
             allow_headers=["*"],
         )
+    app.state.workspace_confinement = confinement
     app.state.notebook_service = notebook_service
     app.state.session_event_service = session_event_service
     app.state.kernel_execution_service = kernel_execution_service
@@ -145,6 +157,27 @@ def create_app(
     return app
 
 
+WORKSPACE_ROOT_ENV_VAR = "NOTEBOOK_WORKSPACE_ROOT"
+
+
+def configured_workspace_root() -> str | None:
+    """The confinement root for the module-level app, if one is set.
+
+    Read from the environment because `scripts/dev.py` starts uvicorn against
+    `backend.app.main:app` rather than calling `create_app` itself. Unset — the
+    ordinary development case — nothing is confined.
+    """
+    root = os.getenv(WORKSPACE_ROOT_ENV_VAR, "").strip()
+    if not root:
+        return None
+    resolved = Path(root).expanduser()
+    if not resolved.is_dir():
+        raise RuntimeError(
+            f"{WORKSPACE_ROOT_ENV_VAR} is not a directory: {resolved}"
+        )
+    return str(resolved)
+
+
 def configured_agent_adapter() -> AgentAdapter:
     mode = os.getenv("NOTEBOOK_AGENT_ADAPTER", "claude").strip().lower()
     if mode == "claude":
@@ -154,4 +187,7 @@ def configured_agent_adapter() -> AgentAdapter:
     raise RuntimeError("NOTEBOOK_AGENT_ADAPTER must be either 'claude' or 'fake'")
 
 
-app = create_app(agent_adapter=configured_agent_adapter())
+app = create_app(
+    agent_adapter=configured_agent_adapter(),
+    workspace_root=configured_workspace_root(),
+)
