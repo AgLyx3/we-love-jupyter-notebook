@@ -631,4 +631,32 @@ describe("remediation behaviors", () => {
     expect(outside).toHaveFocus();
     outside.remove();
   });
+
+  it("lets a person approve a model-initiated run, which has no parent turn", async () => {
+    // The gate exists so a run the model asked for stops for a person. If
+    // approve and skip stay turn-gated, the dialog appears with only Cancel
+    // enabled and the pause can never be resolved — the gate would block the
+    // run rather than hand the decision over.
+    const decide = vi.fn();
+    const risky = { ...operation, kind: "mcp", parentTurnId: null, state: "awaiting_approval", attempts: [{ ...operation.attempts[0], state: "awaiting_approval", risk: { level: "confirm", reasons: ["Starts another process"], matchedPatterns: ["process_execution"] } }] };
+    render(<RiskyExecutionDialog operation={risky} attempt={risky.attempts[0]} busy={false} onDecision={decide} />);
+
+    const approve = screen.getByRole("button", { name: "Approve and run" });
+    const skip = screen.getByRole("button", { name: "Skip cell" });
+    expect(approve).toBeEnabled();
+    expect(skip).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
+
+    await userEvent.click(approve);
+    expect(decide).toHaveBeenCalledWith("approve");
+  });
+
+  it("offers a cancel control for a model-initiated run in flight", () => {
+    // A run with no parent turn is one a person can stop directly, whether it
+    // was their click or a tool call that started it.
+    const decide = vi.fn();
+    const running = { ...operation, kind: "mcp", parentTurnId: null, state: "running" };
+    render(<AgentChatPanel notebook={notebook} scope={scope} turn={null} activeTurn={null} history={[]} operation={running} busy={false} mutationsDisabled={false} onSubmit={vi.fn()} onCancel={vi.fn()} onUndo={vi.fn()} onClearScope={vi.fn()} onDecision={decide} onSelectTurn={vi.fn()} onFocusCell={vi.fn()} onDropCell={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
+  });
 });

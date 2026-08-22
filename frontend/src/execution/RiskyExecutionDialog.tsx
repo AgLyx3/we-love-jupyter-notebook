@@ -3,8 +3,13 @@ import { useEffect, useRef } from "react";
 import type { ExecutionAttempt, ExecutionOperation } from "../api/client";
 
 export default function RiskyExecutionDialog({ operation, attempt, busy, onDecision }: { operation: ExecutionOperation; attempt: ExecutionAttempt; busy: boolean; onDecision: (decision: "approve" | "skip" | "cancel") => void }) {
+  // Everything a decision has to carry: the operation, where it is, and which
+  // attempt is asking. Deliberately not "has a parent turn" — approve and skip
+  // were once turn-gated because only an agent turn's downstream cells could
+  // pause here, but a model-initiated run pauses with no turn at all, and
+  // requiring one left the person looking at the dialog with nothing enabled
+  // but Cancel. The turn id is passed through as-is; the server matches it.
   const correlated = Boolean(operation.operationId && operation.sessionId && operation.currentDocumentRevision != null && attempt.executionAttemptId && attempt.cellId);
-  const turnCorrelated = correlated && Boolean(operation.parentTurnId);
   const dialogRef = useRef<HTMLElement>(null);
   const approveRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -28,6 +33,6 @@ export default function RiskyExecutionDialog({ operation, attempt, busy, onDecis
     <ul>{attempt.risk.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
     <pre className="risk-source" aria-label={`Source preview for cell ${attempt.cellIndex + 1}`}>{attempt.sourcePreview || "Source preview unavailable"}</pre>
     {attempt.risk.matchedPatterns.length > 0 && <code>{attempt.risk.matchedPatterns.join(", ")}</code>}
-    <div className="risk-actions"><button disabled={busy || !correlated} onClick={() => onDecision("cancel")}>Cancel run</button><button disabled={busy || !turnCorrelated} onClick={() => onDecision("skip")}>Skip cell</button><button ref={approveRef} className="primary" disabled={busy || !turnCorrelated} onClick={() => onDecision("approve")}>Approve and run</button></div>
+    <div className="risk-actions"><button disabled={busy || !correlated} onClick={() => onDecision("cancel")}>Cancel run</button><button disabled={busy || !correlated} onClick={() => onDecision("skip")}>Skip cell</button><button ref={approveRef} className="primary" disabled={busy || !correlated} onClick={() => onDecision("approve")}>Approve and run</button></div>
   </section>;
 }

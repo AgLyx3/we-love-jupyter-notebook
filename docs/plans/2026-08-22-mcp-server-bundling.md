@@ -1,6 +1,6 @@
 # Bundling the editor as an MCP server
 
-Status: investigation complete; phases 1-2 built, 3-7 outstanding
+Status: investigation complete; phases 1-3 built, 4-7 outstanding
 Branch: `claude/app-mcp-browser-bundling-c11ed2`
 Date: 2026-08-22
 
@@ -356,9 +356,32 @@ Ordered so each phase is independently useful.
    server's cross-origin grant. **Still owed:** ephemeral port and per-launch
    token — the token needs the SPA to read it from its own URL, so it lands
    with the launcher in phase 5.
-3. **Gate model-initiated execution** (§5.1) — new operation `kind`, threaded to
-   `prompt_for_risk`. The blocking/approval machinery already exists; this
-   selects it. The one change that touches core execution code.
+3. **Gate model-initiated execution** (§5.1) — ✅ **built.** The run endpoints
+   take an `initiator` (`user` by default, so the browser is unchanged; `mcp`
+   from a tool caller), which selects operation kind `mcp` and runs it with
+   `prompt_for_risk=True`. The blocking/approval machinery already existed;
+   this selects it.
+
+   The change is four lines of behaviour and three traps, all of them the same
+   confusion — treating "has a parent turn" as if it meant "can be decided" —
+   and each one would have left the gate *looking* built while being unusable:
+
+   - `cancel` matched on `kind == "manual"`, so a gated run with no turn would
+     have demanded a turn id that cannot exist. Now keyed on `parent_turn_id`.
+   - The approve/skip request schema typed `turnId` as a required string, so
+     the only decision deliverable to a turn-less paused run was cancel. Now
+     nullable; the turn-owned invariant moved from a 422 in the schema to a 409
+     in the service, which is the layer that can tell the two cases apart.
+   - Worst of the three: in the browser, `RiskyExecutionDialog` disabled
+     **Approve and Skip** unless `parentTurnId` was set. The dialog would have
+     appeared for a model-initiated run with nothing enabled but Cancel — the
+     gate would have blocked the run rather than handed the decision over.
+     Correlation no longer depends on a turn existing.
+
+   The tab needed no other change: `active_for_session` does not filter by kind,
+   so a run the browser did not start still surfaces through `/session/status`,
+   and the client already sends `turnId: operation.parentTurnId` as-is.
+
 4. **Confine paths to a workspace root** (§5.3) — server-side, in
    `NotebookDocumentService.open` and `file_browser`.
 5. **The MCP server itself** — process lifecycle (reuse `dev.py`'s teardown),
