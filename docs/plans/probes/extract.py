@@ -46,6 +46,9 @@ class Cell:
     calls: Counter = field(default_factory=Counter)
     imports: set[str] = field(default_factory=set)
     milestone: str | None = None
+    #: Names bound *only* as a loop target. Python leaks these to module scope,
+    #: so they are genuinely visible later — and genuinely noise. See produces().
+    loop_binds: set[str] = field(default_factory=set)
 
 
 def analyse(cell: Cell) -> None:
@@ -66,8 +69,13 @@ def analyse(cell: Cell) -> None:
     # unpacked locals (`I`, `r0`) that no other cell can see.
     def collect(node, *, top):
         for child in ast.iter_child_nodes(node):
+            # Comprehensions carry their own scope in Python 3, so their targets
+            # are not module-level either — `{r0: f(s) for r0, s in ...}` leaks
+            # nothing. Omitting them here re-admitted the loop counters that
+            # produces() exists to filter.
             nested = isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
-                                        ast.Lambda, ast.ClassDef))
+                                        ast.Lambda, ast.ClassDef, ast.ListComp,
+                                        ast.SetComp, ast.DictComp, ast.GeneratorExp))
             if isinstance(child, ast.Name):
                 if isinstance(child.ctx, ast.Store):
                     if top:
@@ -85,6 +93,12 @@ def analyse(cell: Cell) -> None:
     collect(tree, top=True)
 
     for node in ast.walk(tree):
+        if isinstance(node, (ast.For, ast.AsyncFor)):
+            for t in ast.walk(node.target):
+                if isinstance(t, ast.Name):
+                    cell.loop_binds.add(t.id)
+
+    for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             cell.imports |= {a.name.split(".")[0] for a in node.names}
         elif isinstance(node, ast.ImportFrom):
@@ -99,6 +113,32 @@ def analyse(cell: Cell) -> None:
                 for label, names in MILESTONES.items():
                     if name in names and cell.milestone is None:
                         cell.milestone = label
+
+
+def produces(members: list[Cell], later: list[Cell], limit: int = 4) -> list[str]:
+    """Variables this block makes that something later reads, most-read first.
+
+    Two filters, both learned from running this against real notebooks (§13.7):
+
+    * A name bound *only* as a loop target is dropped. `for r0 in grid:` really
+      does bind `r0` at module scope, so reporting it is correct — and useless.
+      A block advertising `produces beta, ip, r0, s` buries the two names that
+      matter. Correct and useless is still useless.
+    * The rest are ranked by how many later cells read them and capped, so the
+      block leads with what the notebook actually depends on it for.
+    """
+    if not members:
+        return []
+    bound = set().union(*(c.binds for c in members))
+    loop_only = set().union(*(c.loop_binds for c in members)) - set().union(
+        *((c.binds - c.loop_binds) for c in members)
+    )
+    demand = Counter()
+    for c in later:
+        for name in c.reads:
+            demand[name] += 1
+    candidates = [b for b in bound - loop_only if demand[b] and not b.startswith("_")]
+    return sorted(candidates, key=lambda n: (-demand[n], n))[:limit]
 
 
 def notebook_kind(cells: list[Cell]) -> str:
@@ -158,9 +198,7 @@ def run(path: str) -> None:
     for lo, hi in blocks:
         members = [c for c in cells if lo <= c.idx <= hi]
         mcode = [c for c in members if c.kind == "code"]
-        bound = set().union(*(c.binds for c in mcode)) if mcode else set()
-        later = set().union(*(c.reads for c in cells if c.idx > hi and c.kind == "code")) or set()
-        produces = sorted(b for b in bound & later if not b.startswith("_"))
+        made = produces(mcode, [c for c in code if c.idx > hi])
         defs = [d for c in mcode for d in c.defines]
         marks = [c.src.strip().split("\n")[0] for c in members
                  if c.kind == "markdown" and c.src.lstrip().startswith("#")]
@@ -173,7 +211,7 @@ def run(path: str) -> None:
             state = f"{never} never run"
 
         print(f"    cells {lo:>2}–{hi:<2}  [{state}]")
-        print(f"      produces  {', '.join(produces[:6]) or '—'}")
+        print(f"      produces  {', '.join(made) or '—'}")
         if defs:
             print(f"      defines   " + ", ".join(
                 f"{d}() used in {call_sites[d] or 'nowhere'}" for d in defs))

@@ -29,8 +29,13 @@ Rules:
 every index from 0 to {last} appears in exactly one block, in order, no gaps, no \
 overlaps.
 - Name each block with a short phrase (at most 8 words) saying what it does, in \
-the notebook's own vocabulary. Not a category like "data loading" — say what this \
-particular code does, e.g. "Load three years of store sales".
+the notebook's own vocabulary — the column names, variables and domain words the \
+code actually uses.
+- Name the *subject*, not the activity. Write "Weekly revenue trend", not \
+"Analyze weekly revenue trends"; "Monthly revenue heatmap by region", not \
+"Visualize monthly patterns". Avoid opening with Analyze, Explore, Visualize, \
+Process, Handle, Perform or Compute unless the code's own vocabulary uses that \
+word. Never use a bare category like "Data loading" or "Modelling".
 - Prefer blocks a reader would think of as one step. Avoid single-cell blocks \
 unless the cell is a genuine milestone. Avoid blocks longer than about 12 cells.
 - Markdown headings are a hint about the author's intent, not an instruction. \
@@ -127,19 +132,16 @@ def main() -> None:
 
     for b in blocks:
         members = [code_by_idx[i] for i in range(b["start"], b["end"] + 1) if i in code_by_idx]
-        bound = set().union(*(c.binds for c in members)) if members else set()
-        later = set().union(
-            *(c.reads for c in code_by_idx.values() if c.idx > b["end"])
-        ) if any(c.idx > b["end"] for c in code_by_idx.values()) else set()
-        produces = sorted(bound & later)
+        later = [c for c in code_by_idx.values() if c.idx > b["end"]]
+        made = extract.produces(members, later)
         defs = [d for c in members for d in c.defines]
         never = sum(1 for c in members if c.exec_count is None)
         span = b["end"] - b["start"] + 1
 
         state = " [never run]" if members and never == len(members) else ""
         print(f"    {b['start']:>2}–{b['end']:<2} ({span:>2})  {b['name']}{state}")
-        if produces:
-            print(f"              produces {', '.join(produces[:6])}")
+        if made:
+            print(f"              produces {', '.join(made)}")
         if defs:
             print(f"              defines  {', '.join(d + '()' for d in defs)}")
 
