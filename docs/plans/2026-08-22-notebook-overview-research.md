@@ -1,17 +1,21 @@
 # Notebook Overview ("Roadmap") — Prior-Art Research
 
-Status: research only, nothing designed or built
+Status: **design settled, key assumptions measured, ready to build**
 Branch: `claude/notebook-overview-research-qbb1tw`
 Date: 2026-08-22
 
 Read alongside `docs/notebook-agent-editor-spec.md` (product/architecture
 authority) and `docs/engineering-handoff.md` (implemented state). This document
-answers one question: **has anyone built "an overview of the notebook that looks
-like a roadmap", and what did they learn?** It ends with the gap worth building
-into and a recommended first slice — but it does not commit to a design.
+began as one question — **has anyone built "an overview of the notebook that
+looks like a roadmap", and what did they learn?** — and ends with a design that
+was argued to a conclusion and then tested against real notebooks.
+
+**To build this, read `docs/plans/2026-08-22-notebook-overview-spec.md`** — the
+implementation spec. This document is the research and the reasoning behind it.
 
 **Start at §12** for the consolidated statement of what the panel captures and
-shows — it supersedes anything earlier that contradicts it.
+shows, and §13 for what was measured. Both supersede anything earlier that
+contradicts them.
 
 **Scope decided 2026-08-22** (§1): navigation of a large notebook, click a block
 to jump to its cells. The map is built from **code**, segmented and named by the
@@ -913,3 +917,49 @@ a 200-cell notebook is ~4.5k tokens, not 30–60k. Cells in real exploratory
 notebooks are mostly one-liners. This substantially weakens the case for a size
 ceiling: at these sizes, a full re-segmentation is cheap enough that
 incrementality is a nicety rather than a necessity.
+
+### 13.8 Caching, resolved — §7.1 was over-engineered
+
+Two probe findings collapse the per-block hashing scheme in §7.1.
+
+**Cost.** At ~22 tokens per cell, a full re-segmentation of a 200-cell notebook
+is ~4.5k tokens. Incrementality was justified by a cost that is not there.
+
+**Coherence, which is the real argument.** Per-block invalidation assumed
+*deterministic* boundaries — you could re-label block 2 because block 2's extent
+was a fixed fact. Now that segmentation is model-generated (§13.1), an edit may
+move a boundary, so there is no stable "block 2" to invalidate. The unit of
+caching is necessarily the whole notebook.
+
+**Resolved design:** one cache entry per notebook, keyed on a hash of all cell
+sources concatenated. Source unchanged → cached map stands, so **running cells
+never invalidates it**. Source changed → the whole map is marked stale, stays
+visible, and regenerates only when the user asks. Nothing automatic, ever.
+
+Note this keeps §6.4's substance — revision is the wake-up signal, not the cache
+key, because `_revision` bumps on `set_execution_count` — while dropping the
+per-block machinery built on top of it.
+
+### 13.9 Fixes applied to the probes
+
+Both findings in §13.7 are now fixed in `docs/plans/probes/`, with the reasoning
+recorded at the call sites so the port to `notebook_overview/analysis.py` keeps
+it:
+
+- `produces()` drops names bound only as loop targets and ranks the rest by how
+  many later cells read them, capped at four. A third scope bug surfaced while
+  testing the fix — **comprehension targets are separately scoped in Python 3**,
+  so `{r0: f(s) for r0, s in ...}` binds nothing at module level, and omitting
+  comprehensions from the nested-scope set re-admitted exactly the loop counters
+  the filter existed to remove.
+- The segmentation prompt now bans opening a name with *Analyze / Explore /
+  Visualize / Process / Handle / Perform / Compute* and asks for the subject
+  rather than the activity. Re-running Haiku afterwards: *"Revenue by region"*,
+  *"Monthly revenue heatmap by region"*, *"Unit outlier filtering"* — the
+  categorical register is gone.
+
+One observation worth carrying forward: the tightened prompt returned **14
+blocks where the previous revision returned 17** for the same notebook, largest
+9 vs 6. Both are usable maps. But it shows block granularity is sensitive to
+prompt wording, so if stability across regenerations matters, it needs pinning
+down deliberately (spec §10.4).
