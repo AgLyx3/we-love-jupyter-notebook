@@ -1,4 +1,4 @@
-import { ShieldAlert, X } from "lucide-react";
+import { Check, ShieldAlert, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   CellOutput, TuningBounds, TuningKnob, TuningPlan, TuningPreview, TuningRecord,
@@ -283,6 +283,17 @@ export default function TuningPanel(props: TuningPanelProps) {
     callbacks.current.onApply(id, payload).then((applied) => {
       setRecord(applied);
       revisionRef.current = applied.appliedRevision ?? revisionRef.current;
+      // The applied values *are* the notebook's values now, so they become the
+      // committed baseline. That is what makes `dirty` go false, which drops the
+      // "not in your notebook yet" band and keeps the last preview on screen as
+      // the new committed picture — the moment you most want to see the plot is
+      // right after committing it, and a text receipt in its place is the one
+      // thing that cannot confirm the change looks right.
+
+      setKnobs((current) => current.map((knob) => (
+        knob.name in payload ? { ...knob, value: payload[knob.name] } : knob
+      )));
+      setCommittedOutputs((current) => previewOutputs ?? current);
       // The document moved, so the shadow is now replaying source that is gone.
       discardShadow();
       setStage("applied");
@@ -331,10 +342,18 @@ export default function TuningPanel(props: TuningPanelProps) {
         onReset={() => setValues((current) => ({ ...current, [knob.name]: knob.value }))}
       />)}
     </div>
-    <div className="tuning-apply">
-      <button type="button" className="primary" disabled={!dirty || stage !== "ready"} onClick={apply}>{applyLabel(changed.length)}</button>
-      <button type="button" disabled={!dirty || stage !== "ready"} onClick={resetAll}>Reset all</button>
-    </div>
+    {/* Once applied, the shadow's source ranges no longer match the file it
+        just changed, so tuning on cannot reuse it — "Tune again" re-scans rather
+        than pretending the knobs are still live. */}
+    {stage === "applied"
+      ? <div className="tuning-apply">
+        <button type="button" className="primary" onClick={rescan}>Tune again</button>
+        <button type="button" onClick={close}>Close</button>
+      </div>
+      : <div className="tuning-apply">
+        <button type="button" className="primary" disabled={!dirty || stage !== "ready"} onClick={apply}>{applyLabel(changed.length)}</button>
+        <button type="button" disabled={!dirty || stage !== "ready"} onClick={resetAll}>Reset all</button>
+      </div>}
   </div>;
 
   return <section className="tuning-panel" data-state={state} aria-label="Plot tuning">
@@ -375,23 +394,18 @@ export default function TuningPanel(props: TuningPanelProps) {
       </div>
     </div>}
 
-    {state === "applied" && record && <div className="tuning-message tuning-applied">
-      <p>Applied {record.knobs.length} {record.knobs.length === 1 ? "change" : "changes"} to your notebook.</p>
-      {/* A different bill from the one the Apply button quoted, so it is said
-          out loud rather than left to be noticed in the execution counts. */}
-      {record.reRanFromTop && <p className="tuning-rerun-note">The kernel had not run the cells above this one, so the whole notebook was re-run.</p>}
-      <div className="tuning-actions">
-        <button type="button" onClick={close}>Close</button>
-        <button type="button" onClick={rescan}>Tune again</button>
-      </div>
-    </div>}
-
-    {(state === "warming" || stage === "ready" || stage === "applying") && <div className="tuning-panel-body">
+    {(state === "warming" || stage === "ready" || stage === "applying" || stage === "applied") && <div className="tuning-panel-body">
       <div className="tuning-preview-column">
+        {stage === "applied" && record && <p className="tuning-applied-strip" role="status">
+          <Check /> Applied {record.knobs.length} {record.knobs.length === 1 ? "change" : "changes"}. This is your notebook now.
+        </p>}
         {state === "warming"
           ? <p className="tuning-message" role="status">{warmProgressLabel(props.warmTimings?.length ? props.warmTimings : timings, elapsed)}</p>
           : preview}
         {state === "applying" && <p className="tuning-message" role="status">Applying and re-running…</p>}
+        {/* A different bill from the one the Apply button quoted, so it is said
+            out loud rather than left to be noticed in the execution counts. */}
+        {stage === "applied" && record?.reRanFromTop && <p className="tuning-rerun-note">The kernel had not run the cells above this one, so the whole notebook was re-run.</p>}
       </div>
       {state === "warming"
         ? <div className="tuning-rail"><div className="tuning-actions"><button type="button" onClick={cancelWarm}>Cancel</button></div></div>

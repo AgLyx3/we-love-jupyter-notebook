@@ -210,6 +210,10 @@ body.marquee-active iframe { pointer-events: none; }
    comparing against is what the spinner must not do. */
 .tuning-preview-spinner { position: absolute; top: 8px; left: 8px; margin: 0; padding: 3px 9px; font-size: 11px; font-weight: 650; color: #0b6097; background: #ffffffe6; border: 1px solid #bfd7e7; border-radius: 999px; box-shadow: 0 1px 4px #1a263024; }
 .tuning-preview-blank { margin: 0; padding: 14px 8px; font-size: 12px; color: var(--muted); }
+/* A slim confirmation above the picture, not a card in place of it: the moment
+   after committing is when the plot most needs to be visible. */
+.tuning-applied-strip { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; padding: 5px 9px; font-size: 12px; font-weight: 650; color: #1d6b3f; background: #edf8f1; border: 1px solid #bfe3cd; border-radius: 5px; }
+.tuning-applied-strip svg { width: 14px; height: 14px; }
 .tuning-rail { min-width: 0; display: grid; gap: 10px; align-content: start; }
 /* Flow into as many columns as the rail can hold. Stacked under the preview on
    a narrow pane the rail is full width, so the same rule turns one long scroll

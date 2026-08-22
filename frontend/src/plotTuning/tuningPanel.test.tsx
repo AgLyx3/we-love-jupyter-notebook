@@ -283,3 +283,40 @@ describe("the shadow", () => {
     expect(onDiscardShadow).toHaveBeenCalledWith("shadow-1");
   });
 });
+
+// Reported from using it: applying replaced the plot with a text receipt, at
+// exactly the moment the plot is worth looking at. The count is already on the
+// review bar; what the panel owes here is the picture.
+describe("after applying", () => {
+  const applied = async () => {
+    mount({ onApply: vi.fn().mockResolvedValue(record({ knobs: ["BINS"] })) });
+    retype(await readyRail(), "40");
+    await screen.findByAltText(/Cell output/);
+    await userEvent.click(await screen.findByRole("button", { name: "Apply 1 change and re-run" }));
+    await screen.findByText(/Applied 1 change/);
+  };
+
+  it("keeps the plot on screen instead of replacing it with a receipt", async () => {
+    await applied();
+    // The rendered preview is still there — the applied values produced it.
+    expect(screen.getByAltText(/Cell output/)).toBeInTheDocument();
+  });
+
+  it("drops the not-in-your-notebook band, because now it is", async () => {
+    await applied();
+    expect(screen.queryByText("Preview — not in your notebook yet")).not.toBeInTheDocument();
+  });
+
+  it("keeps the knobs visible at their applied values", async () => {
+    await applied();
+    expect(screen.getByRole("spinbutton", { name: "BINS" })).toHaveValue(40);
+  });
+
+  it("offers a re-scan rather than pretending the knobs are still live", async () => {
+    // The shadow's source ranges no longer match the file it just changed, so
+    // tuning on cannot reuse it.
+    await applied();
+    expect(screen.getByRole("button", { name: "Tune again" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Apply/ })).not.toBeInTheDocument();
+  });
+});
