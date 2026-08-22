@@ -259,7 +259,16 @@ Ordered by cost. The design principle this implies is in §6.
   walks transitive assignment chains across cells conservatively (see its
   module docstring). That is most of a dependency graph already, built and
   tested, in this repo.
-- Function/class definitions → the reusable spine.
+- **Function/class definitions → the notebook naming itself.** Elevated from a
+  minor bullet: this is the best anchor available, because a `def` is
+  author-committed meaning that costs nothing to read, and it is *code* rather
+  than prose (§11.1). Crucially it is **domain-agnostic**, which is the way out
+  of the vocabulary problem below — `moving_average`, `solve_step`,
+  `compute_loss` describe the work without anyone maintaining a keyword list per
+  field. Ranking is computable: call count across cells, how many distinct
+  blocks call it, definition length. The inverse is free and useful — a `def`
+  nothing ever calls is dead scratch, the gather signal (§2.3) without needing
+  slicing. See §11.4 for how it renders.
 - "Milestone" call detection — **but the vocabulary does not generalize across
   the three notebook kinds in scope.** The obvious list is pandas/sklearn-shaped
   (`read_csv` ingest, `.fit(` model, `.score` evaluate, `to_csv` export) and
@@ -638,6 +647,40 @@ disappearing. That fallback is now the degraded path, not the first release.
 **What V1 is meant to answer:** does a named block map make a large notebook
 navigable? Nothing cheaper answers it, which is why naming could not stay
 deferred.
+
+### 11.4 Functions as the second annotation layer
+
+A notebook typically has a few functions that matter, and they are the strongest
+anchor the file offers — for the reasons in §4: the notebook names them itself,
+the names are domain-agnostic, and importance is computable from call counts.
+
+**They do not become the primary anchor**, for two reasons.
+
+*Coverage.* Measured against this repo's own examples, four of five notebooks
+define **zero** functions and the fifth defines one, called once. Small demos, so
+weak evidence — but it shows the variance that matters: exploratory and plotting
+notebooks are often entirely top-level statements over a dataframe, while
+simulation/research code is usually def-heavy. Functions are absent in roughly
+the same notebooks markdown is absent from, so they cannot carry the map alone.
+
+*The definition-site trap.* Definition site is not where the work happens.
+Notebooks routinely define a helper near the top and call it fifteen cells
+later. A map anchored on defs would jump the user to the definition when they
+wanted the sweep that calls it — a navigation failure, which is the one kind
+this panel cannot afford (§1).
+
+**So they land as a second annotation layer, alongside markdown marks:**
+
+- Each block lists the functions it defines; the important ones (by call count)
+  surface in the collapsed view.
+- Cross-references are **text, not wires** — "defined here, used in 5, 7, 9".
+  This is deliberate: the graph view was cut from V1 (§11), and drawing call
+  edges would reintroduce it through the side door.
+- A `def` is a strong **segmentation hint** for the model — function boundaries
+  are natural block boundaries.
+- Never-called defs are flagged as dead scratch.
+- Zero-def notebook → the layer is simply absent, the same graceful degradation
+  markdown marks have.
 
 ---
 
