@@ -482,10 +482,8 @@ each one could be wrong.
 3. **Document order is the display order.** The spine reads top-to-bottom in
    document order. §9.5 questions whether that stays honest when execution order
    contradicts it.
-4. **The panel is a third side panel.** The app already has the agent composer
-   and the turn-scope panel. Where this one lives — a tab beside them, an
-   overlay, a separate mode — was never asked, and on a laptop it decides
-   whether the feature is usable at all.
+4. ~~**The panel is a third side panel.**~~ **Resolved** — a top-left toggle
+   opens a left rail shared with the file tree; see §5.1.
 5. **`plot_tuning/discovery.py` is reusable for the DAG.** Verified in part: it
    records dependency edges separately from knob candidacy (`discovery.py:475`),
    so its aggressive rejection logic applies to offering a control, not to the
