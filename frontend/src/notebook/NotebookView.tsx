@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type MouseEvent, type PointerEvent } from "react";
-import type { AgentTurn, NotebookSnapshot, TurnScope } from "../api/client";
-import NotebookCell from "./NotebookCell";
+import type { AgentTurn, NotebookSnapshot, TuningRecord, TurnScope } from "../api/client";
+import NotebookCell, { type CellTuningControls } from "./NotebookCell";
 import type { CellSelection } from "./selectionEdit";
 
 // A Trusted turn can change a cell's type. That is invisible in the diff — a
@@ -13,9 +13,17 @@ function retypeOf(turn: AgentTurn | null, cellId: string): { from: string; to: s
   return typeof from === "string" && typeof to === "string" ? { from, to } : undefined;
 }
 
-export default function NotebookView({ notebook, scope, turn, trusted = false, disabled, sourceActionsDisabled, autoSave, focusRequest, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert, onKeepCell, onKeepOperation, onUndoOperation, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
+export default function NotebookView({ notebook, scope, turn, tuningRecord = null, trusted = false, disabled, sourceActionsDisabled, autoSave, focusRequest, tuningControls, tunableCellIds, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert, onKeepCell, onKeepOperation, onUndoOperation, onKeepTuned, onUndoTuned, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
   notebook: NotebookSnapshot; scope: TurnScope; turn: AgentTurn | null; trusted?: boolean;
+  /** The most recent Apply from the tuning panel. Its own record type, not an
+   *  AgentTurn (design D6) — the cells it governs review under its own wording. */
+  tuningRecord?: TuningRecord | null;
+  /** Shared panel plumbing; per-cell availability arrives in `tunableCellIds`. */
+  tuningControls?: CellTuningControls;
+  tunableCellIds?: ReadonlySet<string>;
   disabled: boolean; sourceActionsDisabled: boolean; autoSave: boolean; focusRequest: { cellId: string; requestId: number } | null;
+  onKeepTuned?: (recordId: string, operationIds: string[]) => void;
+  onUndoTuned?: (recordId: string, operationIds: string[]) => void;
   onDirtyChange: (cellId: string, dirty: boolean) => void;
   onSave: (cellId: string, source: string) => void; onRun: (cellId: string) => void; onScope: (cellId: string, editable: boolean) => void; onScopeMany: (cellIds: string[], editable: boolean) => void; onRevert: (turnId: string, cellId: string) => void;
   onKeepCell?: (turnId: string, cellId: string) => void;
@@ -130,27 +138,62 @@ export default function NotebookView({ notebook, scope, turn, trusted = false, d
     const next = Math.max(0, Math.min(notebook.cells.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
     const id = notebook.cells[next]?.cellId ?? focused; setFocused(id); const node = refs.current.get(id); node?.focus(); node?.scrollIntoView({ block: "nearest" });
   }}>
-    {notebook.cells.map((cell) => <NotebookCell key={`${notebook.sessionId}:${cell.cellId}`} cell={cell} focused={focused === cell.cellId} selected={selected.has(cell.cellId)} dragIds={selected.has(cell.cellId) && orderedSelection.length > 1 ? orderedSelection : [cell.cellId]}
+    {notebook.cells.map((cell) => {
+      // Which record this cell reviews under. A tune Apply onto a cell with
+      // pending agent hunks makes those hunks stale, so when both records touch
+      // one cell the tune is the one still holding a decision — and it is the
+      // user's own edit, so its wording is the one that must win.
+      const tunedOperations = (tuningRecord?.operations ?? []).filter((item) => item.cellId === cell.cellId);
+      const tunedChange = tuningRecord?.changes.find((change) => change.cellId === cell.cellId);
+      // Only a record with something still to decide claims the cell. Settled
+      // operations stay in the record for ever (`with_state` keeps them, and the
+      // record is only dropped on a session change), so testing that the cell
+      // merely *appears* in one would hand its review surface to a tune the user
+      // finished with long ago — and the next agent edit to that cell would then
+      // render with no change, no diff and no per-cell Keep/Undo, because none of
+      // those settled operations is pending.
+      const tunedUnsettled = tunedOperations.some(
+        (item) => item.state === "pending" || item.state === "stale",
+      );
+      const tuned = Boolean(tuningRecord) && (tunedUnsettled || Boolean(tunedChange));
+      const recordId = tuningRecord?.recordId;
+      return <NotebookCell key={`${notebook.sessionId}:${cell.cellId}`} cell={cell} focused={focused === cell.cellId} selected={selected.has(cell.cellId)} dragIds={selected.has(cell.cellId) && orderedSelection.length > 1 ? orderedSelection : [cell.cellId]}
       editable={scope.editableCellIds.includes(cell.cellId)} context={scope.contextCellIds.includes(cell.cellId)} trusted={trusted} disabled={disabled} sourceActionsDisabled={sourceActionsDisabled} autoSave={autoSave}
       cellRef={(node) => { if (node) refs.current.set(cell.cellId, node); else refs.current.delete(cell.cellId); }}
-      change={turn?.changes.find((change) => change.cellId === cell.cellId)}
-      operations={(turn?.operations ?? []).filter((item) => item.cellId === cell.cellId)}
-      retyped={retypeOf(turn, cell.cellId)}
+      origin={tuned ? "tune" : "agent"}
+      change={tuned ? tunedChange : turn?.changes.find((change) => change.cellId === cell.cellId)}
+      operations={tuned ? tunedOperations : (turn?.operations ?? []).filter((item) => item.cellId === cell.cellId)}
+      retyped={tuned ? undefined : retypeOf(turn, cell.cellId)}
+      tunable={tunableCellIds?.has(cell.cellId) ?? false}
+      tuning={tuningControls}
       // T1: on a Trusted turn a cell is individually revertible exactly when it
       // carries ledger operations (edit on a surviving same-type cell, or an
       // add). Cells involved in delete/move/retype have none and stay
       // whole-turn-undo only, with the explanatory note instead of controls.
-      revertable={turn?.writeScope !== "trusted" || (turn?.operations ?? []).some((item) => item.cellId === cell.cellId)}
+      // A tune is always per-cell revertible: it writes nothing structural.
+      revertable={tuned || turn?.writeScope !== "trusted" || (turn?.operations ?? []).some((item) => item.cellId === cell.cellId)}
       onFocus={() => setFocused(cell.cellId)}
       onSelect={(event) => selectCell(cell.cellId, event)} onContextMenu={(event) => openMenu(cell.cellId, event)}
       onDirtyChange={(dirty) => onDirtyChange(cell.cellId, dirty)}
       onSave={(source) => onSave(cell.cellId, source)} onRun={() => onRun(cell.cellId)}
       onAddEditable={() => onScope(cell.cellId, true)} onAddContext={() => onScope(cell.cellId, false)}
       onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} onAddErrorToChat={(errorText) => onAddErrorToChat?.(cell.cellId, errorText)}
-      onRevert={() => turn && onRevert(turn.turnId, cell.cellId)}
-      onKeep={onKeepCell && turn ? () => onKeepCell(turn.turnId, cell.cellId) : undefined}
-      onKeepOperation={onKeepOperation && turn ? (operationId) => onKeepOperation(turn.turnId, operationId) : undefined}
-      onUndoOperation={onUndoOperation && turn ? (operationId) => onUndoOperation(turn.turnId, operationId) : undefined} />)}
+      // Undo settles only what is still undoable; Keep settles everything the
+      // cell still shows, which is the same split the agent path uses.
+      onRevert={tuned && recordId
+        ? () => onUndoTuned?.(recordId, tunedOperations.filter((item) => item.state === "pending").map((item) => item.operationId))
+        : () => turn && onRevert(turn.turnId, cell.cellId)}
+      onKeep={tuned && recordId && onKeepTuned
+        ? () => onKeepTuned(recordId, tunedOperations.map((item) => item.operationId))
+        : tuned ? undefined
+        : onKeepCell && turn ? () => onKeepCell(turn.turnId, cell.cellId) : undefined}
+      onKeepOperation={tuned && recordId
+        ? (operationId) => onKeepTuned?.(recordId, [operationId])
+        : onKeepOperation && turn ? (operationId) => onKeepOperation(turn.turnId, operationId) : undefined}
+      onUndoOperation={tuned && recordId
+        ? (operationId) => onUndoTuned?.(recordId, [operationId])
+        : onUndoOperation && turn ? (operationId) => onUndoOperation(turn.turnId, operationId) : undefined} />;
+    })}
     {menu && <div className="context-menu-backdrop" onClick={() => setMenu(null)} onContextMenu={(event) => { event.preventDefault(); setMenu(null); }}>
       <div className="cell-context-menu" style={{ left: menu.x, top: menu.y }} role="menu" aria-label="Cell scope actions" onClick={(event) => event.stopPropagation()}>
         <p className="context-menu-heading">{selected.size} cell{selected.size === 1 ? "" : "s"} selected</p>
