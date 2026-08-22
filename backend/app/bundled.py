@@ -5,10 +5,10 @@ Vite proxy ``/api`` to the backend. That is the right shape for development and
 the wrong shape for anything that ships: it needs Node at runtime, it occupies
 two ports, and it puts the browser on a different origin from the API.
 
-The bundled app has neither problem. The built SPA is served from ``dist/`` at
-the root, the API is mounted under ``/api`` — which is the prefix the frontend
-already calls (``frontend/src/api/client.ts``) — and a local client and the
-browser tab therefore share one origin.
+The bundled app has neither problem. The built SPA is served at the root from
+``web/`` beside this module, the API is mounted under ``/api`` — the prefix the
+frontend already calls (``frontend/src/api/client.ts``) — and a local client
+and the browser tab therefore share one origin.
 
 Because that origin is a loopback port with a Jupyter kernel behind it, every
 request is checked against ``Origin``/``Host`` first. See ``_looks_loopback``.
@@ -34,12 +34,15 @@ from .main import configured_agent_adapter, create_app
 # absolute literal — each is derived from this module's own location or the
 # environment — so the bundle is not tied to one machine or one checkout.
 #
-# The two layouts differ and both have to work. In a source checkout the build
-# lands in `dist/` beside `backend/`, three levels up from this file. Installed,
-# this module sits in site-packages, where that same walk lands on site-packages
-# itself and finds nothing; a wheel instead carries the frontend inside the
-# package, as `web/`. The env var is the escape hatch for a packager that puts
-# it somewhere else again.
+# `npm run build` writes into `web/` beside this file (vite.config.ts), and
+# pyproject.toml ships that directory as package data, so the same relative
+# location holds whether the code is running from a checkout or from an
+# installed wheel. That is the point of building into the package: a `dist/` at
+# the repo root belongs to no package and travels nowhere.
+#
+# The repo-root `dist/` remains as a fallback for a tree built before that
+# move, and the env var is the escape hatch for a packager that puts the
+# frontend somewhere else again.
 DIST_DIR_ENV_VAR = "NOTEBOOK_EDITOR_DIST"
 
 
@@ -50,8 +53,8 @@ def candidate_dist_dirs() -> tuple[Path, ...]:
     override = os.environ.get(DIST_DIR_ENV_VAR)
     if override:
         candidates.append(Path(override).expanduser())
-    candidates.append(here.parent / "web")       # installed: inside the package
-    candidates.append(here.parents[2] / "dist")  # source checkout: repo root
+    candidates.append(here.parent / "web")       # where the build writes, and ships
+    candidates.append(here.parents[2] / "dist")  # a tree built before that move
     return tuple(candidates)
 
 

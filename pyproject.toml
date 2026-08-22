@@ -31,6 +31,12 @@ where = ["."]
 include = ["backend.app*"]
 namespaces = true
 
+# The built frontend, which `npm run build` writes into the package (see
+# vite.config.ts). Without this the wheel carries Python only and the bundled
+# server has no UI to serve.
+[tool.setuptools.package-data]
+"backend.app" = ["web/**/*", "web/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 addopts = "-ra"

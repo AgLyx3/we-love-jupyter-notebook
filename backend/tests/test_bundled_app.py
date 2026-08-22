@@ -18,11 +18,6 @@ from backend.app.bundled import (
     request_is_local,
 )
 
-# A directory that exists and is not the one a test names explicitly, used to
-# show the explicit choice is not silently replaced by a discovered build.
-DEFAULT_REAL_DIST = Path(__file__).resolve().parents[2] / "dist"
-
-
 INDEX_HTML = (
     '<!doctype html><html><head><title>Notebook Agent Editor</title>'
     '<script type="module" src="/assets/index-abc.js"></script></head>'
@@ -112,12 +107,20 @@ def test_the_environment_override_wins(tmp_path, monkeypatch):
 
 def test_an_explicit_dist_dir_is_not_searched_around(tmp_path, monkeypatch):
     """A caller naming a directory is told about that one, not quietly served
-    a build discovered somewhere else."""
-    monkeypatch.setenv(DIST_DIR_ENV_VAR, str(DEFAULT_REAL_DIST))
+    a build discovered somewhere else.
+
+    A findable build is deliberately put on the search path first, so this
+    fails if the explicit argument ever falls back to the search.
+    """
+    findable = tmp_path / "a-real-build-elsewhere"
+    (findable / "assets").mkdir(parents=True)
+    (findable / "index.html").write_text(INDEX_HTML, encoding="utf-8")
+    monkeypatch.setenv(DIST_DIR_ENV_VAR, str(findable))
+
     with pytest.raises(RuntimeError) as raised:
         create_bundled_app(dist_dir=tmp_path / "named-but-empty")
     assert "named-but-empty" in str(raised.value)
-    assert str(DEFAULT_REAL_DIST) not in str(raised.value)
+    assert str(findable) not in str(raised.value)
 
 
 def test_defaults_to_the_configured_agent_adapter(dist, monkeypatch):
@@ -341,3 +344,42 @@ def test_a_non_browser_client_sending_no_origin_is_served(bundled):
 )
 def test_locality_rules(origin, host, allowed):
     assert request_is_local(origin, host) is allowed
+
+
+# --- packaging contract ------------------------------------------------------
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_the_build_writes_into_the_package():
+    """Vite's outDir and the lookup's first candidate must not drift apart.
+
+    They are declared in different languages in different files, so nothing but
+    a test ties them together. If the build starts writing somewhere else, a
+    checkout keeps working off a stale `web/` and the mismatch only surfaces
+    later, as a wheel that ships no UI.
+    """
+    config = (REPO_ROOT / "vite.config.ts").read_text(encoding="utf-8")
+    assert 'outDir: "backend/app/web"' in config
+
+    package_local = bundled_module.candidate_dist_dirs()[-2]
+    assert package_local == REPO_ROOT / "backend" / "app" / "web"
+
+
+def test_the_built_frontend_is_declared_as_package_data():
+    """Otherwise the wheel carries Python only and the bundle has no UI.
+
+    Verified for real by building a wheel and listing it; this is the cheap
+    guard that keeps the declaration from being dropped.
+    """
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "[tool.setuptools.package-data]" in pyproject
+    assert '"backend.app"' in pyproject
+    assert "web/**/*" in pyproject
+
+
+def test_the_built_frontend_is_not_committed():
+    """It is build output: ignored, so a stale copy cannot be checked in."""
+    ignored = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").split()
+    assert "backend/app/web/" in ignored

@@ -1,6 +1,6 @@
 # Bundling the editor as an MCP server
 
-Status: investigation complete; phases 1-3 built, 4-7 outstanding
+Status: investigation complete; phases 1-3 built, 7 partly built, 4-6 outstanding
 Branch: `claude/app-mcp-browser-bundling-c11ed2`
 Date: 2026-08-22
 
@@ -392,20 +392,20 @@ Ordered so each phase is independently useful.
    run end to end, measuring tokens per tool call and where the model picks the
    wrong tool. Feed the results back into the descriptions and response shaping.
    Published guidance treats this as part of building the tools, not as QA after.
-7. **Packaging** — console-entry-point so `claude mcp add` can name a command,
-   plus docs. **One gap is already known and measured.** Building a wheel from
-   this tree today produces 54 entries and *no frontend at all*: `dist/` is
-   gitignored and `[tool.setuptools.packages.find]` includes only
-   `backend.app*`, so nothing from the build travels with the package. The
-   locating code is ready for it either way — `candidate_dist_dirs` looks for
-   `backend/app/web/` (installed) before the repo-root `dist/` (checkout), and
-   `NOTEBOOK_EDITOR_DIST` overrides both — but the packaging still has to
-   *put* the build somewhere it ships. Verified against a real
-   `pip install --target` of the wheel: without the frontend the bundle
-   refuses to start and names both places it looked; with `dist/` copied in as
-   `backend/app/web/` it starts and serves from there. So phase 7 needs the
-   build to emit into the package and a package-data declaration to carry it —
-   not another change to the lookup.
+7. **Packaging** — ⚠️ **partly built.** The frontend now ships: `npm run build`
+   writes into `backend/app/web/` (vite `outDir`) and pyproject declares it as
+   package data, so a wheel carries it. Measured before and after — the wheel
+   went from 54 entries and *no* frontend to 61 entries including `index.html`
+   and every asset — and verified by installing that wheel with
+   `pip install --target` and serving it from a directory outside the repo:
+   SPA, hashed assets, API and the origin guard all answer, with the frontend
+   read from inside the installed package. Three tests pin the contract, since
+   the vite `outDir`, the pyproject declaration and the lookup's first
+   candidate are written in three languages in three files and nothing else
+   ties them together. **Still owed:** the console entry point so
+   `claude mcp add` can name a command, and user-facing docs for running the
+   bundle — neither of which is worth writing before the MCP server (phase 5)
+   exists to be named.
 
 Phases 1, 4, 5, 6, 7 are additive and touch nothing the current UI depends on.
 Phases 2 and 3 modify existing server behavior — 2 adds a rejection path that
