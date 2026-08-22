@@ -781,3 +781,78 @@ panel.
 | Intent vs. reality divergence | Comprehension, not navigation — but §11.1's marks surface it free |
 | Block category / stage taxonomy | Cut in §12.2 |
 | Cross-notebook or project-level views | One active notebook (§9.6) |
+
+---
+
+## 13. Probe results — the deterministic pass, measured
+
+`docs/plans/probes/` holds two purpose-built notebooks and `extract.py`, which
+computes the five *computed* Block fields (§12.1) with no model involved. Run:
+
+```
+python3 docs/plans/probes/extract.py docs/plans/probes/*.ipynb
+```
+
+The fixtures are the two cases the design keeps arguing about:
+`messy-exploration.ipynb` (57 cells, **0 headings, 0 defs**, out-of-order
+execution — the hard case where both annotation layers go dark) and
+`simulation-sweep.ipynb` (21 cells, 1 heading, 7 defs — the def-heavy contrast).
+
+### 13.1 The deterministic segmenter fails the hard case
+
+| Notebook | Cells | Blocks | Largest block |
+|---|---|---|---|
+| messy-exploration | 57 | 5 | **cells 1–44** |
+| simulation-sweep | 21 | 3 | cells 4–18 |
+
+A 44-cell block is not a coarse label, it is **no navigation at all** — 79% of
+the notebook in one node. §11 argued the no-model fallback would be "less
+eloquent"; that was too generous. On a notebook with no headings and one
+`read_csv`, milestone segmentation has almost nothing to fire on, and the whole
+load → clean → merge → plot → re-clean → feature-engineer arc collapses into a
+single node.
+
+**This settles the §11 ordering question with evidence rather than judgement.**
+Naming had to move into V1, and so does model-driven *segmentation* — the
+boundaries are as generated as the names. The deterministic pass is a fallback
+for when no CLI is available, and its output on the hard case should be
+understood as "degraded", not "adequate".
+
+### 13.2 Notebook-level kind detection is too coarse
+
+The probe reports `kind=ml` for `messy-exploration`, because `sklearn` is
+imported — **at cell 42**. Cells 1–41 are pandas exploration. §4 proposed
+detecting notebook kind from imports as the way out of the per-domain keyword
+problem; the probe shows kind is **regional, not global**. Imports arrive
+mid-notebook, exactly where the work changes character. If import-family
+detection is used at all it must be windowed, which is another argument for
+letting the model draw the boundaries.
+
+### 13.3 Two bugs found that would have shipped as design
+
+Both were in the first version of the probe, and both are the kind of thing that
+looks correct until run against real code:
+
+1. **`produces` leaked function locals.** Walking the AST flat treats
+   `S, I, R = y` inside a `def` as a module-level binding, so the block
+   advertised producing `I` and `r0` — names no other cell can see. Binding
+   collection has to be **scope-aware**: descend into function bodies for
+   *reads*, not for *binds*.
+2. **Dead-function detection false-positived on callbacks.** `rhs` is passed to
+   `solve_ivp(rhs, ...)` as a value, never called by name, so a `ast.Call`-only
+   scan reported `rhs() used in nowhere`. Any callback, key function, or
+   decorator argument would have been flagged dead. Usage must count **name
+   references**, not calls.
+
+After both fixes, `sir()` correctly shows `used in [4, 14]` and the only
+never-used definition is `sensitivity()`, which genuinely is a stub.
+
+### 13.4 What the probe confirms
+
+The **function annotation layer is as good as §11.4 hoped** where it applies —
+`peak_of() used in [8, 17]`, `attack_rate() used in [12, 17]`, and a correctly
+identified dead stub, all free from the AST. `produces` is likewise clean once
+scoped. The computed half of the model is sound.
+
+It is the **boundaries** that the deterministic pass cannot supply, which is
+precisely the field everything else hangs off (§9.7).
