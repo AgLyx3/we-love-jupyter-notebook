@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import threading
 import webbrowser
+from pathlib import Path
 from typing import Any, Literal
 
 import httpx
@@ -34,8 +35,15 @@ from .shaping import budget_hint, shape_notebook
 from .supervisor import EditorProcess
 
 REQUEST_TIMEOUT_SECONDS = 30.0
-# Long enough for a person to notice the tab and decide on a paused cell.
-EXECUTION_POLL_TIMEOUT_SECONDS = 600.0
+# How long a run tool waits before handing control back. Long enough for an
+# ordinary cell to finish inside the call, and deliberately far short of how
+# long a person might take to approve a paused one: holding a tool call open
+# for minutes gives the caller nothing to act on and invites the client's own
+# timeout to fire instead. The eval showed the model reaching for
+# notebook_status of its own accord after a pause, so returning promptly with
+# what it is waiting for fits how it already behaves. The run continues in the
+# background either way.
+EXECUTION_POLL_TIMEOUT_SECONDS = 45.0
 
 
 class ToolFailure(RuntimeError):
@@ -86,6 +94,23 @@ class EditorSession:
         with self._lock:
             self.session_id = None
             self.revision = None
+
+
+def resolve_requested_path(path: str, workspace_root: str | None) -> str:
+    """Make a caller's path unambiguous before it reaches the editor.
+
+    A model asked to work on "analysis.ipynb" passes exactly that. Left alone
+    it would be resolved by whichever process happened to receive it, against
+    whichever directory that process was started in — which in the observed
+    case was the client's, and only matched the workspace by luck. Anchoring a
+    relative path to the workspace root makes it mean one thing.
+    """
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        return str(candidate)
+    if workspace_root:
+        return str((Path(workspace_root) / candidate).resolve())
+    return str(candidate.resolve())
 
 
 def _explain(status: int, body: dict[str, Any] | None, *, what: str) -> str:
@@ -217,13 +242,16 @@ def build_server(
         name="notebook_open",
         description=(
             "Open a local .ipynb notebook in the editor and show it in a browser "
-            "tab. Starts the editor if it is not already running. Returns the "
-            "session and a summary of the notebook. Use this once per notebook; "
-            "to re-read one already open, use notebook_read."
+            "tab. Starts the editor if it is not already running. `path` may be "
+            "absolute, or relative to the workspace root this editor was started "
+            "for. Returns the session and a summary of the notebook. Use this "
+            "once per notebook; to re-read one already open, use notebook_read."
         ),
     )
     def notebook_open(path: str) -> dict[str, Any]:
-        body: dict[str, Any] = {"path": path}
+        body: dict[str, Any] = {
+            "path": resolve_requested_path(path, tools.editor.workspace_root)
+        }
         if tools.state.session_id is not None and tools.state.revision is not None:
             # Replacing an open notebook needs the precondition, same as any
             # other mutation of the active session.

@@ -8,7 +8,13 @@ import json
 import pytest
 
 from backend.app.mcp.polling import await_execution
-from backend.app.mcp.server import EditorSession, ToolFailure, _explain, build_server
+from backend.app.mcp.server import (
+    EditorSession,
+    ToolFailure,
+    _explain,
+    build_server,
+    resolve_requested_path,
+)
 
 
 # --- the revision contract ---------------------------------------------------
@@ -315,3 +321,33 @@ def test_the_read_tool_says_images_are_not_returned(built):
     description = {t.name: t.description for t in asyncio.run(server.list_tools())}["notebook_read"]
     assert "Images" in description
     assert "cells" in description
+
+
+# --- path resolution (found by the eval) -------------------------------------
+
+
+def test_a_relative_path_is_anchored_to_the_workspace(tmp_path):
+    """Observed in the eval: asked to work on "analysis.ipynb", the model passes
+    exactly that. Unanchored it would resolve against whichever process saw it
+    first, in whichever directory that process was started — which matched the
+    workspace only by luck.
+    """
+    assert resolve_requested_path("analysis.ipynb", str(tmp_path)) == str(
+        tmp_path / "analysis.ipynb"
+    )
+    assert resolve_requested_path("nested/x.ipynb", str(tmp_path)) == str(
+        tmp_path / "nested" / "x.ipynb"
+    )
+
+
+def test_an_absolute_path_is_left_alone(tmp_path):
+    """Confinement still judges it; anchoring must not rewrite it into the
+    workspace and make an outside path look like an inside one."""
+    outside = "/somewhere/else/notebook.ipynb"
+    assert resolve_requested_path(outside, str(tmp_path)) == outside
+
+
+def test_without_a_workspace_a_relative_path_still_becomes_absolute(tmp_path, monkeypatch):
+    """So the editor child's inherited directory never decides what it meant."""
+    monkeypatch.chdir(tmp_path)
+    assert resolve_requested_path("here.ipynb", None) == str(tmp_path / "here.ipynb")

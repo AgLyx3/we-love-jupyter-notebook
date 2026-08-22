@@ -1,6 +1,6 @@
 # Bundling the editor as an MCP server
 
-Status: investigation complete; phases 1-5 and 7 built, 6 outstanding
+Status: investigation complete; all seven phases built
 Branch: `claude/app-mcp-browser-bundling-c11ed2`
 Date: 2026-08-22
 
@@ -437,11 +437,15 @@ Ordered so each phase is independently useful.
    completed only after an approval posted the way the tab posts it; an edit
    against a stale revision refused with the person's change intact.
 
-6. **Evaluate** — a set of tasks grounded in real notebook work ("find why cell 4
-   errors and fix it", "add a plot of X", "this notebook is slow — profile it"),
-   run end to end, measuring tokens per tool call and where the model picks the
-   wrong tool. Feed the results back into the descriptions and response shaping.
-   Published guidance treats this as part of building the tools, not as QA after.
+6. **Evaluate** — ✅ **built and run.** `evals/mcp_tool_eval.py` drives the
+   `claude` CLI as a real MCP client over five notebook tasks and records the
+   tool calls. Findings and what they changed:
+   `docs/plans/2026-08-22-mcp-tool-eval-findings.md`. Five of five passed; the
+   run fixed a relative-path ambiguity that had been working by luck, shortened
+   a run tool that held its call open for ten minutes, and left one real gap
+   documented — there is no way to add or delete a cell, in the tool surface or
+   the API.
+
 7. **Packaging** — ✅ **built.** The frontend ships (`npm run build` writes into
    `backend/app/web/`, declared as package data), and the console entry point
    `notebook-editor-mcp` is registered, with `.[mcp]` carrying the SDK. The
