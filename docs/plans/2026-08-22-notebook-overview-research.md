@@ -315,6 +315,55 @@ if outputs ever come back into scope, this is where they go.
 shape marimo converged on (map first, graph second), which is weak evidence it
 is the right decomposition.
 
+### 5.1 Where it lives — decided
+
+**A toggle button in the top-left corner opens and closes the panel, and the
+panel shares the existing left rail with the file tree as two tabs: Files |
+Outline.**
+
+The corner is already spoken for, which is what makes this work rather than
+collide. `App.tsx:496` renders a `sidebar-reveal` button (a `PanelLeft` icon)
+inside `.brand`, shown when a workspace folder is open and the file tree is
+collapsed. That is already a top-left left-panel toggle. **Extend it; do not add
+a second button beside it** — two adjacent toggles with near-identical icons in
+the same corner is the confusing outcome.
+
+Sharing the rail rather than adding one matters because of the current widths.
+`.workspace-layout` is a flex row: a fixed 240px `.workspace-sidebar`, then
+`.editor-layout`, itself a grid of notebook / 6px resizer / 350px agent panel
+(`styles.css:37-41`). A second left rail would put three panels around a
+notebook body that is already the squeezed middle.
+
+**The two panels are never both mandatory**, which is what makes one rail
+sufficient:
+
+- The file tree is **workspace-scoped** — it exists only when a folder was
+  opened. Open a single `.ipynb` directly (the README's first path) and there is
+  no rail at all, so the outline takes the whole 240px and needs no tabs.
+- The overview is **notebook-scoped** — it applies whenever a notebook is open,
+  folder or not.
+
+So: rail present → tabs **Files | Outline**. No folder → Outline alone. One
+button, one region, no new competition for width.
+
+**The rail remembers its tab per notebook** (decided). Switching between two
+notebooks in a workspace restores whichever tab each was left on, so a notebook
+you navigate by outline stays that way while one you navigate by file tree does
+too.
+
+That needs somewhere to remember it, which brushes against "V1 stores nothing"
+(§7.3) — so be precise about the distinction. V1 stores no *notebook* state and
+writes nothing to the `.ipynb`; a UI preference is a different kind of thing.
+**`localStorage`, keyed by notebook path**, survives a reload, needs no backend
+change, and does not touch §6.6's read-only rule. Two edges worth handling: Save
+As changes the path, so the memory does not follow it (acceptable — treat the
+new path as a new notebook), and the upload path has no notebook path to key on,
+so it falls back to the default tab.
+
+**Mobile is out of scope** (decided). The breakpoint at `styles.css:303`
+already collapses `.editor-layout` to one column and stacks the agent panel; the
+rail is simply not designed for that width in V1.
+
 ---
 
 ## 6. Design principles the research implies
