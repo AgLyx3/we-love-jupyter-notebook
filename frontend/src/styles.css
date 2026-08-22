@@ -81,7 +81,12 @@ body.marquee-active iframe { pointer-events: none; }
    drops — a shifting destructive control is how "undo all" gets mis-clicked. */
 .notebook-pane { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
 .review-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 8px 14px; background: #eef6fb; border-bottom: 1px solid #bfd7e7; }
-.review-bar-count { font-size: 12px; font-weight: 650; color: #0b6097; }
+/* The counter is a button now (it jumps to the first change), but it must not
+   read as one of the actions on the right — no border, no fill, just a target. */
+.review-bar-count { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: 5px; background: transparent; font-size: 12px; font-weight: 650; color: #0b6097; cursor: pointer; }
+.review-bar-count:hover:not(:disabled) { background: #e8f2f9; }
+.review-bar-count:disabled { cursor: default; color: var(--muted); }
+.review-bar-count svg { width: 13px; height: 13px; }
 .review-bar-actions, .review-bar-confirm { display: flex; align-items: center; gap: 8px; }
 .review-bar-confirm span { font-size: 12px; color: var(--red); font-weight: 600; }
 .review-bar button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; padding: 0 11px; font-size: 12px; font-weight: 600; min-width: 108px; }
@@ -186,7 +191,11 @@ body.marquee-active iframe { pointer-events: none; }
 .tuning-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px 6px 16px; border-bottom: 1px solid #e6eaed; font-size: 12px; color: #0b6097; }
 .tuning-close { width: 28px; min-width: 28px; height: 28px; border: 0; background: transparent; color: var(--muted); }
 .tuning-close svg { width: 15px; height: 15px; }
-.tuning-panel-body { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 12px; padding: 10px 16px 12px; align-items: start; }
+/* The rail is sized in container units, not pixels: a fixed 280px stays
+   cramped on a wide pane while the preview takes everything, which is what made
+   values need scrolling to read. It grows with the pane and stops before it
+   starts crowding the picture. */
+.tuning-panel-body { display: grid; grid-template-columns: minmax(0, 1fr) clamp(250px, 30cqi, 400px); gap: 12px; padding: 10px 16px 12px; align-items: start; }
 @container (max-width: 620px) { .tuning-panel-body { grid-template-columns: minmax(0, 1fr); } }
 .tuning-preview-column { min-width: 0; }
 /* The band and the border are the same signal: while any knob differs, this
@@ -202,7 +211,11 @@ body.marquee-active iframe { pointer-events: none; }
 .tuning-preview-spinner { position: absolute; top: 8px; left: 8px; margin: 0; padding: 3px 9px; font-size: 11px; font-weight: 650; color: #0b6097; background: #ffffffe6; border: 1px solid #bfd7e7; border-radius: 999px; box-shadow: 0 1px 4px #1a263024; }
 .tuning-preview-blank { margin: 0; padding: 14px 8px; font-size: 12px; color: var(--muted); }
 .tuning-rail { min-width: 0; display: grid; gap: 10px; align-content: start; }
-.tuning-knobs { display: grid; gap: 10px; max-height: 420px; overflow-y: auto; }
+/* Flow into as many columns as the rail can hold. Stacked under the preview on
+   a narrow pane the rail is full width, so the same rule turns one long scroll
+   into two or three readable columns. The cap is viewport-relative rather than
+   a fixed 420px so a tall window shows more instead of scrolling a short box. */
+.tuning-knobs { display: grid; gap: 10px 12px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); align-content: start; max-height: min(60vh, 560px); overflow-y: auto; }
 .tuning-apply, .tuning-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .tuning-apply button, .tuning-actions button { height: 30px; padding: 0 10px; font-size: 12px; font-weight: 650; }
 .tuning-message { margin: 0; padding: 8px 16px; font-size: 12px; color: var(--muted); }
@@ -224,17 +237,21 @@ body.marquee-active iframe { pointer-events: none; }
 .knob-origin { font-size: 10px; color: var(--muted); }
 .knob-reset { margin-left: auto; width: 28px; min-width: 28px; height: 28px; border: 0; background: transparent; color: var(--muted); }
 .knob-reset svg { width: 13px; height: 13px; }
-.knob-slider-row { display: flex; align-items: center; gap: 7px; }
-.knob-slider-row input[type="range"] { flex: 1; min-width: 0; height: 28px; }
-.knob-value { width: 82px; flex: 0 0 auto; }
-.knob-bounds { display: flex; align-items: center; gap: 6px; }
+.knob-slider-row { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+/* Wraps instead of shrinking: below about 190px the number field drops under
+   the slider rather than both becoming unreadable. */
+.knob-slider-row input[type="range"] { flex: 1 1 120px; min-width: 0; height: 28px; }
+.knob-value { flex: 1 1 68px; min-width: 60px; max-width: 120px; }
+.knob-bounds { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .knob-bound { flex: 1; min-width: 0; }
 .knob-bounds-gap { font-size: 10px; color: var(--muted); }
 .knob input[type="number"], .knob-text { height: 28px; border: 1px solid #aeb8c0; border-radius: 5px; padding: 0 6px; font-size: 12px; }
 .knob-text { width: 100%; }
 .knob-toggle { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #34404b; min-height: 28px; }
 .knob-toggle input { width: 16px; height: 16px; }
-.knob-items { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 6px; }
+.knob-items { display: grid; grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); gap: 6px; }
+/* Very tight rail: give the slider its own line so the value stays legible. */
+@container (max-width: 400px) { .knob-slider-row input[type="range"] { flex-basis: 100%; } }
 .prompt-form { border-top: 1px solid #cdd4d9; padding: 12px; background: #fff; display: grid; gap: 7px; }.prompt-form label { font-size: 12px; font-weight: 650; }.prompt-form textarea { width: 100%; resize: vertical; min-height: 64px; max-height: 150px; border: 1px solid #aeb8c0; border-radius: 5px; padding: 9px; line-height: 1.4; }.prompt-form button { justify-self: end; padding: 0 12px; }.prompt-mode { font-size: 11px; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }.prompt-mode::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #6aa5cc; }
 .mention-anchor { position: relative; display: grid; }
 .mention-menu { position: absolute; left: 0; right: 0; bottom: calc(100% + 4px); margin: 0; padding: 4px; list-style: none; background: #fff; border: 1px solid #aeb8c0; border-radius: 7px; box-shadow: 0 8px 24px rgba(20, 40, 60, 0.18); max-height: 220px; overflow-y: auto; z-index: 20; }

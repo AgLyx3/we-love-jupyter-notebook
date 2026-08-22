@@ -447,7 +447,18 @@ export default function App() {
   const selectedTurn = history.find((item) => item.turn.turnId === selectedTurnId)?.turn ?? turn;
 
   const fileLocked = mutationsDisabled || busy || hasDirtyDrafts;
-  const reviewOperations = selectedTurn?.operations ?? [];
+  // Which record the review bar is driving. A tuning Apply produces the same
+  // per-hunk ledger an agent turn does, so it gets the same navigation rather
+  // than a second bespoke surface — without it a multi-cell tune lands with no
+  // way to find what moved. The tune wins when both are live: it is the more
+  // recent decision, and it is the user's own edit.
+  const tunedUnsettledOps = (tuningRecord?.operations ?? []).filter(
+    (item) => item.state === "pending" || item.state === "stale");
+  const reviewingTune = tunedUnsettledOps.length > 0;
+  const reviewOrigin: "agent" | "tune" = reviewingTune ? "tune" : "agent";
+  const reviewOperations = reviewingTune
+    ? (tuningRecord?.operations ?? [])
+    : (selectedTurn?.operations ?? []);
   // "Unsettled" must mean the same thing everywhere: here, in
   // reconcileTurnChanges, and in Next-change navigation. Stale counts as
   // unsettled — the user has not decided about it — and stays settleable,
@@ -488,15 +499,20 @@ export default function App() {
           than leaving a live "Undo all" behind a "2 of 2 reviewed" counter.
           Keyed by turn so no confirmation survives a switch to another turn.
           Trusted turns carry no ledger, so this never shows for them. */}
-      {selectedTurn && reviewUnsettled.length > 0 && <ReviewBar
-        key={selectedTurn.turnId}
+      {(reviewingTune ? Boolean(tuningRecord) : Boolean(selectedTurn)) && reviewUnsettled.length > 0 && <ReviewBar
+        key={reviewingTune ? tuningRecord!.recordId : selectedTurn!.turnId}
+        origin={reviewOrigin}
         total={reviewOperations.length} reviewed={reviewOperations.length - reviewUnsettled.length} keptCount={reviewKept}
         undoableCount={reviewUnsettled.filter((item) => item.state === "pending").length}
         disabled={mutationsDisabled || busy || hasDirtyDrafts}
         onPrevious={() => focusChange(-1)}
         onNext={() => focusChange(1)}
-        onKeepAll={() => acceptOperations(notebook, selectedTurn.turnId)}
-        onUndoAll={() => rejectOperations(notebook, selectedTurn.turnId)} />}
+        onKeepAll={() => reviewingTune
+          ? keepTunedOperations(notebook, tuningRecord!.recordId, reviewOperations.map((item) => item.operationId))
+          : acceptOperations(notebook, selectedTurn!.turnId)}
+        onUndoAll={() => reviewingTune
+          ? undoTunedOperations(notebook, tuningRecord!.recordId, reviewUnsettled.filter((item) => item.state === "pending").map((item) => item.operationId))
+          : rejectOperations(notebook, selectedTurn!.turnId)} />}
       <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} tuningRecord={tuningRecord} trusted={trustedScope} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} autoSave={autoSave} focusRequest={focusRequest}
         tunableCellIds={tunableCellIds}
         tuningControls={{
