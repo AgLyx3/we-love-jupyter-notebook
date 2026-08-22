@@ -11,8 +11,10 @@ like a roadmap", and what did they learn?** It ends with the gap worth building
 into and a recommended first slice — but it does not commit to a design.
 
 **Scope decided 2026-08-22** (§1): navigation of a large notebook, click a block
-to jump to its cells. Outputs are out of scope; the map is read-only in V1 and
-editable in V2. §9 lists the assumptions still standing.
+to jump to its cells. The map is built from **code**, segmented and named by the
+model, with markdown headings as annotation rather than structure (§11.1).
+Outputs are out of scope; the map is read-only in V1 and editable in V2. §9
+lists the assumptions still standing.
 
 ---
 
@@ -228,7 +230,8 @@ The one thing nobody does that survives the cut, and it needs a model:
   the author already wrote. The notebooks that most need an index — the
   exploratory and simulation ones named in §1 — are exactly the ones without
   them. A model segmenting and naming blocks from code alone inverts that
-  dependency. This is now the *whole* differentiator versus a plain outline.
+  dependency. This is now the *whole* differentiator versus a plain outline —
+  which is why §11 pulls it into V1 rather than deferring it.
 
 Recorded but out of scope: **intent vs. reality** (the markdown says "train the
 model", the code `.fit()`s the uncleaned frame). No notebook tool produces
@@ -571,33 +574,70 @@ each one could be wrong.
 
 ---
 
-## 11. Suggested first slice
+## 11. First slice — decided
 
-A **Tier 0+1 only, zero-AI panel**: contiguous blocks from markdown headings
-where they exist and from import-kind + milestone calls where they do not (§4);
-a state chip per block (never-run / out-of-order / risky); click-to-jump through
-the existing `focusRequest` path. Read-only, no editing, no outputs, no model.
+**Naming is in V1, and the map is built from code, not from prose.** The
+ordering question this section previously left open is settled: Tier-2 naming
+moves into the first build, paid for by dropping the DAG tab (concept B) out of
+it. Naming is the differentiator (§3); the wires are the part prior art already
+does well, and they are not what the panel is for.
 
-Ship that, use it on real notebooks of all three kinds, and *then* add the
-Tier-2 naming pass — because if the deterministic skeleton is not useful, no
-amount of generated prose on top of it will be.
+### 11.1 One map, not two
 
-**The honest risk in this ordering.** With outputs cut and editing deferred, V1
-is close to what a good outline already does, and its one differentiator —
-naming blocks in a notebook with no headings (§3) — is precisely the Tier-2
-part that V1 omits. On an exploratory or simulation notebook with no markdown,
-V1 falls back to import-kind heuristics whose vocabulary §4 admits is weak.
-So V1 may under-deliver on exactly the notebooks that motivated the feature.
-Two ways to answer that, and it is a real choice:
+Markdown sections and code structure are genuinely two different maps — the
+author's declared narrative versus the actual computational structure. They can
+disagree. The design question was whether to show both.
 
-- **Ship V1 as scoped** and accept it is a navigation improvement rather than a
-  new capability, treating it as the substrate Tier 2 lands on.
-- **Pull Tier-2 naming into V1** and cut something else instead (the DAG tab,
-  the dataflow edges). Naming is the differentiator; the wires are the part
-  prior art already does well.
+**Decided: one map, from the code. Markdown becomes annotation on it.**
 
-Recommendation: the second, if the goal is to see whether the idea is good.
-The first, if the goal is to land something safe.
+Two maps would make the user choose which to look at *before* navigating — a
+cost paid on every use for a benefit paid rarely. The economics are worse still
+for the notebooks in scope: exploratory and simulation code is where markdown is
+sparsest, so a markdown map would often be empty or three items long. And the
+rail is 240px with a graph view already contemplated; a third view makes it a
+menu rather than a map.
+
+Instead, **markdown headings render as marks on the code spine** — ticks showing
+where the author declared a section begins.
+
+- Agreement: the mark sits on a block boundary. Quiet reassurance, no work.
+- Divergence: a heading lands mid-block, or one block spans two headings. The
+  disagreement becomes a *visual property* rather than a comparison task —
+  comparing two lists is work; a misaligned tick on one spine is perception.
+
+This is the intent-vs-reality signal §3 recorded as out of scope, arriving
+through the navigation door instead of the comprehension one, at no extra cost.
+It also degrades correctly: no markdown → no marks → the map is unaffected,
+because it never depended on them.
+
+### 11.2 What that makes the model responsible for
+
+**Segmentation and naming in one pass, from code.** Markdown headings enter the
+prompt as a *hint* — "the author marked sections here" — which the model may
+follow or override. They are reference, not label.
+
+**The rule that keeps the override safe:** a markdown heading is **never
+silently dropped**. It is always at least a mark on the spine. Without this, a
+user who wrote a heading and cannot find it in the panel reads the feature as
+broken — and they would be right to. Nothing the author wrote disappears; it
+just may not be the block's name.
+
+### 11.3 The slice
+
+- Contiguous blocks, segmented and named by the model from code (§11.2).
+- Markdown headings as marks, never as the sole source of structure.
+- A state chip per block (never-run / out-of-order / risky) — Tier 0/1, free.
+- Click-to-jump through the existing `focusRequest` path.
+- Left rail, Files | Outline tabs, per-notebook tab memory (§5.1).
+- Read-only. No editing (V2), no outputs (§1), no DAG tab (deferred).
+
+**Deterministic fallback still required** (§6.1): with no `claude` CLI
+available, the panel falls back to headings-plus-milestone blocks rather than
+disappearing. That fallback is now the degraded path, not the first release.
+
+**What V1 is meant to answer:** does a named block map make a large notebook
+navigable? Nothing cheaper answers it, which is why naming could not stay
+deferred.
 
 ---
 
