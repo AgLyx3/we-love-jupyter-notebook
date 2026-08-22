@@ -393,7 +393,19 @@ Ordered so each phase is independently useful.
    wrong tool. Feed the results back into the descriptions and response shaping.
    Published guidance treats this as part of building the tools, not as QA after.
 7. **Packaging** — console-entry-point so `claude mcp add` can name a command,
-   plus docs.
+   plus docs. **One gap is already known and measured.** Building a wheel from
+   this tree today produces 54 entries and *no frontend at all*: `dist/` is
+   gitignored and `[tool.setuptools.packages.find]` includes only
+   `backend.app*`, so nothing from the build travels with the package. The
+   locating code is ready for it either way — `candidate_dist_dirs` looks for
+   `backend/app/web/` (installed) before the repo-root `dist/` (checkout), and
+   `NOTEBOOK_EDITOR_DIST` overrides both — but the packaging still has to
+   *put* the build somewhere it ships. Verified against a real
+   `pip install --target` of the wheel: without the frontend the bundle
+   refuses to start and names both places it looked; with `dist/` copied in as
+   `backend/app/web/` it starts and serves from there. So phase 7 needs the
+   build to emit into the package and a package-data declaration to carry it —
+   not another change to the lookup.
 
 Phases 1, 4, 5, 6, 7 are additive and touch nothing the current UI depends on.
 Phases 2 and 3 modify existing server behavior — 2 adds a rejection path that

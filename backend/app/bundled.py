@@ -17,6 +17,7 @@ request is checked against ``Origin``/``Host`` first. See ``_looks_loopback``.
 from __future__ import annotations
 
 import ipaddress
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -29,8 +30,30 @@ from .agent_workspace.models import AgentAdapter
 from .main import configured_agent_adapter, create_app
 
 
-# The repository root, where `npm run build` writes `dist/`.
-DEFAULT_DIST_DIR = Path(__file__).resolve().parents[2] / "dist"
+# Where to look for the built frontend, most specific first. Nothing here is an
+# absolute literal — each is derived from this module's own location or the
+# environment — so the bundle is not tied to one machine or one checkout.
+#
+# The two layouts differ and both have to work. In a source checkout the build
+# lands in `dist/` beside `backend/`, three levels up from this file. Installed,
+# this module sits in site-packages, where that same walk lands on site-packages
+# itself and finds nothing; a wheel instead carries the frontend inside the
+# package, as `web/`. The env var is the escape hatch for a packager that puts
+# it somewhere else again.
+DIST_DIR_ENV_VAR = "NOTEBOOK_EDITOR_DIST"
+
+
+def candidate_dist_dirs() -> tuple[Path, ...]:
+    """Every place a built frontend might be, in the order they are tried."""
+    here = Path(__file__).resolve()
+    candidates = []
+    override = os.environ.get(DIST_DIR_ENV_VAR)
+    if override:
+        candidates.append(Path(override).expanduser())
+    candidates.append(here.parent / "web")       # installed: inside the package
+    candidates.append(here.parents[2] / "dist")  # source checkout: repo root
+    return tuple(candidates)
+
 
 _LOOPBACK_NAMES = frozenset({"localhost"})
 
@@ -99,6 +122,26 @@ def _resolve_within(root: Path, relative: str) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
+def _locate_dist(dist_dir: Path | None) -> tuple[Path, Path]:
+    """Find the built frontend, or say precisely where it was looked for.
+
+    An explicit ``dist_dir`` is taken at its word and not searched around, so a
+    caller pointing at the wrong place gets told about that place rather than
+    being quietly served a build from somewhere else.
+    """
+    candidates = (dist_dir,) if dist_dir is not None else candidate_dist_dirs()
+    for candidate in candidates:
+        resolved = candidate.expanduser().resolve()
+        if (resolved / "index.html").is_file():
+            return resolved, resolved / "index.html"
+    looked = "\n  ".join(str(c.expanduser().resolve()) for c in candidates)
+    raise RuntimeError(
+        "No built frontend found. Run `npm run build` in a source checkout, or "
+        f"set {DIST_DIR_ENV_VAR} to the directory holding index.html.\n"
+        f"Looked in:\n  {looked}"
+    )
+
+
 def create_bundled_app(
     *,
     dist_dir: Path | None = None,
@@ -106,7 +149,10 @@ def create_bundled_app(
 ) -> FastAPI:
     """Serve the built SPA and the API from a single loopback origin.
 
-    ``dist_dir`` must already contain a production build (``npm run build``).
+    ``dist_dir`` overrides the search; omitted, the built frontend is looked
+    for in the places ``candidate_dist_dirs`` lists, which covers both a source
+    checkout and an installed package.
+
     The API keeps its own routes unchanged; it is simply mounted under ``/api``,
     so ``/api/notebooks/current`` reaches ``GET /notebooks/current``.
 
@@ -115,12 +161,7 @@ def create_bundled_app(
     own default, which is the *test* fake: a human sending an agent turn from
     the bundled tab would get canned answers and no indication why.
     """
-    dist = (dist_dir or DEFAULT_DIST_DIR).resolve()
-    index = dist / "index.html"
-    if not index.is_file():
-        raise RuntimeError(
-            f"No built frontend at {dist}. Run `npm run build` first."
-        )
+    dist, index = _locate_dist(dist_dir)
 
     # Same origin for browser and API, so the dev server's cross-origin
     # allowance is not just unnecessary here — it is misleading.
@@ -128,6 +169,7 @@ def create_bundled_app(
         agent_adapter=agent_adapter or configured_agent_adapter(),
         cors_origins=(),
     )
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         # Starlette does not run a *mounted* app's lifespan, so without this the

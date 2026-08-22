@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.app import bundled as bundled_module
 from backend.app.agent_workspace.adapters import ClaudeAgentAdapter, FakeAgentAdapter
 from backend.app.bundled import (
+    DIST_DIR_ENV_VAR,
     _resolve_within,
+    candidate_dist_dirs,
     create_bundled_app,
     request_is_local,
 )
+
+# A directory that exists and is not the one a test names explicitly, used to
+# show the explicit choice is not silently replaced by a discovered build.
+DEFAULT_REAL_DIST = Path(__file__).resolve().parents[2] / "dist"
 
 
 INDEX_HTML = (
@@ -45,6 +53,71 @@ def bundled(dist):
 def test_requires_a_built_frontend(tmp_path):
     with pytest.raises(RuntimeError, match="npm run build"):
         create_bundled_app(dist_dir=tmp_path / "nonexistent")
+
+
+def test_the_error_names_every_place_it_looked(tmp_path, monkeypatch):
+    """So a packager can see why the search missed, not just that it did."""
+    searched = (tmp_path / "nowhere", tmp_path / "also-nowhere")
+    monkeypatch.setattr(bundled_module, "candidate_dist_dirs", lambda: searched)
+    with pytest.raises(RuntimeError) as raised:
+        create_bundled_app()
+    message = str(raised.value)
+    assert DIST_DIR_ENV_VAR in message
+    for candidate in searched:
+        assert str(candidate.resolve()) in message
+
+
+def test_no_candidate_location_is_an_absolute_literal():
+    """Every candidate is derived — from this module or the environment.
+
+    A path baked into the source would tie the bundle to the machine it was
+    written on, which is the one thing a distributed artefact cannot be.
+    """
+    source = Path(bundled_module.__file__).read_text(encoding="utf-8")
+    for marker in ("/home/", "/Users/", "/tmp/", "/root/", "C:\\\\"):
+        assert marker not in source, f"absolute path literal {marker!r} in bundled.py"
+
+
+def test_an_installed_layout_finds_the_frontend_inside_the_package(tmp_path, monkeypatch):
+    """The layout a wheel produces.
+
+    Installed, this module lives in site-packages and the repo-root `dist/`
+    walk lands on site-packages itself, so the frontend has to travel inside
+    the package instead. Simulated here by pointing the package-local
+    candidate at a real build.
+    """
+    package_web = tmp_path / "web"
+    (package_web / "assets").mkdir(parents=True)
+    (package_web / "index.html").write_text(INDEX_HTML, encoding="utf-8")
+
+    monkeypatch.setattr(
+        bundled_module,
+        "candidate_dist_dirs",
+        lambda: (package_web, tmp_path / "absent"),
+    )
+    app = create_bundled_app(agent_adapter=FakeAgentAdapter())
+    assert app.state.dist_dir == package_web.resolve()
+
+
+def test_the_environment_override_wins(tmp_path, monkeypatch):
+    chosen = tmp_path / "packaged-elsewhere"
+    (chosen / "assets").mkdir(parents=True)
+    (chosen / "index.html").write_text(INDEX_HTML, encoding="utf-8")
+    monkeypatch.setenv(DIST_DIR_ENV_VAR, str(chosen))
+    assert candidate_dist_dirs()[0] == chosen
+
+    app = create_bundled_app(agent_adapter=FakeAgentAdapter())
+    assert app.state.dist_dir == chosen.resolve()
+
+
+def test_an_explicit_dist_dir_is_not_searched_around(tmp_path, monkeypatch):
+    """A caller naming a directory is told about that one, not quietly served
+    a build discovered somewhere else."""
+    monkeypatch.setenv(DIST_DIR_ENV_VAR, str(DEFAULT_REAL_DIST))
+    with pytest.raises(RuntimeError) as raised:
+        create_bundled_app(dist_dir=tmp_path / "named-but-empty")
+    assert "named-but-empty" in str(raised.value)
+    assert str(DEFAULT_REAL_DIST) not in str(raised.value)
 
 
 def test_defaults_to_the_configured_agent_adapter(dist, monkeypatch):
