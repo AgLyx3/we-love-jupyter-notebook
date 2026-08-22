@@ -12,6 +12,7 @@ from backend.app.mcp.server import (
     EditorSession,
     ToolFailure,
     _explain,
+    _added_cell,
     build_server,
     resolve_requested_path,
 )
@@ -264,7 +265,7 @@ def built():
     tools.close()
 
 
-def test_the_surface_is_the_seven_intended_tools(built):
+def test_the_surface_is_the_intended_tools(built):
     server, _ = built
     names = {tool.name for tool in asyncio.run(server.list_tools())}
     assert names == {
@@ -272,11 +273,33 @@ def test_the_surface_is_the_seven_intended_tools(built):
         "notebook_read",
         "notebook_status",
         "notebook_set_cell_source",
+        "notebook_insert_cell",
+        "notebook_delete_cell",
         "notebook_run_cell",
         "notebook_run_all",
         "notebook_save",
         "notebook_show",
     }
+
+
+def test_insert_says_the_cell_is_not_run_and_points_at_the_editing_tool(built):
+    """Two mistakes the description has to head off: assuming a new code cell
+    has already produced output, and reaching for insert to change a cell that
+    is already there."""
+    server, _ = built
+    description = {
+        tool.name: tool.description for tool in asyncio.run(server.list_tools())
+    }["notebook_insert_cell"]
+    assert "NOT run" in description
+    assert "notebook_set_cell_source" in description
+
+
+def test_delete_says_a_notebook_keeps_one_cell(built):
+    server, _ = built
+    description = {
+        tool.name: tool.description for tool in asyncio.run(server.list_tools())
+    }["notebook_delete_cell"]
+    assert "at least one cell" in description
 
 
 def test_nothing_exposes_agent_turns_tuning_or_the_filesystem(built):
@@ -351,3 +374,27 @@ def test_without_a_workspace_a_relative_path_still_becomes_absolute(tmp_path, mo
     """So the editor child's inherited directory never decides what it meant."""
     monkeypatch.chdir(tmp_path)
     assert resolve_requested_path("here.ipynb", None) == str(tmp_path / "here.ipynb")
+
+
+# --- which cell an insert produced -------------------------------------------
+
+
+def snapshot_with(*cell_ids):
+    return {"cells": [{"cellId": cid, "index": i} for i, cid in enumerate(cell_ids)]}
+
+
+def test_an_appended_cell_is_identified_as_the_last_one():
+    """The caller needs an id back, or it cannot run what it just added."""
+    added = _added_cell(snapshot_with("a", "b", "new"), None)
+    assert added["cellId"] == "new"
+
+
+def test_a_positioned_cell_is_identified_at_that_position():
+    added = _added_cell(snapshot_with("new", "a", "b"), 0)
+    assert added["cellId"] == "new"
+
+
+def test_an_impossible_position_yields_nothing_rather_than_a_wrong_cell():
+    """Better to return no id than confidently return someone else's."""
+    assert _added_cell(snapshot_with("a"), 5) is None
+    assert _added_cell({"cells": []}, None) is None

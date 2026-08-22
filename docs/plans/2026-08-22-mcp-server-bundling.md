@@ -442,9 +442,12 @@ Ordered so each phase is independently useful.
    tool calls. Findings and what they changed:
    `docs/plans/2026-08-22-mcp-tool-eval-findings.md`. Five of five passed; the
    run fixed a relative-path ambiguity that had been working by luck, shortened
-   a run tool that held its call open for ten minutes, and left one real gap
-   documented — there is no way to add or delete a cell, in the tool surface or
-   the API.
+   a run tool that held its call open for ten minutes, and surfaced one real
+   gap: there was no way to add or delete a cell, in the tool surface or the
+   API. That gap is now closed — `POST /cells` and `DELETE /cells/{id}` go
+   through the same structural applier a Trusted turn uses, so an added cell
+   carries the same agent-authored provenance and is left unrun. The eval task
+   that measured a graceful refusal now measures the work getting done.
 
 7. **Packaging** — ✅ **built.** The frontend ships (`npm run build` writes into
    `backend/app/web/`, declared as package data), and the console entry point

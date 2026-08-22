@@ -16,8 +16,10 @@ import nbformat
 from nbformat.validator import NotebookValidationError
 
 from .models import (
+    CellIndexError,
     CellNotFound,
     ExternalModificationConflict,
+    LastCellError,
     MutationConflict,
     MutationLease,
     NotebookCloseResult,
@@ -38,7 +40,15 @@ from .mutation_coordinator import MutationCoordinator
 logger = logging.getLogger(__name__)
 
 MAX_NOTEBOOK_BYTES = 5 * 1024 * 1024
+# What a caller may add. `raw` is valid nbformat but has no editor affordance
+# and no use a caller has asked for, so it is left out rather than half-served.
+_INSERTABLE_CELL_TYPES = frozenset({"code", "markdown"})
 _VALID_CELL_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _cell_text(source: Any) -> str:
+    """nbformat allows a string or a list of lines; callers want one string."""
+    return "".join(source) if isinstance(source, list) else str(source or "")
 
 
 def _new_cell_id() -> str:
@@ -562,6 +572,96 @@ class NotebookDocumentService:
             tmp_path.unlink(missing_ok=True)
             raise
         return path.stat().st_mtime_ns
+
+    def _current_structure(self) -> list[dict[str, Any]]:
+        """The open notebook as the spec list a structural apply expects.
+
+        Every entry carries its ``origin_id``, so applying this unchanged is a
+        no-op that preserves outputs and metadata. Insert and delete are then
+        just this list with one entry added or removed.
+        """
+        return [
+            {
+                "origin_id": cell["id"],
+                "cell_type": cell["cell_type"],
+                "source": _cell_text(cell.get("source", "")),
+            }
+            for cell in self._notebook["cells"]
+        ]
+
+    def insert_cell(
+        self,
+        *,
+        source: str,
+        cell_type: str = "code",
+        index: int | None = None,
+        expected_session_id: str,
+        expected_revision: int,
+        owner: str,
+    ) -> NotebookSnapshot:
+        """Add one cell, at ``index`` or at the end.
+
+        Goes through the same structural apply a Trusted turn uses, so the new
+        cell gets a fresh id and ``metadata.agent_authored`` — the provenance
+        the editor renders as a badge. Nothing is executed: an added code cell
+        is inert until somebody runs it, which is the point of marking it.
+        """
+        if cell_type not in _INSERTABLE_CELL_TYPES:
+            raise NotebookImportError(
+                f"cell_type must be one of {sorted(_INSERTABLE_CELL_TYPES)}"
+            )
+        lease = self._acquire_lease(operation_type=owner, operation_id=uuid4().hex)
+        try:
+            with self._lock:
+                self._require_notebook()
+                structure = self._current_structure()
+                position = len(structure) if index is None else index
+                if position < 0 or position > len(structure):
+                    raise CellIndexError(position, len(structure))
+                structure.insert(
+                    position,
+                    {"origin_id": None, "cell_type": cell_type, "source": source},
+                )
+                return self.apply_structural_changes_under_lease(
+                    next_cells=structure,
+                    expected_session_id=expected_session_id,
+                    expected_revision=expected_revision,
+                    owner=owner,
+                    lease=lease,
+                )
+        finally:
+            self.coordinator.release(lease)
+
+    def delete_cell(
+        self,
+        *,
+        cell_id: str,
+        expected_session_id: str,
+        expected_revision: int,
+        owner: str,
+    ) -> NotebookSnapshot:
+        """Remove one cell. Refuses to empty the notebook."""
+        lease = self._acquire_lease(operation_type=owner, operation_id=uuid4().hex)
+        try:
+            with self._lock:
+                self._require_notebook()
+                structure = self._current_structure()
+                remaining = [
+                    spec for spec in structure if spec["origin_id"] != cell_id
+                ]
+                if len(remaining) == len(structure):
+                    raise CellNotFound(cell_id)
+                if not remaining:
+                    raise LastCellError()
+                return self.apply_structural_changes_under_lease(
+                    next_cells=remaining,
+                    expected_session_id=expected_session_id,
+                    expected_revision=expected_revision,
+                    owner=owner,
+                    lease=lease,
+                )
+        finally:
+            self.coordinator.release(lease)
 
     def update_cell_source(
         self,

@@ -239,3 +239,65 @@ def test_reading_a_plot_notebook_does_not_return_image_bytes(editor, workspace):
     assert images and images[0]["mimeType"] == "image/png"
     assert images[0]["bytes"] > 1000
     assert len(serialized) < 20_000
+
+
+def test_a_cell_can_be_added_and_run_through_the_tools(editor, workspace):
+    """The gap the eval found: "add a cell that does X" had no tool at all.
+
+    Exercised against a real editor because the delete path sends a body on a
+    DELETE, which is legal but not universally handled — worth proving over
+    real HTTP rather than a fake.
+    """
+    server, _ = editor
+    root, _ = workspace
+    opened = call(server, "notebook_open", path=str(root / "work.ipynb"))
+    assert opened["cellCount"] == 2
+
+    added = call(
+        server, "notebook_insert_cell",
+        source="print('added by a tool')\n", cell_type="code",
+    )
+    assert added["cellCount"] == 3
+    assert added["cellId"]
+    assert "not run" in added["note"]
+
+    # It exists but has produced nothing until it is run.
+    read = call(server, "notebook_read")
+    new_cell = next(c for c in read["cells"] if c["cellId"] == added["cellId"])
+    assert new_cell.get("outputs") in (None, [])
+
+    ran = call(server, "notebook_run_cell", cell_id=added["cellId"])
+    assert ran["state"] == "completed"
+    assert "added by a tool" in "".join(
+        output.get("text", "")
+        for cell in ran["cells"] for output in cell.get("outputs", [])
+    )
+
+    removed = call(server, "notebook_delete_cell", cell_id=added["cellId"])
+    assert removed["cellCount"] == 2
+    assert added["cellId"] not in [
+        cell["cellId"] for cell in call(server, "notebook_read")["cells"]
+    ]
+
+
+def test_an_inserted_cell_carries_its_provenance_to_the_editor(editor, workspace):
+    """What the browser tab renders as "review before running"."""
+    server, tools = editor
+    root, _ = workspace
+    call(server, "notebook_open", path=str(root / "work.ipynb"))
+    added = call(server, "notebook_insert_cell", source="x = 1\n")
+
+    current = httpx.get(f"{tools.editor.api_url}/notebooks/current").json()
+    cell = next(c for c in current["cells"] if c["cellId"] == added["cellId"])
+    assert cell["metadata"]["agent_authored"] is True
+
+
+def test_deleting_the_last_remaining_cell_is_refused(editor, workspace, tmp_path):
+    server, _ = editor
+    root, _ = workspace
+    only = root / "single.ipynb"
+    only.write_bytes(notebook(SAFE))
+    call(server, "notebook_open", path=str(only))
+    read = call(server, "notebook_read")
+    with pytest.raises(ToolError, match="at least one cell"):
+        call(server, "notebook_delete_cell", cell_id=read["cells"][0]["cellId"])

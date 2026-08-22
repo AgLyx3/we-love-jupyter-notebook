@@ -124,17 +124,26 @@ accident — it is now recorded as `could-not-run`.
 
 ## 5. Still open
 
-**There is no way to add or delete a cell.** Not in the tool surface and not in
-the HTTP API either — `/cells/{id}/source` edits an existing cell, and
-structural change happens only through an agent turn in Trusted mode. So
-"add a cell that plots this" is not something a tool caller can do at all.
+**~~There is no way to add or delete a cell.~~ Closed.** This was the finding,
+and it was real: `/cells/{id}/source` edited an existing cell and structural
+change happened only inside a Trusted-mode agent turn, so "add a cell that
+plots this" was not expressible by anything driving the editor through its API.
+The model handled it as well as it could — it said so, and did not improvise by
+overwriting a neighbour — but the answer was to build the thing.
 
-The model handled it about as well as it could: it said so, and did not
-improvise by overwriting a cell that was already there. But this is the
-surface's biggest functional gap, and closing it means new API — an
-`insert_cell` / `delete_cell` pair with the same revision precondition and, for
-new code cells, presumably the same execution gate. Worth its own design pass
-rather than a quick addition.
+`POST /cells` and `DELETE /cells/{id}` now exist, with `notebook_insert_cell`
+and `notebook_delete_cell` in front of them. They go through the same
+structural applier a Trusted turn uses rather than a parallel path, so an added
+cell gets the same fresh id, the same `metadata.agent_authored` provenance the
+editor renders as a badge, and the same atomic all-or-nothing apply. Both carry
+the revision precondition, so an insert against a stale read is refused like
+any other write.
+
+Two decisions worth recording. An added code cell is **not** executed: it
+arrives inert and running it is a separate, gated call, which keeps
+review-before-run meaningful for cells a person did not type. And the last
+remaining cell cannot be deleted — nbformat tolerates an empty notebook, but
+the editor has no way back from one.
 
 **The tool names double up.** A client sees `mcp__notebook__notebook_open`:
 MCP already namespaces by server, so the `notebook_` prefix repeats it. The

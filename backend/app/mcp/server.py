@@ -338,6 +338,60 @@ def build_server(
         }
 
     @server.tool(
+        name="notebook_insert_cell",
+        description=(
+            "Add a new cell to the open notebook. Goes at the end unless you "
+            "give `index` (0 is the top). The cell is marked as agent-authored, "
+            "which the editor shows as a badge, and it is NOT run — call "
+            "notebook_run_cell with the id this returns when you want it to. "
+            "To change a cell that already exists, use "
+            "notebook_set_cell_source instead."
+        ),
+    )
+    def notebook_insert_cell(
+        source: str,
+        cell_type: Literal["code", "markdown"] = "code",
+        index: int | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            **tools.state.mutation(), "source": source, "cellType": cell_type,
+        }
+        if index is not None:
+            body["index"] = index
+        snapshot = tools.request(
+            "POST", "/cells", json_body=body, what="Adding a cell",
+        )
+        tools.state.observe(snapshot)
+        added = _added_cell(snapshot, index)
+        return {
+            "cellId": added.get("cellId") if added else None,
+            "index": added.get("index") if added else None,
+            "cellCount": len(snapshot.get("cells") or []),
+            "revision": snapshot.get("revision"),
+            "note": "Added but not run — it has no output until you run it.",
+        }
+
+    @server.tool(
+        name="notebook_delete_cell",
+        description=(
+            "Remove a cell from the open notebook by id. A notebook must keep at "
+            "least one cell, so deleting the last one is refused. This cannot be "
+            "undone through these tools."
+        ),
+    )
+    def notebook_delete_cell(cell_id: str) -> dict[str, Any]:
+        snapshot = tools.request(
+            "DELETE", f"/cells/{cell_id}", json_body=tools.state.mutation(),
+            what=f"Deleting cell {cell_id!r}",
+        )
+        tools.state.observe(snapshot)
+        return {
+            "deletedCellId": cell_id,
+            "cellCount": len(snapshot.get("cells") or []),
+            "revision": snapshot.get("revision"),
+        }
+
+    @server.tool(
         name="notebook_run_cell",
         description=(
             "Run one cell against the live kernel and wait for it to finish. A "
@@ -387,6 +441,21 @@ def build_server(
         return {"url": tools.show_in_browser(force=True)}
 
     return server, tools
+
+
+def _added_cell(snapshot: dict[str, Any], index: int | None) -> dict[str, Any] | None:
+    """Which cell the insert produced, so the caller gets an id to run.
+
+    Identified by position rather than by diffing ids: the snapshot is the
+    post-insert state and the position is exactly what was asked for.
+    """
+    cells = snapshot.get("cells") or []
+    if not cells:
+        return None
+    position = len(cells) - 1 if index is None else index
+    if 0 <= position < len(cells):
+        return cells[position]
+    return None
 
 
 def _summarize_execution(execution: dict[str, Any]) -> dict[str, Any]:

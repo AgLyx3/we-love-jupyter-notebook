@@ -139,8 +139,8 @@ reaches anywhere you can. `--no-browser` stops the tab opening by itself; the
 `notebook_show` tool still opens it on request.
 
 **The tools.** `notebook_open`, `notebook_read`, `notebook_status`,
-`notebook_set_cell_source`, `notebook_run_cell`, `notebook_run_all`,
-`notebook_save`, `notebook_show`.
+`notebook_set_cell_source`, `notebook_insert_cell`, `notebook_delete_cell`,
+`notebook_run_cell`, `notebook_run_all`, `notebook_save`, `notebook_show`.
 
 Three things about them are deliberate:
 
@@ -155,6 +155,10 @@ Three things about them are deliberate:
 - **Images are described, not returned.** A plot comes back as its size and
   type; the picture is in the tab. A modest plotting notebook is about 23K
   tokens of base64 if forwarded whole, and unreadable to a model either way.
+- **An added cell is never run for you.** `notebook_insert_cell` marks the new
+  cell as agent-authored — the tab shows it with a badge reading "review before
+  running" — and leaves it inert. Running it is a separate call, and goes
+  through the approval gate like any other.
 
 Agent turns are **not** exposed as tools — the client is already the agent, and
 running the `claude` CLI underneath it would just nest a second one. You can
