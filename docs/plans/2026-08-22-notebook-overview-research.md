@@ -467,8 +467,8 @@ user's own subscription — so it cannot be hand-waved.
   (`NotebookCell.tsx`). Long cells truncated head/tail; outputs reduced to type
   and shape.
 - **One call per notebook**, structured JSON out — not one call per stage.
-- **Model tier.** Naming stages is plausibly a Haiku job; the composer already
-  exposes model choice.
+- **Model tier.** Naming is a Haiku job — **confirmed by probe** (§13.6), not
+  just plausible. The composer already exposes model choice.
 - **Ceiling.** Past N cells, segment deterministically and label only the
   largest stages, with "label the rest" as an explicit action.
 
@@ -856,3 +856,60 @@ scoped. The computed half of the model is sound.
 
 It is the **boundaries** that the deterministic pass cannot supply, which is
 precisely the field everything else hangs off (§9.7).
+
+### 13.5 Model segmentation, measured against the same notebook
+
+`segment.py` sends cell source only (no outputs, §1), asks for a contiguous
+partition with generated names, and validates the response the way the panel
+would have to: every cell covered exactly once, indices in range, document
+order. A model that cannot return a valid partition is unusable here, so the
+validation is as much the experiment as the names are.
+
+| | Deterministic (§13.1) | Model (default) | Model (Haiku) |
+|---|---|---|---|
+| Blocks | 5 | **17** | **17** |
+| Largest block | **44 cells** | 7 cells | 6 cells |
+| Median block | 3 | 3 | 3 |
+| Valid partition | — | ✅ first try | ✅ first try |
+
+The 44-cell lump becomes seventeen navigable blocks, and the names are specific
+rather than categorical: *"Compute revenue and drop return transactions"*,
+*"Remove outlier unit sales above 1000"*, *"Compare North vs South revenue
+distributions"*. On the simulation notebook the model produced 8 blocks and
+correctly labelled the stub cell *"Stubbed-out sensitivity analysis (not
+implemented)"*.
+
+**This is the §9.7 assumption discharged.** Segmentation quality was the
+make-or-break, it was never measured, and it holds up on both fixtures.
+
+### 13.6 Haiku is enough (§7.2 confirmed)
+
+Haiku returned a structurally equivalent partition — same block count, same
+median, largest block one cell smaller — differing only in where it placed two
+boundaries (it folded the import cell into the first block; the default model
+kept it separate, and both are defensible).
+
+The one visible difference is register. Haiku reaches for categorical verbs —
+*"Analyze weekly revenue trends"*, *"Visualize monthly patterns by region"* —
+where the default model says *"Weekly revenue trend"* and *"Monthly revenue
+heatmap by region"*. Since §12.2 cut the stage taxonomy precisely to avoid
+category labels, that drift is worth watching, but it is a prompt problem, not a
+model-tier problem.
+
+### 13.7 Two corrections this produced
+
+**`produces` needs a relevance filter, not just correctness.** On the simulation
+notebook a block reports `produces beta, ip, peaks, r0, results, s`. Every one of
+those is genuinely module-level — Python loop targets leak to global scope, so
+`for r0 in R0_grid:` really does bind `r0` — but half of them are throwaways and
+the useful answer is `results, peaks`. Correct and useless is still useless.
+Filter names bound only as loop or comprehension targets, rank the rest by how
+many later blocks read them, and cap the display at three or four.
+
+**The cost estimate in §7.2 was an order of magnitude pessimistic.** The 57-cell
+notebook renders to roughly 1,200 tokens of prompt, and the 21-cell one to
+roughly 800 — about 22 tokens per cell, not the 150–300 assumed. Extrapolating,
+a 200-cell notebook is ~4.5k tokens, not 30–60k. Cells in real exploratory
+notebooks are mostly one-liners. This substantially weakens the case for a size
+ceiling: at these sizes, a full re-segmentation is cheap enough that
+incrementality is a nicety rather than a necessity.
