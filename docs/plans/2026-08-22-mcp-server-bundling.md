@@ -21,10 +21,11 @@ exposes notebook operations as tools?
 
 **Verdict: yes, and the app is unusually well shaped for it.** Every finding
 below was verified by running the app, not by reading it. But the useful shape is
-*not* "wrap the HTTP API as tools." Three properties of the current design break
+*not* "wrap the HTTP API as tools." Five properties of the current design break
 in a way that is silent rather than loud when the caller changes from a human at
 a loopback browser to a model holding tool definitions. Section 5 is the real
-content of this document.
+content of this document; section 6 reviews the whole plan against published
+tool-design guidance and the MCP specification, and records what that changed.
 
 ---
 
@@ -42,8 +43,11 @@ v22.22.2).
 | 5 | The browser sees model-driven changes live | `curl -sN /api/events` while mutating | `event: notebook.updated` with `sequence`/`revision` arrived on the stream |
 | 6 | The Claude CLI dependency is real and version-pinned | `ClaudeAgentAdapter().verify_supported()` | Returned `2.1.240`; adapter hard-requires `>= 2.1.203, < 2.2.0` |
 | 7 | The risk gate does **not** apply to manual runs | Ran a `subprocess.run([...])` cell via `POST /execution/cells/{id}/run` | Classified `risk.level: "confirm"` — and **ran anyway**, `decision: null`, `state: completed` |
+| 8 | A whole-notebook read is far too large for a tool response | Ran `examples/plot-gallery.ipynb` (18 cells) and measured `GET /notebooks/current` | **92,550 bytes (~23K tokens)**, ~86 KB of it base64 PNG |
+| 9 | No `Origin` or `Host` validation | Sent `Origin: https://evil.example` and `Host: evil.example` | Both **processed** — CORS withholds the read, it does not refuse the request |
 
-Finding 7 is the important one. See §5.1.
+Findings 7, 8, and 9 are the important ones — see §5.1, §5.4, §5.5. Checks 8 and
+9 came out of the §6 guidance review, not the first pass.
 
 ---
 
@@ -95,26 +99,27 @@ process group (`scripts/dev.py` already has correct POSIX group teardown in
 
 ### Proposed tool surface
 
-Deliberately much smaller than the HTTP API.
+Deliberately much smaller than the HTTP API, and domain-prefixed (§6) so the
+names stay unambiguous next to other servers' tools in the same client.
 
 | Tool | Endpoint | Notes |
 |---|---|---|
-| `open_notebook(path)` | `POST /notebooks/open` | Starts server if needed, opens the browser tab, returns session id + revision |
-| `get_notebook()` | `GET /notebooks/current` | Cells with source, type, outputs |
-| `session_status()` | `GET /session/status` | Revision, active execution, turn history |
-| `set_cell_source(cell_id, source)` | `POST /cells/{id}/source` | |
-| `run_cell(cell_id)` / `run_all()` | `POST /execution/…` | **Must be gated — §5.1** |
-| `save()` | `POST /notebooks/save` | |
-| `show()` | — | Re-open/focus the browser tab |
+| `notebook_open(path)` | `POST /notebooks/open` | Starts server if needed, opens the browser tab, returns session id + revision |
+| `notebook_read(cells?, include_outputs?, format?)` | `GET /notebooks/current` | **Must shape its response — §5.4.** Selector + `concise`/`detailed` |
+| `notebook_status()` | `GET /session/status` | Revision, active execution, turn history |
+| `notebook_set_cell_source(cell_id, source)` | `POST /cells/{id}/source` | Carries the revision precondition |
+| `notebook_run_cell(cell_id)` / `notebook_run_all()` | `POST /execution/…` | **Must be gated — §5.1.** May block on a human click |
+| `notebook_save()` | `POST /notebooks/save` | |
+| `notebook_show()` | — | Re-open/focus the browser tab |
 
 **Excluded on purpose:** `/agent-turns/*` (§5.2), `/files` + `/files/search`
 (§5.3), and the plot-tuning shadow-kernel routes (`/tuning/*`) — those are an
 interactive drag-a-knob loop whose value is the live preview; a model calling
-`preview` in a loop is just a slower `set_cell_source`.
+`preview` in a loop is just a slower `notebook_set_cell_source`.
 
 ---
 
-## 5. The three problems that must be solved first
+## 5. The five problems that must be solved first
 
 These are not integration chores. Each is a place where a security or design
 assumption is written against *a human clicking*, and quietly stops holding when
@@ -192,49 +197,179 @@ for confinement.
 (the human has a file picker in the tab). Path containment should be enforced
 server-side, not by the MCP layer, so the browser and tool paths cannot diverge.
 
-### Also worth fixing, lower stakes
+### 5.4 `notebook_read` is a context bomb as specified
 
-- **CORS.** `backend/app/main.py:59` pins origins to `127.0.0.1:5173` /
-  `localhost:5173`. Same-origin bundling (check 4) makes this dead config for the
-  bundle; leave it for `scripts/dev.py` but do not carry it into the bundled app.
-- **No authentication.** The server binds loopback with no auth, so any local
-  process can drive the notebook and the kernel. Acceptable-ish for a dev server
-  the user launched; weaker once a long-lived MCP server is up for a whole
-  session. An ephemeral port plus a per-launch token in the browser URL is cheap.
-- **Singleton session.** One notebook per process (`_notebook`, `_session_id`).
-  `open_notebook` on an already-open notebook returns **409** unless it carries
-  `sessionId` + `expectedDocumentRevision` — observed directly during check 2.
-  Every mutating tool needs the same precondition pair, so the MCP layer must
-  track the current revision and give 409 a defined retry contract (re-read
-  `session_status`, retry once) instead of surfacing a raw conflict to the model.
+Measured, not estimated. `examples/plot-gallery.ipynb` — 18 cells, a deliberately
+small example — run to completion and then read back through
+`GET /notebooks/current`:
+
+```
+TOTAL payload: 92,550 bytes  (~23,000 tokens)
+  cell mixed:       image/png = 17,764 bytes
+  cell subplots:    image/png = 15,228 bytes
+  cell fig-finish:  image/png = 12,904 bytes
+  … 8 base64 PNG outputs totalling ~86 KB
+```
+
+~93% of that payload is base64 PNG, which is worthless to a model as text. A
+*small* example notebook already sits at the ~25K-token ceiling published tool
+guidance recommends as an upper bound (§6). `MAX_NOTEBOOK_BYTES` is 5 MB, so a
+real plotting notebook can exceed a context window in a single tool call.
+
+**Required:** `notebook_read` must shape its response rather than proxy the
+snapshot — elide image payloads to a descriptor (`<image/png, 17.7 KB, cell
+"mixed">`), truncate long text outputs with a marker, accept a cell selector, and
+offer `format: "concise" | "detailed"`. The full bytes stay one click away in the
+browser tab, which is the right renderer for them.
+
+### 5.5 No Origin or Host validation, with a kernel attached
+
+The MCP specification requires that servers **MUST** validate the `Origin`
+header on incoming HTTP connections to prevent DNS rebinding, and that local
+servers **SHOULD** bind to loopback only (§6). This app does the second and not
+the first. Verified against the running server:
+
+| Request | Result |
+|---|---|
+| `POST /notebooks/open` with `Origin: https://evil.example` | processed (reached application logic) |
+| `GET /kernel/status` with `Host: evil.example` | **200** |
+
+The CORS middleware (`main.py:59`) is not a defense here. It withholds
+`access-control-allow-origin` so a browser cannot *read* the response, but the
+request is still *executed* — and under an actual DNS rebind the page's origin
+*is* the rebound host, so CORS never engages at all.
+
+Today this is a dev server the user starts and stops. Under the bundle it is a
+long-lived loopback port, up for a whole MCP session, attached to a Jupyter
+kernel that runs arbitrary Python. That turns a rebinding attack into local code
+execution. I originally filed this under "lower stakes"; the spec language and
+the kernel on the other end make it a blocker.
+
+**Required:** validate `Origin`/`Host` against the bundle's own origin and reject
+with 403 otherwise; bind loopback on an ephemeral port; carry a per-launch token
+in the browser URL. Drop the 5173 CORS pin from the bundled app (same-origin
+serving makes it dead config) while leaving it for `scripts/dev.py`.
+
+### On the singleton session — a feature, not a chore
+
+One notebook per process (`_notebook`, `_session_id`). `notebook_open` on an
+already-open notebook returns **409** unless it carries `sessionId` +
+`expectedDocumentRevision` — observed directly during check 2, and again in the
+§5.5 table.
+
+My first draft called for giving 409 "a defined retry contract (re-read
+`session_status`, retry once)". **That was wrong** and is withdrawn. A blind
+retry re-issues the write against whatever revision it just discovered — which is
+precisely how you clobber an edit the human made in the browser tab a moment
+earlier. The revision precondition *is* the staleness check that published
+guidance names as a first-class reason to build a dedicated tool instead of
+handing over raw access (§6). Defeating it to make tool calls tidier gives up the
+main thing the design is buying.
+
+**Required:** a 409 surfaces to the model as an actionable error — what changed,
+what the current revision is, and to re-read before deciding — never as an
+automatic write retry.
 
 ---
 
-## 6. What this costs
+## 6. Review against published tool-design guidance
+
+The plan above was drafted from the codebase alone, then reviewed against
+Anthropic's agent/tool design guidance (the bundled `claude-api` skill's
+`shared/agent-design.md`, and the published *Writing effective tools for AI
+agents*) and the MCP specification's transport security requirements. Sources at
+the end of this section.
+
+### What the guidance confirmed
+
+- **"Start with bash for breadth. Promote to dedicated tools when you need to
+  gate, render, audit, or parallelize."** The narrow typed surface in §4 is the
+  recommended shape, and §5.1's approval gate is the textbook reason to promote:
+  *"Actions that require gating are natural candidates. Reversibility is a useful
+  criterion — hard-to-reverse actions can be gated behind user confirmation."*
+  Running a notebook cell is irreversible (it mutates kernel state and can touch
+  the filesystem and network).
+- **Blocking-until-answered is an established pattern**, not an awkward one:
+  *"Claude Code promotes question-asking to a tool so it can render as a modal,
+  present options, and block the agent loop until answered."* That is exactly
+  §5.1 — the tool call blocks, the browser tab renders the approval.
+- **Staleness checks justify dedicated tools:** *"A dedicated edit tool can
+  reject writes if the file changed since Claude last read it. Bash can't enforce
+  that invariant."* The app already has this in `expectedDocumentRevision`.
+- **Read-only tools are parallel-safe.** `notebook_read` and `notebook_status`
+  can be marked so; the mutating ones must stay serialized, which the mutation
+  lease already enforces.
+
+### What the guidance changed
+
+| Guidance | Change to the plan |
+|---|---|
+| *"Prefix tools with their domain for clarity and scalability"* | Renamed every tool `notebook_*` (§4). `save()` and `show()` were unacceptably generic next to other servers in one client. |
+| *"Restrict responses to ~25,000 tokens. Implement pagination, filtering, and truncation with sensible defaults"* | Added §5.4 — measured a small example notebook at ~23K tokens, 93% base64 PNG. `get_notebook()` as first specified was a context bomb. |
+| *"Expose a `response_format` enum … 'concise' or 'detailed'"* | `notebook_read` takes `format` and a cell selector. |
+| *"Replace opaque error codes with specific, actionable guidance"* | The app's `{code, message, details}` errors get mapped at the MCP layer — `notebook_not_loaded` becomes "no notebook is open; call `notebook_open` with a path". |
+| *Tool descriptions should state when NOT to use a tool, token limits, and expected response times* | `notebook_run_all`'s description must say it can block indefinitely on a human approval click, and that it is the wrong tool for reading state. |
+| *"Prototype → Evaluate → Collaborate"; generate eval tasks grounded in real use* | Added an evaluation phase to the build order below. It was missing entirely. |
+| MCP spec: servers **MUST** validate `Origin`; local servers **SHOULD** bind loopback | Added §5.5 and promoted it from "lower stakes" to a blocker. |
+| *"Strict JSON Schema with `additionalProperties: false`"* | Applies to every tool schema. |
+
+### One risk neither source covers, specific to this app
+
+Notebook content — markdown cells, code, and cell outputs — flows into the
+model's context through `notebook_read`, and the same model holds
+`notebook_run_cell`. A notebook from an untrusted source can therefore carry
+prompt-injection text directly to an agent that can execute code locally. The
+app's stated threat model ("use the editor only with notebooks and agent
+instructions you trust") assumed a **human** reading those cells. The bundle
+changes the reader. This does not block the build, but the approval gate (§5.1)
+becomes the mitigation that matters, and the README's security section needs to
+say so.
+
+**Sources.** [Writing effective tools for AI agents](https://www.anthropic.com/engineering/writing-tools-for-agents) ·
+[Anthropic tool design best practices (ADR summary)](https://github.com/vishnu2kmohan/mcp-server-langgraph/blob/main/adr/adr-0023-anthropic-tool-design-best-practices.md) ·
+[MCP Transports — security requirements](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports) ·
+[MCP security best practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices) ·
+[OWASP MCP Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/MCP_Security_Cheat_Sheet.html) ·
+bundled `claude-api` skill, `shared/agent-design.md`.
+
+---
+
+## 7. What this costs
 
 Ordered so each phase is independently useful.
 
 1. **Serve the SPA from FastAPI** — mount `/api` + `StaticFiles` + SPA fallback,
    behind a flag so `scripts/dev.py` is untouched. Proven in check 4; the PoC was
    ~20 lines. Add a build step so `dist/` exists for the bundle.
-2. **Gate model-initiated execution** (§5.1) — new operation `kind`, threaded to
+2. **Origin/Host validation + ephemeral port + launch token** (§5.5) — middleware
+   on the bundled app. Small, and everything else is unsafe to ship without it.
+3. **Gate model-initiated execution** (§5.1) — new operation `kind`, threaded to
    `prompt_for_risk`. The blocking/approval machinery already exists; this
    selects it. The one change that touches core execution code.
-3. **Confine paths to a workspace root** (§5.3) — server-side, in
+4. **Confine paths to a workspace root** (§5.3) — server-side, in
    `NotebookDocumentService.open` and `file_browser`.
-4. **The MCP server itself** — process lifecycle (reuse `dev.py`'s teardown),
-   browser launch, ~7 tools over `httpx`, 409 retry contract.
-5. **Packaging** — console-entry-point so `claude mcp add` can name a command,
+5. **The MCP server itself** — process lifecycle (reuse `dev.py`'s teardown),
+   browser launch, the 7 tools of §4 over `httpx`, response shaping (§5.4), and
+   actionable error mapping including the 409 contract (§5.5).
+6. **Evaluate** — a set of tasks grounded in real notebook work ("find why cell 4
+   errors and fix it", "add a plot of X", "this notebook is slow — profile it"),
+   run end to end, measuring tokens per tool call and where the model picks the
+   wrong tool. Feed the results back into the descriptions and response shaping.
+   Published guidance treats this as part of building the tools, not as QA after.
+7. **Packaging** — console-entry-point so `claude mcp add` can name a command,
    plus docs.
 
-Phases 1, 3, 4, 5 are additive and touch nothing the current UI depends on.
-Phase 2 is the only one that modifies existing execution behavior, and it changes
-behavior only for a `kind` that does not exist yet.
+Phases 1, 4, 5, 6, 7 are additive and touch nothing the current UI depends on.
+Phases 2 and 3 modify existing server behavior — 2 adds a rejection path that
+loopback clients already satisfy, and 3 changes execution only for a `kind` that
+does not exist yet.
 
-## 7. Recommendation
+## 8. Recommendation
 
-Build it, in that order, and hold two lines: **no agent-turn tools**, and **no
-ungated execution**. The first keeps the bundle from nesting an agent inside an
-agent for no benefit. The second is what makes the browser window meaningful —
-without it the tab is decoration, and the app has quietly become a way for a
-model to run arbitrary local code with the approval gate switched off.
+Build it, in that order, and hold three lines: **no agent-turn tools**, **no
+ungated execution**, and **no unvalidated origins**. The first keeps the bundle
+from nesting an agent inside an agent for no benefit. The second is what makes
+the browser window meaningful — without it the tab is decoration, and the app has
+quietly become a way for a model to run arbitrary local code with the approval
+gate switched off. The third is what keeps that same window from being reachable
+by any web page the user happens to have open.
