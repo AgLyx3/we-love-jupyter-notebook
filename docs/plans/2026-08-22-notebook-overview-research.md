@@ -289,10 +289,15 @@ second), which is weak evidence it is the right decomposition.
 3. **One level of detail at a time** (Observable's restraint; the CHI'26
    "multi-level navigation and detail-on-demand" finding). Stages by default,
    cells on expand, wires on focus.
-4. **Cache on document revision; invalidate on edit.** The document already
-   carries a revision (`expectedDocumentRevision` throughout the API). Stale
-   Tier-2 labels should be visibly stale rather than silently wrong — the same
-   posture `plot_tuning` takes toward stale knobs.
+4. **Cache on per-cell source hash, not on document revision.** The document
+   revision (`expectedDocumentRevision`) is the right *wake-up signal* but the
+   wrong *cache key*: `NotebookDocumentService` increments `_revision` on
+   `set_execution_count` (`service.py:308`) as well as on source edits, so
+   revision bumps every time a cell is **run**. Keyed on it, every run would
+   discard and regenerate every label — the wrong behavior and the expensive
+   one. Key each label on the hashes of its stage's member-cell sources; see
+   §7. Stale Tier-2 labels should be visibly stale rather than silently wrong —
+   the same posture `plot_tuning` takes toward stale knobs.
 5. **Show state, not just structure.** Never-run, out-of-order, error-in-file,
    and risky cells are Tier 0/1 facts that no competitor's overview surfaces,
    and they are the first thing a third-party reader needs.
@@ -303,7 +308,91 @@ second), which is weak evidence it is the right decomposition.
 
 ---
 
-## 7. Fit with this codebase
+## 7. Refresh, cost, and control
+
+Three questions decide whether this is usable or annoying: what happens when the
+notebook changes, what it costs, and whether the user can correct it.
+
+### 7.1 What happens when the notebook changes
+
+The three tiers get deliberately different refresh rules.
+
+**Tier 0/1 — always live.** An AST parse of a few hundred cells is well under
+100ms, so recompute on every change, debounced ~300ms after typing stops. Never
+stale, never wrong. The push channel already exists: `/events`
+(`api/event_routes.py`) is an SSE stream with a sequence cursor, so the panel
+subscribes rather than polls.
+
+**Tier 2 — never auto-regenerates.** Each stage's label is keyed on the hashes
+of its member cells' *source*. That derives the behavior we want:
+
+| Change | Effect |
+|---|---|
+| Run a cell | Revision bumps; no source hash changes. **Labels untouched**, state chips flip. |
+| Edit cell 7 | Invalidates only the stage containing cell 7. Its label greys to dotted-stale; every other stage keeps its label. |
+| Undo | Hashes return to a previous value → cache hit, free. |
+| Trusted-mode structural turn | Boundaries recompute deterministically; labels follow their cells by id wherever stage membership is unchanged. |
+
+The run-a-cell row is the important one, and the one a document-revision key
+gets backwards (§6.4). It is also the most frequent event in the app.
+
+Stale labels stay visible but visibly stale, with a refresh affordance. Never
+silently wrong, never silently expensive.
+
+### 7.2 Cost
+
+Cost is real and user-visible here — agent turns shell out to the CLI on the
+user's own subscription — so it cannot be hand-waved.
+
+- **Opt-in.** Tier 2 never runs on notebook open. Opening gets the free
+  skeleton; naming is a button.
+- **Incremental.** Only dirty stages are re-labelled. A typical edit dirties one
+  stage → one small call, not a full pass.
+- **Content-addressed cache**, persisted per notebook path, keyed on
+  `(member cell source hashes, prompt version)`. Survives close/reopen.
+- **Input shaping — the largest lever.** Send source, not outputs. Charts are
+  the strongest semantic signal a notebook has *and* the expensive,
+  privacy-loaded one; excluding them by default is both cheaper and the safer
+  default given outputs render in a `sandbox=""` iframe deliberately
+  (`NotebookCell.tsx`). Long cells truncated head/tail; outputs reduced to type
+  and shape.
+- **One call per notebook**, structured JSON out — not one call per stage.
+- **Model tier.** Naming stages is plausibly a Haiku job; the composer already
+  exposes model choice.
+- **Ceiling.** Past N cells, segment deterministically and label only the
+  largest stages, with "label the rest" as an explicit action.
+
+### 7.3 User control over the flow
+
+**The map is editable.** Segmentation is subjective, two passes will disagree,
+and the user is the authority on their own analysis. A map you cannot correct is
+one you stop trusting after the first wrong boundary. Rename a stage, merge two,
+split one, drag a boundary, pin, hide a scratch stage.
+
+Two rules keep that coherent:
+
+1. **Edits are sticky, and become context.** A manual rename is never
+   overwritten by a later pass; it becomes a pin, and is fed into subsequent
+   passes as an example of the user's own vocabulary. Corrections improve later
+   labels instead of being steamrolled by them.
+2. **The map is a view, not the notebook.** Nodes may be reordered on a map;
+   cells may not be reordered *through* one. Observable users asked for
+   drag-to-reorder on their minimap (observablehq/feedback#40) — that is a
+   different feature, and mutating execution order through a summary view is
+   exactly the kind of thing this app makes explicit and reviewable everywhere
+   else.
+
+**Open decision — where do user edits live?** Notebook metadata means they
+travel with the file when shared, but the overview then writes to the notebook,
+breaking §6.6. A sidecar keyed on notebook path keeps it read-only but does not
+travel. Lean: sidecar by default, plus an explicit **"write these as markdown
+headings"** action routed through a normal agent turn — so it lands as a
+reviewable, undoable diff, and the overview becomes a documentation generator
+*on command* rather than by default.
+
+---
+
+## 8. Fit with this codebase
 
 Real touchpoints, not hand-waving:
 
@@ -327,19 +416,21 @@ Real touchpoints, not hand-waving:
 
 ---
 
-## 8. Risks and open questions
+## 9. Risks and open questions
 
 1. **Stage segmentation is subjective.** Two models, two answers; the user
-   disagrees with both. Mitigation: segments must be adjustable (merge/split),
-   and headings, when present, should win over inference.
-2. **Cost and latency of Tier 2** on a 200-cell notebook, and whether it runs on
-   open, on demand, or incrementally per revision. Undecided.
+   disagrees with both. Mitigation in §7.3: segments are adjustable and manual
+   edits are sticky. Headings, when present, win over inference.
+2. **Where user edits to the map live** — notebook metadata (travels, but
+   writes to the file) versus a sidecar (read-only, does not travel). Leaning
+   sidecar; see §7.3. This is the main undecided question.
 3. **Truncation.** Big notebooks exceed a single pass; needs a chunking story
    (CodeWiki/Code2UML are the references for hierarchical context engineering).
+   §7.2 sets a ceiling but not the chunking strategy.
 4. **Outputs in the prompt.** Charts are the strongest semantic signal a
    notebook has, and this app renders outputs in a `sandbox=""` iframe for good
-   reason (`NotebookCell.tsx`). Whether images are sent to the model at all is a
-   privacy/cost decision, not a technical one.
+   reason (`NotebookCell.tsx`). §7.2 defaults to excluding them on cost and
+   privacy grounds; whether an opt-in is worth the complexity is open.
 5. **Does the roadmap metaphor survive a genuinely non-linear notebook?** If
    execution order contradicts document order, a linear spine may lie. The
    honest fallback is B (the DAG). Worth prototyping against a real messy
@@ -349,7 +440,7 @@ Real touchpoints, not hand-waving:
 
 ---
 
-## 9. Suggested first slice
+## 10. Suggested first slice
 
 A **Tier 0+1 only, zero-AI overview panel**: sections from markdown headings
 where they exist, otherwise segmented at milestone calls; per-section artifact
