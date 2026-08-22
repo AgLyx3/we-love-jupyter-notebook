@@ -470,6 +470,15 @@ export default function App() {
   // plumbing rather than adding a second way to scroll the notebook. Stale
   // cells are included: landing on one is how the user finds out why it can no
   // longer be undone.
+  // The counter says "go to the first change", so it must not simply advance
+  // from wherever the cursor happens to be — after stepping to change 3, "first"
+  // would land on 4.
+  const focusFirstChange = () => {
+    if (!notebook || !reviewUnsettled.length) return;
+    const first = notebook.cells.map((cell) => cell.cellId)
+      .find((cellId) => reviewUnsettled.some((item) => item.cellId === cellId));
+    if (first) requestCellFocus(first);
+  };
   const focusChange = (direction: 1 | -1) => {
     if (!notebook || !reviewUnsettled.length) return;
     const order = notebook.cells.map((cell) => cell.cellId).filter((cellId) => reviewUnsettled.some((item) => item.cellId === cellId));
@@ -507,8 +516,12 @@ export default function App() {
         disabled={mutationsDisabled || busy || hasDirtyDrafts}
         onPrevious={() => focusChange(-1)}
         onNext={() => focusChange(1)}
+        onFirst={() => focusFirstChange()}
+        // Only what is still undecided: posting every id would include the ones
+        // already rejected, and accept_operations conflicts on the first of
+        // those, so Keep-all 409'd after any per-cell Undo.
         onKeepAll={() => reviewingTune
-          ? keepTunedOperations(notebook, tuningRecord!.recordId, reviewOperations.map((item) => item.operationId))
+          ? keepTunedOperations(notebook, tuningRecord!.recordId, reviewUnsettled.map((item) => item.operationId))
           : acceptOperations(notebook, selectedTurn!.turnId)}
         onUndoAll={() => reviewingTune
           ? undoTunedOperations(notebook, tuningRecord!.recordId, reviewUnsettled.filter((item) => item.state === "pending").map((item) => item.operationId))

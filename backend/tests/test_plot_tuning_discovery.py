@@ -356,3 +356,58 @@ def test_an_accumulating_rebinding_keeps_the_earlier_dependency():
         "plt.plot(data)\n",
     ), "plot")
     assert names(result) == {"N", "THRESH"}
+
+
+# --- found by code review -----------------------------------------------------
+
+def test_a_function_parameter_does_not_make_its_shadowed_global_a_knob():
+    # Reading a def's whole body indiscriminately made the parameter `n` look
+    # like a reference to the module `n`, so `n = 1000` was offered as a knob
+    # for a plot it cannot move — the phantom this module exists to prevent.
+    result = discover(chain(
+        "n = 1000\n",
+        "def make(n):\n    return list(range(n))\n",
+        "df = make(500)\n",
+        "plt.hist(df)\n",
+    ), "plot")
+    assert names(result) == set()
+
+
+def test_a_global_a_function_really_reads_is_still_a_knob():
+    # The other direction: subtracting too much would lose real edges.
+    result = discover(chain(
+        "SIZE = 5\n",
+        "def make():\n    return list(range(SIZE))\n",
+        "df = make()\n",
+        "plt.hist(df)\n",
+    ), "plot")
+    assert names(result) == {"SIZE"}
+
+
+def test_a_default_argument_expression_is_still_a_module_read():
+    # Defaults are evaluated at def time, in module scope.
+    result = discover(chain(
+        "SIZE = 5\n",
+        "def make(n=SIZE):\n    return list(range(n))\n",
+        "df = make()\n",
+        "plt.hist(df)\n",
+    ), "plot")
+    assert names(result) == {"SIZE"}
+
+
+@pytest.mark.parametrize(("source", "kind", "value"), [
+    ("v = -1.0\n", "float", -1.0),
+    ("v = -7\n", "int", -7),
+    ("v = +3\n", "int", 3),
+])
+def test_a_signed_number_is_a_literal(source, kind, value):
+    # `ast` wraps a negative number in a UnaryOp, so matching Constant alone
+    # rejected every negative value as "computed rather than set to a fixed
+    # value" — which was not true, and hid a very ordinary kind of knob.
+    result = discover(chain(source, "plt.plot(v)\n"), "plot")
+    assert (result.knobs[0].kind, result.knobs[0].value) == (kind, value)
+
+
+def test_a_tuple_of_signed_numbers_is_a_literal():
+    result = discover(chain("XLIM = (-10, 10)\n", "plt.xlim(XLIM)\n"), "plot")
+    assert (result.knobs[0].kind, result.knobs[0].value) == ("tuple", (-10, 10))

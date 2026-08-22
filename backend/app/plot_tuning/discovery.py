@@ -153,6 +153,42 @@ def _reads(node: ast.AST) -> frozenset[str]:
     )
 
 
+def _free_reads(node: ast.stmt) -> frozenset[str]:
+    """Module-level names a `def` or `class` actually depends on.
+
+    Reading the whole body indiscriminately makes a parameter look like a
+    reference to the module name it shadows, and that is enough to offer a
+    phantom knob::
+
+        n = 1000                     # offered as a knob…
+        def make(n): return [0] * n  # …but this `n` is the parameter
+        df = make(500)               # …so turning it changes nothing
+
+    Parameters and locally-bound names are therefore subtracted. A default
+    expression (`def make(n=SIZE)`) really is evaluated in module scope, so its
+    reads survive — except where the default names the parameter itself, which
+    loses an edge rather than inventing one, and losing one is the recoverable
+    direction.
+    """
+    bound: set[str] = set()
+    args = getattr(node, "args", None)
+    if args is not None:
+        for group in (args.posonlyargs, args.args, args.kwonlyargs):
+            bound.update(argument.arg for argument in group)
+        if args.vararg:
+            bound.add(args.vararg.arg)
+        if args.kwarg:
+            bound.add(args.kwarg.arg)
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name) and isinstance(child.ctx, (ast.Store, ast.Del)):
+            bound.add(child.id)
+        elif child is not node and isinstance(
+            child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
+        ):
+            bound.add(child.name)
+    return _reads(node) - bound
+
+
 def _module_level_nodes(statement: ast.stmt):
     """Walk a statement without entering function or class bodies.
 
@@ -252,6 +288,26 @@ def _stored_names(statement: ast.stmt) -> frozenset[str]:
     return frozenset(found)
 
 
+def _signed_number(node: ast.expr) -> int | float | None:
+    """The value of a numeric literal, allowing a leading `-` or `+`.
+
+    `ast` parses `-1.0` as a UnaryOp wrapping a Constant, so matching Constant
+    alone silently rejects every negative number — and told the user `VMIN` was
+    "computed rather than set to a fixed value", which is not true. The UnaryOp's
+    own source range covers the sign, so rewriting still replaces the whole
+    literal.
+    """
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        inner = _signed_number(node.operand)
+        if inner is None:
+            return None
+        return -inner if isinstance(node.op, ast.USub) else inner
+    if isinstance(node, ast.Constant) and not isinstance(node.value, bool) \
+            and isinstance(node.value, (int, float)):
+        return node.value
+    return None
+
+
 def _literal(node: ast.expr) -> tuple[str, Any] | None:
     """Classify a value node as a control we know how to render and rewrite."""
     if isinstance(node, ast.Constant):
@@ -266,14 +322,16 @@ def _literal(node: ast.expr) -> tuple[str, Any] | None:
         if isinstance(value, str):
             return "str", value
         return None
+    signed = _signed_number(node)
+    if signed is not None:
+        return ("int" if isinstance(signed, int) else "float"), signed
     if isinstance(node, (ast.Tuple, ast.List)):
         items = []
         for element in node.elts:
-            if not isinstance(element, ast.Constant) or isinstance(element.value, bool):
+            value = _signed_number(element)
+            if value is None:
                 return None
-            if not isinstance(element.value, (int, float)):
-                return None
-            items.append(element.value)
+            items.append(value)
         if not items:
             return None
         return ("tuple" if isinstance(node, ast.Tuple) else "list"), tuple(items)
@@ -443,7 +501,11 @@ def _collect(cells: tuple[ChainCell, ...]) -> tuple[
                                 if isinstance(leaf, ast.Name):
                                     disqualified.setdefault(leaf.id, "nested")
 
-            reads = _reads(statement)
+            reads = (
+                _free_reads(statement)
+                if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                else _reads(statement)
+            )
             for name in _stored_names(statement):
                 bindings.setdefault(name, []).append(
                     _Binding(cell=cell, value_node=None, reads=reads),

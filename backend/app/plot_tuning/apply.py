@@ -728,8 +728,15 @@ def _cell_source(cell: dict[str, Any]) -> str:
     return "".join(source) if isinstance(source, list) else source
 
 
-def serialize_record(record: TuningRecord) -> dict[str, Any]:
+def serialize_record(
+    record: TuningRecord, stale: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
     """Wire shape for the panel and the review bar.
+
+    ``stale`` is derived per request by `TuningApplyService.stale_cell_ids` and
+    folded into the operation states here, exactly as the agent path does it.
+    Without it the cell's stale branch never renders and a hand-edited tuned cell
+    keeps a live-looking Undo that can only answer 409.
 
     ``origin`` leads deliberately: it is the field that decides whether the cell
     says "You tuned this cell" or "Agent changed this cell", and the two records
@@ -760,7 +767,13 @@ def serialize_record(record: TuningRecord) -> dict[str, Any]:
                 "cellId": operation.cell_id,
                 "ordinal": operation.ordinal,
                 "kind": operation.kind,
-                "state": operation.state,
+                # Only an undecided hunk can go stale; an accepted or rejected
+                # one is a decision the user already made.
+                "state": (
+                    "stale"
+                    if operation.state == PENDING and operation.cell_id in stale
+                    else operation.state
+                ),
             }
             for operation in record.operations
         ],

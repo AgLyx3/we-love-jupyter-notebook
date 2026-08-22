@@ -55,3 +55,16 @@ describe("a tuned record reuses the bar without borrowing the agent's wording", 
     expect(screen.getByText(/Undo 2 unreviewed tuned changes\?/)).toBeInTheDocument();
   });
 });
+
+describe("jumping to the first change", () => {
+  it("uses the explicit first-jump when the host provides one", async () => {
+    // The counter says "first". Wiring it to onNext advances from wherever the
+    // cursor is, so after stepping to change 3 it would land on 4.
+    const onFirst = vi.fn();
+    const onNext = vi.fn();
+    render(bar({ onFirst, onNext }));
+    await userEvent.click(screen.getByRole("button", { name: "Go to the first change" }));
+    expect(onFirst).toHaveBeenCalled();
+    expect(onNext).not.toHaveBeenCalled();
+  });
+});

@@ -143,7 +143,12 @@ test("tunes a plot: preview costs nothing, apply rewrites the source and re-rend
   // Confirming is what costs, and the button says so before it is pressed.
   await panel.getByRole("button", { name: "Apply 1 change and re-run" }).click();
   await expect(panel).toHaveAttribute("data-state", "applied", { timeout: 120_000 });
-  await expect(panel.getByText("Applied 1 change to your notebook.")).toBeVisible();
+  await expect(panel.getByText(/Applied 1 change\./)).toBeVisible();
+  // The plot stays. Replacing it with a receipt takes the picture away at the
+  // one moment it is worth looking at, and the band must be gone because the
+  // values on screen are the notebook's now.
+  await expect(panel.locator(".cell-outputs img")).toBeVisible();
+  await expect(panel.getByText("Preview — not in your notebook yet")).toHaveCount(0);
   // The live kernel's run-all was not this feature's, so apply cannot prove the
   // prefix is resident and widens the re-run to the whole notebook (§3.6). That
   // is a bigger bill than the Apply button quoted, so the panel says it out loud.

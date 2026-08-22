@@ -15,12 +15,14 @@ import type { AgentOperation } from "../api/client";
 //   * undo-all asks for confirmation once anything has been kept, because that
 //     is the point where it starts discarding decisions rather than just
 //     undoing the agent.
-export default function ReviewBar({ origin = "agent", total, reviewed, keptCount, undoableCount, disabled, onPrevious, onNext, onKeepAll, onUndoAll }: {
+export default function ReviewBar({ origin = "agent", total, reviewed, keptCount, undoableCount, disabled, onPrevious, onNext, onFirst, onKeepAll, onUndoAll }: {
   // A tuning Apply produces the same ledger, so it reuses this bar — but it is
   // the user's own edit and must never be described as the agent's.
   origin?: "agent" | "tune";
   total: number; reviewed: number; keptCount: number; undoableCount: number; disabled: boolean;
   onPrevious: () => void; onNext: () => void; onKeepAll: () => void; onUndoAll: () => void;
+  /** Jump to the first change rather than advancing from the cursor. */
+  onFirst?: () => void;
 }) {
   const tuned = origin === "tune";
   const what = tuned ? "tuned change" : "change";
@@ -40,7 +42,7 @@ export default function ReviewBar({ origin = "agent", total, reviewed, keptCount
       type="button" className="review-bar-count" disabled={disabled}
       title={`Show the first of ${total} ${what}${total === 1 ? "" : "s"}`}
       aria-label={`Go to the first ${what}`}
-      onClick={onNext}
+      onClick={onFirst ?? onNext}
     >
       <MapPin /> {reviewed} of {total} {what}{total === 1 ? "" : "s"} reviewed
     </button>

@@ -170,3 +170,29 @@ def test_a_list_knob_applies_from_a_json_list():
     source = "limits = [0, 10]\n"
     updated = rewrite_cell(source, [(knob_for(source, "limits"), [2, 8])])
     assert updated == "limits = [2, 8]\n"
+
+
+def test_a_signed_literal_is_replaced_whole():
+    # The UnaryOp's range covers the sign, so the rewrite must not leave `-`
+    # behind and produce `-8`.
+    source = "vmin = -1.0\n"
+    assert rewrite_cell(source, [(knob_for(source, "vmin"), 8.0)]) == "vmin = 8.0\n"
+
+
+def test_a_magic_inside_a_string_does_not_fail_a_good_rewrite():
+    # `_verify` used to blank every line starting with `%`, including one inside
+    # a triple-quoted string, leaving the quote unterminated and rejecting a
+    # perfectly valid rewrite with a syntax error about an untouched line.
+    source = 'NOTE = """\n%complete"""\nbins = 30\n'
+    updated = rewrite_cell(source, [(knob_for(source, "bins"), 9)])
+    assert updated == 'NOTE = """\n%complete"""\nbins = 9\n'
+
+
+@pytest.mark.parametrize("bad", [{"a": 1}, None, "abc", [1, 2]])
+def test_an_uncoercible_value_is_a_rewrite_error_not_a_crash(bad):
+    # Values arrive as decoded JSON. int()/float() raise TypeError/ValueError
+    # for these, neither of which is a RewriteError, so they escaped the apply
+    # path as a 500 instead of a 4xx.
+    source = "bins = 30\n"
+    with pytest.raises(RewriteError):
+        rewrite_cell(source, [(knob_for(source, "bins"), bad)])

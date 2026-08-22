@@ -20,7 +20,7 @@ from __future__ import annotations
 import ast
 from typing import Any
 
-from .discovery import Knob, strip_magics
+from .discovery import Knob, parse_cell
 
 
 class RewriteError(RuntimeError):
@@ -28,7 +28,22 @@ class RewriteError(RuntimeError):
 
 
 def render(kind: str, value: Any) -> str:
-    """Render a knob value as the Python literal that will replace the old one."""
+    """Render a knob value as the Python literal that will replace the old one.
+
+    Values arrive as decoded JSON, so a client can send a dict where a number
+    belongs. `int()`/`float()` raise `TypeError`/`ValueError` for those, and
+    neither is a `RewriteError`, so they escaped the apply path as a 500. They
+    are bad input, so they are reported as such.
+    """
+    try:
+        return _render(kind, value)
+    except (TypeError, ValueError) as error:
+        raise RewriteError(
+            f"{value!r} is not a usable {kind} value",
+        ) from error
+
+
+def _render(kind: str, value: Any) -> str:
     if kind == "bool":
         return "True" if value else "False"
     if kind == "int":
@@ -102,13 +117,14 @@ def rewrite_cell(source: str, edits: list[tuple[Knob, Any]]) -> str:
 
 
 def _verify(source: str, edits: list[tuple[Knob, Any]]) -> None:
-    cleaned = strip_magics(source)
-    if cleaned is None:
+    # Through `parse_cell`, not `strip_magics`, for the reason `parse_cell`
+    # documents: blanking every line that starts with `%` also blanks one inside
+    # a triple-quoted string, which leaves the quote unterminated and fails a
+    # perfectly good rewrite with a syntax error about a line the user never
+    # touched.
+    tree = parse_cell(source)
+    if tree is None:
         raise RewriteError("Rewritten cell is no longer analysable")
-    try:
-        tree = ast.parse(cleaned)
-    except SyntaxError as error:
-        raise RewriteError(f"Rewritten cell does not parse: {error}") from error
 
     wanted = {knob.name: value for knob, value in edits}
     seen: dict[str, Any] = {}

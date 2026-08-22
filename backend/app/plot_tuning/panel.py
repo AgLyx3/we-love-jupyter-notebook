@@ -115,6 +115,18 @@ class PlotTuningPanelService:
         self.idle_timeout_seconds = idle_timeout_seconds
         self._lock = RLock()
         self._shadow: ShadowSession | None = None
+        self._session_id: str | None = None
+        # Revision alone cannot detect a notebook swap: revisions restart at 0
+        # per notebook, so a shadow warmed at revision 3 of one file passes the
+        # staleness check against revision 3 of the next one and serves previews
+        # of source that is no longer open anywhere. Every other stateful service
+        # here listens for the replacement; this one was the exception.
+        documents.register_session_replacement_listener(self._on_session_replaced)
+
+    def _on_session_replaced(self, session_id: str | None, _revision: int) -> None:
+        self.close_current()
+        with self._lock:
+            self._session_id = session_id
 
     # ------------------------------------------------------------- analysis
 
@@ -186,6 +198,7 @@ class PlotTuningPanelService:
         )
         with self._lock:
             self._shadow = shadow
+            self._session_id = session_id
         try:
             result = shadow.warm(plan.chain)
         except ShadowError:
@@ -204,6 +217,12 @@ class PlotTuningPanelService:
             shadow = self._shadow
         if shadow is None or shadow.shadow_id != shadow_id or not shadow.is_alive:
             raise UnknownShadow("That preview session is no longer available.")
+        snapshot_session = self.documents.get_snapshot().session_id
+        with self._lock:
+            owner = self._session_id
+        if owner is not None and owner != snapshot_session:
+            self.close_current()
+            raise UnknownShadow("The notebook changed since this preview session started.")
         if shadow.invalidate_if_stale(self.documents.get_snapshot().revision):
             with self._lock:
                 if self._shadow is shadow:

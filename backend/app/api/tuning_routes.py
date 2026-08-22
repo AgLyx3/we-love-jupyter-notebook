@@ -64,6 +64,11 @@ def _apply(request: Request) -> TuningApplyService:
     return request.app.state.plot_tuning_apply_service
 
 
+def _record(request: Request, record) -> dict[str, Any]:
+    """Serialize with staleness derived now, never from a stored flag."""
+    return serialize_record(record, _apply(request).stale_cell_ids(record))
+
+
 def _serialize_plan(plan) -> dict[str, Any]:
     return {
         "cellId": plan.target_cell_id,
@@ -200,19 +205,19 @@ def apply_values(
         session_id=body.session_id, expected_revision=body.expected_revision,
         edits=edits,
     )
-    return serialize_record(record)
+    return _record(request, record)
 
 
 @router.get("/records/{record_id}")
 def get_record(record_id: str, request: Request) -> dict[str, Any]:
-    return serialize_record(_apply(request).get(record_id))
+    return _record(request, _apply(request).get(record_id))
 
 
 @router.post("/records/{record_id}/undo")
 def undo(record_id: str, body: OperationRequest, request: Request) -> dict[str, Any]:
     """Undo the whole tune. Distinct from rejecting every operation, which
     selects only the hunks the user has not already reviewed."""
-    return serialize_record(_apply(request).undo(
+    return _record(request, _apply(request).undo(
         record_id, session_id=body.session_id,
         expected_revision=body.expected_revision,
     ))
@@ -220,7 +225,7 @@ def undo(record_id: str, body: OperationRequest, request: Request) -> dict[str, 
 
 @router.post("/records/{record_id}/reject")
 def reject(record_id: str, body: OperationRequest, request: Request) -> dict[str, Any]:
-    return serialize_record(_apply(request).reject_operations(
+    return _record(request, _apply(request).reject_operations(
         record_id, body.operation_ids, session_id=body.session_id,
         expected_revision=body.expected_revision,
     ))
@@ -228,7 +233,7 @@ def reject(record_id: str, body: OperationRequest, request: Request) -> dict[str
 
 @router.post("/records/{record_id}/accept")
 def accept(record_id: str, body: AcceptRequest, request: Request) -> dict[str, Any]:
-    return serialize_record(_apply(request).accept_operations(
+    return _record(request, _apply(request).accept_operations(
         record_id, body.operation_ids, session_id=body.session_id,
     ))
 
