@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .agent_workspace.models import AgentAdapter
-from .main import configured_agent_adapter, create_app
+from .main import configured_agent_adapter, configured_workspace_root, create_app
 
 
 # Where to look for the built frontend, most specific first. Nothing here is an
@@ -161,9 +161,10 @@ def create_bundled_app(
     so ``/api/notebooks/current`` reaches ``GET /notebooks/current``.
 
     ``workspace_root`` confines every local path the API will accept. Omitted,
-    nothing is confined, which is the behaviour a person driving the file
-    picker expects; a launcher that hands the editor to something else should
-    set it.
+    it falls back to ``NOTEBOOK_WORKSPACE_ROOT`` — which is how a launcher that
+    starts this module as a uvicorn *factory* configures it, since a factory
+    takes no arguments. With neither, nothing is confined, which is what a
+    person driving the file picker expects.
 
     ``agent_adapter`` defaults to the environment-configured one, the same as
     the module-level app in ``main``. It must not be left to ``create_app``'s
@@ -177,7 +178,9 @@ def create_bundled_app(
     api = create_app(
         agent_adapter=agent_adapter or configured_agent_adapter(),
         cors_origins=(),
-        workspace_root=workspace_root,
+        workspace_root=(
+            workspace_root if workspace_root is not None else configured_workspace_root()
+        ),
     )
 
     @asynccontextmanager

@@ -1,6 +1,6 @@
 # Bundling the editor as an MCP server
 
-Status: investigation complete; phases 1-4 built, 7 partly built, 5-6 outstanding
+Status: investigation complete; phases 1-5 and 7 built, 6 outstanding
 Branch: `claude/app-mcp-browser-bundling-c11ed2`
 Date: 2026-08-22
 
@@ -402,28 +402,52 @@ Ordered so each phase is independently useful.
    existing test are unchanged — proven by a test that opens, lists and
    searches outside the root on an unconfined server and expects success.
 
-5. **The MCP server itself** — process lifecycle (reuse `dev.py`'s teardown),
-   browser launch, the 7 tools of §4 over `httpx`, response shaping (§5.4), and
-   actionable error mapping including the 409 contract (§5.5).
+5. **The MCP server itself** — ✅ **built.** `backend/app/mcp/` holds four
+   pieces: `shaping.py` (§5.4's response sizing), `supervisor.py` (the editor
+   child process, lazily started on an ephemeral loopback port and torn down by
+   process group), `polling.py` (waiting on a run, including one paused for
+   approval), and `server.py` (the eight `notebook_*` tools). Entry point
+   `notebook-editor-mcp`.
+
+   Shaping, measured on the notebook that motivated it: `plot-gallery.ipynb`
+   goes from **92,550 bytes (~23K tokens) to 5,283 (~1,320)** — 5.7% — and one
+   selected cell is 770 bytes. Image outputs keep their `text/plain` repr and a
+   size descriptor; the bytes stay in the tab.
+
+   Three bugs the end-to-end tests caught, each invisible in a checkout or a
+   unit test:
+
+   - `create_bundled_app` is started by the supervisor as a uvicorn *factory*,
+     which takes no arguments, so the `NOTEBOOK_WORKSPACE_ROOT` it was being
+     handed was ignored and the child ran **unconfined**. Phase 4's boundary
+     was silently absent through the MCP path.
+   - `supervisor.py` imported the launcher's teardown from `scripts/`, which is
+     not in the wheel. Fine in a checkout, `No module named 'scripts'` from the
+     installed entry point. The teardown moved to `backend/app/process_group.py`
+     and the launcher re-exports it; a test now fails if any shipped module
+     imports `scripts` again.
+   - The error mapping matched on `document_revision_conflict`, a code the app
+     never raises — the branch simply never fired and conflicts fell through to
+     the generic message. The real code is `revision_conflict`; a test now
+     checks every mapped code against the ones actually defined.
+
+   Verified over real MCP stdio JSON-RPC against the installed console script:
+   initialize, tools/list, `notebook_open`, and a path outside the workspace
+   refused. And end to end in-process: a risky cell paused, stayed unrun, and
+   completed only after an approval posted the way the tab posts it; an edit
+   against a stale revision refused with the person's change intact.
+
 6. **Evaluate** — a set of tasks grounded in real notebook work ("find why cell 4
    errors and fix it", "add a plot of X", "this notebook is slow — profile it"),
    run end to end, measuring tokens per tool call and where the model picks the
    wrong tool. Feed the results back into the descriptions and response shaping.
    Published guidance treats this as part of building the tools, not as QA after.
-7. **Packaging** — ⚠️ **partly built.** The frontend now ships: `npm run build`
-   writes into `backend/app/web/` (vite `outDir`) and pyproject declares it as
-   package data, so a wheel carries it. Measured before and after — the wheel
-   went from 54 entries and *no* frontend to 61 entries including `index.html`
-   and every asset — and verified by installing that wheel with
-   `pip install --target` and serving it from a directory outside the repo:
-   SPA, hashed assets, API and the origin guard all answer, with the frontend
-   read from inside the installed package. Three tests pin the contract, since
-   the vite `outDir`, the pyproject declaration and the lookup's first
-   candidate are written in three languages in three files and nothing else
-   ties them together. **Still owed:** the console entry point so
-   `claude mcp add` can name a command, and user-facing docs for running the
-   bundle — neither of which is worth writing before the MCP server (phase 5)
-   exists to be named.
+7. **Packaging** — ✅ **built.** The frontend ships (`npm run build` writes into
+   `backend/app/web/`, declared as package data), and the console entry point
+   `notebook-editor-mcp` is registered, with `.[mcp]` carrying the SDK. The
+   README documents the whole arrangement, including what is deliberately not
+   a tool and the prompt-injection risk a notebook read into a model's context
+   carries when that model can also run cells.
 
 Phases 1, 4, 5, 6, 7 are additive and touch nothing the current UI depends on.
 Phases 2 and 3 modify existing server behavior — 2 adds a rejection path that

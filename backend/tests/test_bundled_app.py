@@ -383,3 +383,40 @@ def test_the_built_frontend_is_not_committed():
     """It is build output: ignored, so a stale copy cannot be checked in."""
     ignored = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").split()
     assert "backend/app/web/" in ignored
+
+
+def test_the_bundle_reads_a_workspace_root_from_the_environment(dist, tmp_path, monkeypatch):
+    """A uvicorn factory takes no arguments, so a launcher configures the
+    bundle through the environment. Without this the supervisor's
+    NOTEBOOK_WORKSPACE_ROOT was set and silently ignored, and the bundled
+    server ran unconfined.
+    """
+    monkeypatch.setenv("NOTEBOOK_WORKSPACE_ROOT", str(tmp_path))
+    app = create_bundled_app(dist_dir=dist, agent_adapter=FakeAgentAdapter())
+    assert app.state.api.state.workspace_confinement.root == tmp_path.resolve()
+
+
+def test_an_explicit_workspace_root_beats_the_environment(dist, tmp_path, monkeypatch):
+    chosen = tmp_path / "chosen"
+    chosen.mkdir()
+    monkeypatch.setenv("NOTEBOOK_WORKSPACE_ROOT", str(tmp_path))
+    app = create_bundled_app(
+        dist_dir=dist, agent_adapter=FakeAgentAdapter(), workspace_root=chosen,
+    )
+    assert app.state.api.state.workspace_confinement.root == chosen.resolve()
+
+
+def test_no_shipped_module_imports_the_scripts_directory():
+    """`scripts/` is not in the wheel, so importing it from shipped code fails
+    only once installed — which is the worst place to find out.
+
+    The MCP supervisor did exactly this: it imported the launcher's process
+    group teardown, worked in a checkout, and died with
+    `No module named 'scripts'` from the console entry point.
+    """
+    offenders = []
+    for path in (REPO_ROOT / "backend" / "app").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if "import scripts" in source or "from scripts" in source:
+            offenders.append(str(path.relative_to(REPO_ROOT)))
+    assert not offenders, f"shipped modules importing scripts/: {offenders}"

@@ -1,0 +1,133 @@
+"""Waiting for a run, including one paused for a person to approve.
+
+`POST /execution/...` answers 202 and the work happens on a background thread,
+so a tool that returns immediately would tell the caller nothing about whether
+the cell ran. Polling to a terminal state is what makes `notebook_run_cell`
+behave like a function call.
+
+The pause is the part worth care. A flagged cell sits in `awaiting_approval`
+until a person decides in the browser tab, which may be a while, and there is
+no useful action for the caller in the meantime — so the wait continues, and
+if it does time out the answer says what it is waiting for rather than just
+that time ran out.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import TYPE_CHECKING, Any
+
+from .shaping import summarize_output
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .server import NotebookTools
+
+POLL_INTERVAL_SECONDS = 0.25
+TERMINAL_STATES = {
+    "completed", "failed", "cancelled", "validation_incomplete", "timed_out",
+}
+
+
+def await_execution(
+    tools: NotebookTools,
+    started: dict[str, Any],
+    *,
+    timeout: float,
+    interval: float = POLL_INTERVAL_SECONDS,
+    now: Any = time.monotonic,
+    sleep: Any = time.sleep,
+) -> dict[str, Any]:
+    """Poll one execution to a terminal state and report what happened."""
+    operation_id = started.get("operationId")
+    if not operation_id:
+        return {"state": started.get("state", "unknown"), "cells": []}
+
+    deadline = now() + timeout
+    operation = started
+    saw_approval_pause = False
+
+    while operation.get("state") not in TERMINAL_STATES:
+        if operation.get("state") == "awaiting_approval":
+            saw_approval_pause = True
+        if now() >= deadline:
+            return _timed_out(operation, timeout)
+        sleep(interval)
+        operation = tools.request(
+            "GET", f"/execution/{operation_id}", what="Checking the run",
+        )
+
+    return _finished(tools, operation, saw_approval_pause=saw_approval_pause)
+
+
+def _pending_approval(operation: dict[str, Any]) -> dict[str, Any] | None:
+    for attempt in operation.get("attempts") or []:
+        if attempt.get("state") == "awaiting_approval" and not attempt.get("decision"):
+            return attempt
+    return None
+
+
+def _timed_out(operation: dict[str, Any], timeout: float) -> dict[str, Any]:
+    waiting = _pending_approval(operation)
+    if waiting is not None:
+        risk = waiting.get("risk") or {}
+        return {
+            "state": "awaiting_approval",
+            "operationId": operation.get("operationId"),
+            "cellId": waiting.get("cellId"),
+            "reasons": risk.get("reasons", []),
+            "note": (
+                f"Still waiting after {timeout:.0f}s for a person to approve this "
+                "cell in the editor tab. Nothing has run. Ask them to look, or "
+                "call notebook_status later."
+            ),
+        }
+    return {
+        "state": operation.get("state"),
+        "operationId": operation.get("operationId"),
+        "note": f"The run had not finished after {timeout:.0f}s. Call notebook_status.",
+    }
+
+
+def _finished(
+    tools: NotebookTools, operation: dict[str, Any], *, saw_approval_pause: bool
+) -> dict[str, Any]:
+    cells = []
+    for attempt in operation.get("attempts") or []:
+        entry: dict[str, Any] = {
+            "cellId": attempt.get("cellId"),
+            "state": attempt.get("state"),
+        }
+        outputs = [summarize_output(item) for item in (attempt.get("outputs") or [])]
+        if outputs:
+            entry["outputs"] = outputs
+        if attempt.get("decision"):
+            entry["decision"] = attempt["decision"]
+        risk = attempt.get("risk") or {}
+        if risk.get("level") == "confirm":
+            entry["risk"] = risk.get("reasons", [])
+        cells.append(entry)
+
+    result: dict[str, Any] = {
+        "state": operation.get("state"),
+        "operationId": operation.get("operationId"),
+        "revision": operation.get("currentDocumentRevision"),
+        "cells": cells,
+    }
+    if operation.get("currentDocumentRevision") is not None:
+        tools.state.observe(
+            {
+                "sessionId": operation.get("sessionId"),
+                "revision": operation.get("currentDocumentRevision"),
+            }
+        )
+    if saw_approval_pause:
+        result["note"] = "A cell was paused for approval and a person decided it."
+    if operation.get("state") == "validation_incomplete":
+        result["note"] = (
+            "A person skipped a cell that needed approval, so the run stopped "
+            "there. Later cells did not run."
+        )
+    if operation.get("state") == "failed":
+        error = operation.get("error") or {}
+        result["note"] = error.get("message") or "The run failed; see the cell outputs."
+    return result

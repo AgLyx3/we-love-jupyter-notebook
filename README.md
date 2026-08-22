@@ -110,6 +110,61 @@ Useful flags:
 .venv/bin/python scripts/dev.py --backend-port 8055 --frontend-port 5199
 ```
 
+## As an MCP server
+
+The editor can also run as an [MCP](https://modelcontextprotocol.io) server, so
+an MCP client — Claude Code, for instance — edits and runs the notebook through
+tools while you watch the same session in a browser tab and step in when you
+want to. The tab is not a read-only view: the notebook, the kernel and the
+scope are one server-side session, so a cell the client edits updates in front
+of you, and a cell you edit is a cell the client is then refused for editing
+against a stale read.
+
+Install the extra and point a client at the command:
+
+```bash
+.venv/bin/pip install -e '.[mcp]'
+npm run build            # the tab is served from the built frontend
+```
+
+```bash
+claude mcp add notebook-editor -- \
+  /absolute/path/to/.venv/bin/notebook-editor-mcp \
+  --workspace-root /absolute/path/to/your/project
+```
+
+`--workspace-root` confines every path the editor will open, list, or write to
+that directory. It is optional and strongly recommended: without it the editor
+reaches anywhere you can. `--no-browser` stops the tab opening by itself; the
+`notebook_show` tool still opens it on request.
+
+**The tools.** `notebook_open`, `notebook_read`, `notebook_status`,
+`notebook_set_cell_source`, `notebook_run_cell`, `notebook_run_all`,
+`notebook_save`, `notebook_show`.
+
+Three things about them are deliberate:
+
+- **Running a cell can stop and wait for you.** Execution asked for by a tool
+  is treated as agent-initiated, so a cell the risk classifier flags pauses at
+  *awaiting approval* and does not run until you approve it in the tab — the
+  same gate an agent turn's downstream cells get. That pause is the reason to
+  have a browser window at all.
+- **Edits are checked against what the client last read.** If you changed the
+  notebook in the tab in between, the edit is refused rather than applied, and
+  the client is told to re-read. Nothing retries over the top of your change.
+- **Images are described, not returned.** A plot comes back as its size and
+  type; the picture is in the tab. A modest plotting notebook is about 23K
+  tokens of base64 if forwarded whole, and unreadable to a model either way.
+
+Agent turns are **not** exposed as tools — the client is already the agent, and
+running the `claude` CLI underneath it would just nest a second one. You can
+still send a turn from the tab. Neither is the file browser: the tab has a
+picker, and a person browsing their own machine is a different thing from a
+model enumerating it.
+
+Read [Security Limits](#security-limits) before pointing a client at a notebook
+you would not run yourself.
+
 ## Using it
 
 1. **Open a notebook.** From the start screen choose a local `.ipynb` file, or
@@ -172,6 +227,14 @@ cells are marked with a provenance badge and are not auto-executed, yet once acc
 they are ordinary cells a later Run-All will run. Review the diff before running, and
 use Trusted only with agents and instructions you trust. The risky-cell execution
 approval flow still gates execution.
+
+**Driving it from an MCP client** narrows two of these and widens one. Model-
+initiated runs are gated, where a click of Run is not, and `--workspace-root`
+confines every path the server accepts. But the notebook's own text — markdown,
+code, and cell outputs — is read into the model's context while that same model
+holds a tool that executes cells. A notebook from somewhere you do not trust
+can therefore carry instructions to an agent that can run code on your machine.
+The approval pause is the control that matters there; do not wave it through.
 
 This is not an operating-system sandbox. The CLI and executed notebook code run
 with the current user's permissions. Risk classification is heuristic, approval
