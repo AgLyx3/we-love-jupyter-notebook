@@ -10,22 +10,48 @@ answers one question: **has anyone built "an overview of the notebook that looks
 like a roadmap", and what did they learn?** It ends with the gap worth building
 into and a recommended first slice — but it does not commit to a design.
 
+**Scope decided 2026-08-22** (§1): navigation of a large notebook, click a block
+to jump to its cells. Outputs are out of scope; the map is read-only in V1 and
+editable in V2. §9 lists the assumptions still standing.
+
 ---
 
-## 1. The user and the moment
+## 1. The purpose
 
-The overview is not for the person who just wrote the notebook. It is for the
-person who **opens a notebook they did not write** (or wrote three weeks ago)
-and needs to answer, in under a minute:
+**Scope decided 2026-08-22.** The job is navigation of a notebook that has grown
+large: *keep track of what is in it, and click a block to jump straight to the
+cells it stands for.* Not comprehension of someone else's analysis, not
+storytelling, not cleanup. Who wrote the notebook does not matter — a notebook
+you wrote yourself becomes unnavigable at the same size a stranger's does.
 
-1. What is this notebook *for*? What does it produce?
-2. What are its stages, in order?
-3. Which cells matter, and which are scratch/dead ends?
-4. What state is it in — what has run, what is stale, what will break?
-5. Where is the one chart / the model / the number I came for?
+That makes the panel an **index with meaning**, and sets the bar accordingly:
 
-Every prior-art cluster below answers **one** of these and ignores the rest.
-That is the gap.
+1. What blocks is this notebook made of, in order?
+2. What is each block, in a phrase I recognize?
+3. Click a block → land on its cells.
+4. What state is each block in — run, never run, out of order?
+
+Everything below is measured against those four. Questions the research raised
+but this scope does *not* buy — what the notebook produces, which cells are dead
+ends, where intent and code diverge — are recorded where they arise and left
+out of the build.
+
+Two consequences worth stating early, because they cut real work:
+
+- **Click-to-jump already exists.** `NotebookView.tsx:43` scrolls an arbitrary
+  cell into view from a `focusRequest`, against a `refs` map keyed by cell id.
+  The panel emits a focus request; it does not need new scroll machinery.
+- **Outputs are out of scope entirely** (decided). No chart thumbnails, no
+  artifact chips, no find-that-chart lane, and nothing output-derived in the
+  model input. §3 and §4 are adjusted accordingly. Note the boundary: run state
+  comes from `execution_count`, which is *not* an output, so never-run and
+  out-of-order survive the cut. What is lost is the error-in-file signal — a
+  cell carrying a saved traceback now looks like any other cell.
+
+Notebook kinds in scope: **ML/data pipelines, exploratory analysis, and
+simulation/research code**. Teaching and narrative notebooks — the
+heavily-marked-up case — are explicitly *not* the target, which matters because
+those are the only ones a heading-based outline already serves.
 
 Evidence that this is a real, studied problem, not a hunch:
 
@@ -172,33 +198,42 @@ diagram of a notebook is one node. Nothing here handles *outputs* or
 
 ## 3. The gap
 
-Nobody has combined the four signals that a notebook actually carries:
+A notebook carries four signals — narrative (markdown), dataflow (variables),
+artifacts (outputs), and state (execution). With outputs cut from scope (§1),
+three remain in play, and nobody combines those three either:
 
-|  | narrative (md) | dataflow (vars) | artifacts (outputs) | state (exec) |
-|---|---|---|---|---|
-| TOC / Outline | ✅ | ❌ | ❌ | ❌ |
-| marimo / Hex / Observable minimap | partial | ✅ | ❌ | partial |
-| ipyflow | ❌ | ✅ | ❌ | ✅ (stale) |
-| gather | ❌ | ✅ | ✅ (as target) | ✅ (log) |
-| Themisto / Cell2Doc | ✅ (generated) | ❌ | ❌ | ❌ |
-| CodeBoarding / Swark | ✅ (generated) | ✅ (module-level) | ❌ | ❌ |
-| Albireo | partial | ✅ | partial | partial |
+|  | narrative (md) | dataflow (vars) | state (exec) |
+|---|---|---|---|
+| TOC / Outline | ✅ | ❌ | ❌ |
+| marimo / Hex / Observable minimap | partial | ✅ | partial |
+| ipyflow | ❌ | ✅ | ✅ (stale) |
+| gather | ❌ | ✅ | ✅ (log) |
+| Themisto / Cell2Doc | ✅ (generated) | ❌ | ❌ |
+| CodeBoarding / Swark | ✅ (generated) | ✅ (module-level) | ❌ |
+| Albireo | partial | ✅ | partial |
 
-**The unclaimed square: a single overview that segments the notebook into named
-stages, says what each stage produces, shows what flows between them, indexes
-the artifacts, and marks what is stale or never-run — for a plain `.ipynb` on a
-normal IPython kernel.**
+**The unclaimed square: a single navigable index that segments the notebook into
+named blocks, shows what flows between them, marks what has and has not run, and
+jumps you to the cells — for a plain `.ipynb` on a normal IPython kernel.**
 
-Two further things nobody does, both of which need a model:
+Cutting outputs weakens this argument and it is worth being honest about how
+much: the artifacts column was the one where prior art is thinnest, so it was
+the easiest column to win. What remains is a narrower claim — the combination is
+still unclaimed, but the margin is smaller, and the win now rests mostly on
+*naming without markdown* (below) rather than on breadth of signal.
+
+The one thing nobody does that survives the cut, and it needs a model:
 
 - **Meaning without markdown.** Every structural tool is parasitic on headings
-  the author already wrote. The notebooks that most need an overview are exactly
-  the ones with no headings. An LLM segmenting and naming stages from code +
-  outputs inverts that dependency.
-- **Intent vs. reality.** The markdown says "train the model"; the code
-  `.fit()`s on the *uncleaned* frame. Only a model that reads both the prose and
-  the code can flag the divergence. This is a class of finding no existing
-  notebook tool produces.
+  the author already wrote. The notebooks that most need an index — the
+  exploratory and simulation ones named in §1 — are exactly the ones without
+  them. A model segmenting and naming blocks from code alone inverts that
+  dependency. This is now the *whole* differentiator versus a plain outline.
+
+Recorded but out of scope: **intent vs. reality** (the markdown says "train the
+model", the code `.fit()`s the uncleaned frame). No notebook tool produces
+findings of that class, and it needs both prose and code — but it answers a
+comprehension question, not a navigation one, so it is not part of this build.
 
 ---
 
@@ -210,10 +245,10 @@ Ordered by cost. The design principle this implies is in §6.
 
 - Markdown headings and their level → the skeleton, when it exists.
 - `execution_count`: `null` → never run; non-monotonic across cells → the
-  notebook was not run top-to-bottom, so linear reading is a lie.
-- Output types per cell: `image/png` → a chart; `text/html` table → a frame
-  preview; `error` output → a broken cell sitting in the file.
+  notebook was not run top-to-bottom, so linear reading is a lie. Not an
+  output, so it survives the §1 cut.
 - Cell magics, `!` escapes, imports → environment/setup cells.
+- ~~Output types per cell~~ — cut with outputs (§1).
 
 **Tier 1 — static AST. Deterministic, offline, cheap.**
 
@@ -222,9 +257,18 @@ Ordered by cost. The design principle this implies is in §6.
   module docstring). That is most of a dependency graph already, built and
   tested, in this repo.
 - Function/class definitions → the reusable spine.
-- "Milestone" call detection: `read_csv`/`read_parquet`/`open` (ingest),
-  `.fit(` / `train` (model), `.score`/`accuracy_score` (evaluate),
-  `to_csv`/`joblib.dump`/`torch.save` (export).
+- "Milestone" call detection — **but the vocabulary does not generalize across
+  the three notebook kinds in scope.** The obvious list is pandas/sklearn-shaped
+  (`read_csv` ingest, `.fit(` model, `.score` evaluate, `to_csv` export) and
+  covers ML pipelines well. Exploratory analysis needs reshaping verbs
+  (`groupby`, `merge`, `pivot`); simulation/research needs another set again
+  (`seed`, `odeint`/`solve_ivp`, `sample`, sweep loops, `np.save`) and often has
+  no ingest step at all — the data is generated, not loaded. Maintaining three
+  keyword lists is a losing game. **Better signal: imports.** `import torch` /
+  `sklearn` says ML; `scipy.integrate` / `pymc` says simulation; `seaborn` with
+  no model import says exploratory. Detect the notebook's *kind* from imports
+  first, then apply the matching milestone vocabulary. This is the weakest part
+  of Tier 1 and the strongest argument for Tier 2 doing segmentation.
 - Risk/side-effect classification: **already implemented** in
   `kernel_execution/risky_cell_classifier.py` (shell escapes, package changes,
   DB writes, credential access, file deletes, process execution).
@@ -247,12 +291,11 @@ Ordered by cost. The design principle this implies is in §6.
 ## 5. Product concepts considered
 
 **A. Roadmap rail (recommended).** A vertical spine beside the notebook: one
-node per *stage*, not per cell. Each node carries a generated name, a stage
-badge, the artifacts it produced (chart thumbnail, metric, file written), and a
-state chip (never-run / stale / error / risky). Click → scroll to the first cell
-of the stage; hover → the stage's cells highlight in the gutter. Reads as a
-roadmap because the analysis genuinely is a pipeline; it degrades to a plain TOC
-if the model is unavailable.
+node per *block*, not per cell. Each node carries a name, its cell range, and a
+state chip (never-run / out-of-order / stale / risky). Click → focus the first
+cell of the range, which `NotebookView`'s existing `focusRequest` path already
+does. Hover → the block's cells highlight in the gutter. Degrades to a plain
+outline if no model is available.
 
 **B. Minimap / DAG.** marimo/Observable-style wires. Highest information
 density, and the most honest picture of a non-linear notebook — but it is the
@@ -263,14 +306,14 @@ one thing prior art *does* do well, and it answers "what depends on what", not
 purpose, inputs, stages, outputs, caveats. Cheap, very legible, but static prose
 — not navigation, and it rots on the next edit.
 
-**D. Artifact index.** "Find that one chart": every output as a thumbnail grid
-with generated captions, filterable. Directly serves the CHI'26 finding. Narrow
-but unusually well-evidenced, and a natural *lane* inside A rather than a rival
-to it.
+**D. Artifact index.** ~~"Find that one chart": every output as a thumbnail
+grid.~~ **Cut** — outputs are out of scope (§1). Recorded because it is the
+best-evidenced concept here (it is the literal finding of the CHI'26 paper), so
+if outputs ever come back into scope, this is where they go.
 
-**Recommendation: A, with D as a lane inside each node, and B available as a
-secondary tab** — the same two-tab shape marimo converged on (map first, graph
-second), which is weak evidence it is the right decomposition.
+**Recommendation: A, with B available as a secondary tab** — the same two-tab
+shape marimo converged on (map first, graph second), which is weak evidence it
+is the right decomposition.
 
 ---
 
@@ -364,12 +407,20 @@ user's own subscription — so it cannot be hand-waved.
 
 ### 7.3 User control over the flow
 
-**The map is editable.** Segmentation is subjective, two passes will disagree,
-and the user is the authority on their own analysis. A map you cannot correct is
-one you stop trusting after the first wrong boundary. Rename a stage, merge two,
-split one, drag a boundary, pin, hide a scratch stage.
+**Decided: V1 read-only, V2 editable.** Segmentation is subjective and two
+passes will disagree, so the map must eventually be correctable — but editing is
+V2, not the first build. V1 ships whatever the deterministic pass produces.
 
-Two rules keep that coherent:
+**V1 — blocks are contiguous cell ranges, not editable.** A block is a range,
+which keeps rendering and click-to-jump trivial (jump = focus the first cell in
+the range). The known cost: a notebook where you went back and added a cell to
+an earlier block will show that cell in the wrong block. §9.5 tracks this.
+
+**V2 — the user can adjust ranges and merge blocks.** Rename, merge two, split
+one, drag a boundary. This is also when the sidecar-vs-metadata question below
+has to be answered; V1 stores nothing, so it does not arise yet.
+
+Two rules keep V2 coherent, recorded now so V1 does not paint them out:
 
 1. **Edits are sticky, and become context.** A manual rename is never
    overwritten by a later pass; it becomes a pin, and is fed into subsequent
@@ -382,13 +433,13 @@ Two rules keep that coherent:
    exactly the kind of thing this app makes explicit and reviewable everywhere
    else.
 
-**Open decision — where do user edits live?** Notebook metadata means they
-travel with the file when shared, but the overview then writes to the notebook,
-breaking §6.6. A sidecar keyed on notebook path keeps it read-only but does not
-travel. Lean: sidecar by default, plus an explicit **"write these as markdown
-headings"** action routed through a normal agent turn — so it lands as a
-reviewable, undoable diff, and the overview becomes a documentation generator
-*on command* rather than by default.
+**Open decision, deferred to V2 — where do user edits live?** Notebook metadata
+means they travel with the file when shared, but the overview then writes to the
+notebook, breaking §6.6. A sidecar keyed on notebook path keeps it read-only but
+does not travel — and introduces a file this app has never written, which is a
+larger change than it looks. Lean: sidecar, plus an explicit **"write these as
+markdown headings"** action routed through a normal agent turn, landing as a
+reviewable, undoable diff.
 
 ---
 
@@ -416,22 +467,55 @@ Real touchpoints, not hand-waving:
 
 ---
 
-## 9. Risks and open questions
+## 9. Assumptions this document makes
+
+Surfaced deliberately: these were choices made while writing, not findings, and
+each one could be wrong.
+
+1. **"Roadmap" means a linear spine of blocks.** The user's word was "roadmap";
+   it was read as a pipeline. It could equally have meant a milestone/progress
+   view or a mind-map. §1's navigation framing supports the spine reading, but
+   it was an interpretation.
+2. **The block, not the cell, is the unit.** A per-cell minimap (concept B) is a
+   coherent alternative that needs no segmentation at all — and segmentation is
+   the hardest and least reliable part of the design.
+3. **Document order is the display order.** The spine reads top-to-bottom in
+   document order. §9.5 questions whether that stays honest when execution order
+   contradicts it.
+4. **The panel is a third side panel.** The app already has the agent composer
+   and the turn-scope panel. Where this one lives — a tab beside them, an
+   overlay, a separate mode — was never asked, and on a laptop it decides
+   whether the feature is usable at all.
+5. **`plot_tuning/discovery.py` is reusable for the DAG.** Verified in part: it
+   records dependency edges separately from knob candidacy (`discovery.py:475`),
+   so its aggressive rejection logic applies to offering a control, not to the
+   edge. The graph half looks genuinely reusable; that it generalizes beyond the
+   plot-cell case it was written for is still an assumption.
+6. **A single active notebook.** True today (the app keeps one in process
+   memory), so no cross-notebook or multi-user concerns are considered.
+7. **Segmentation quality is the make-or-break.** Everything downstream — names,
+   jump targets, state rollup — inherits the boundaries. This is asserted, not
+   measured, and it is the first thing a prototype should test.
+
+---
+
+## 10. Risks and open questions
 
 1. **Stage segmentation is subjective.** Two models, two answers; the user
    disagrees with both. Mitigation in §7.3: segments are adjustable and manual
    edits are sticky. Headings, when present, win over inference.
 2. **Where user edits to the map live** — notebook metadata (travels, but
    writes to the file) versus a sidecar (read-only, does not travel). Leaning
-   sidecar; see §7.3. This is the main undecided question.
+   sidecar; see §7.3. **Deferred to V2**, since V1 stores nothing.
 3. **Truncation.** Big notebooks exceed a single pass; needs a chunking story
    (CodeWiki/Code2UML are the references for hierarchical context engineering).
    §7.2 sets a ceiling but not the chunking strategy.
-4. **Outputs in the prompt.** Charts are the strongest semantic signal a
-   notebook has, and this app renders outputs in a `sandbox=""` iframe for good
-   reason (`NotebookCell.tsx`). §7.2 defaults to excluding them on cost and
-   privacy grounds; whether an opt-in is worth the complexity is open.
-5. **Does the roadmap metaphor survive a genuinely non-linear notebook?** If
+4. ~~**Outputs in the prompt.**~~ **Closed** — outputs are out of scope
+   entirely (§1). The cost and privacy arguments in §7.2 no longer need to be
+   made; the loss is the error-in-file signal.
+5. **Does the roadmap metaphor survive a genuinely non-linear notebook?**
+   Sharpened by the V1 contiguity decision (§7.3): a block is a cell range, so a
+   cell added later to an earlier block renders in the wrong place. If
    execution order contradicts document order, a linear spine may lie. The
    honest fallback is B (the DAG). Worth prototyping against a real messy
    notebook before committing.
@@ -440,15 +524,33 @@ Real touchpoints, not hand-waving:
 
 ---
 
-## 10. Suggested first slice
+## 11. Suggested first slice
 
-A **Tier 0+1 only, zero-AI overview panel**: sections from markdown headings
-where they exist, otherwise segmented at milestone calls; per-section artifact
-chips (chart / table / error), state chips (never-run / out-of-order / risky),
-and click-to-scroll. Ship that, use it on real notebooks, and *then* add the
-Tier-2 naming pass on top of a structure that is already proven useful — because
-if the deterministic skeleton is not useful, no amount of generated prose on top
-of it will be.
+A **Tier 0+1 only, zero-AI panel**: contiguous blocks from markdown headings
+where they exist and from import-kind + milestone calls where they do not (§4);
+a state chip per block (never-run / out-of-order / risky); click-to-jump through
+the existing `focusRequest` path. Read-only, no editing, no outputs, no model.
+
+Ship that, use it on real notebooks of all three kinds, and *then* add the
+Tier-2 naming pass — because if the deterministic skeleton is not useful, no
+amount of generated prose on top of it will be.
+
+**The honest risk in this ordering.** With outputs cut and editing deferred, V1
+is close to what a good outline already does, and its one differentiator —
+naming blocks in a notebook with no headings (§3) — is precisely the Tier-2
+part that V1 omits. On an exploratory or simulation notebook with no markdown,
+V1 falls back to import-kind heuristics whose vocabulary §4 admits is weak.
+So V1 may under-deliver on exactly the notebooks that motivated the feature.
+Two ways to answer that, and it is a real choice:
+
+- **Ship V1 as scoped** and accept it is a navigation improvement rather than a
+  new capability, treating it as the substrate Tier 2 lands on.
+- **Pull Tier-2 naming into V1** and cut something else instead (the DAG tab,
+  the dataflow edges). Naming is the differentiator; the wires are the part
+  prior art already does well.
+
+Recommendation: the second, if the goal is to see whether the idea is good.
+The first, if the goal is to land something safe.
 
 ---
 
