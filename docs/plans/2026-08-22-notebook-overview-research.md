@@ -10,6 +10,9 @@ answers one question: **has anyone built "an overview of the notebook that looks
 like a roadmap", and what did they learn?** It ends with the gap worth building
 into and a recommended first slice — but it does not commit to a design.
 
+**Start at §12** for the consolidated statement of what the panel captures and
+shows — it supersedes anything earlier that contradicts it.
+
 **Scope decided 2026-08-22** (§1): navigation of a large notebook, click a block
 to jump to its cells. The map is built from **code**, segmented and named by the
 model, with markdown headings as annotation rather than structure (§11.1).
@@ -290,9 +293,12 @@ Ordered by cost. The design principle this implies is in §6.
 **Tier 2 — model, one scoped pass over the notebook.**
 
 - Segment into stages and **name them** (works with zero markdown).
-- Classify each stage: load / clean / explore / feature / model / evaluate /
-  export / scratch. (The pipeline-stage taxonomy is well established in the
-  notebook-comprehension literature.)
+- ~~Classify each stage into a fixed taxonomy~~ — **cut in §12.** The
+  load/clean/explore/model/evaluate/export vocabulary is well established in the
+  literature, but it has exactly the domain problem the milestone keywords have
+  (§4, Tier 1): it describes ML pipelines and mislabels simulation and
+  exploratory work. The generated *name* is the label; a forced category on top
+  of it is a chip that is wrong a third of the time.
 - One-line "what this does, in the notebook's own vocabulary" per stage.
 - "What is this notebook for" — the single sentence at the top.
 - Intent/reality divergence, as above.
@@ -704,3 +710,74 @@ this panel cannot afford (§1).
 - Themisto / notebook doc generation — https://arxiv.org/pdf/2104.01002 · https://www.ijcai.org/proceedings/2021/0717.pdf
 - CodeBoarding — https://github.com/CodeBoarding/CodeBoarding · Swark — https://github.com/swark-io/swark
 - Code2UML — https://arxiv.org/pdf/2605.24453 · CodeWiki — https://arxiv.org/pdf/2510.24428 · AI-Guided Exploration of Large-Scale Codebases — https://arxiv.org/pdf/2508.05799
+
+---
+
+## 12. Consolidated — what the panel captures
+
+Written after eight rounds of scope decisions, and **authoritative over anything
+earlier in this document that contradicts it.** Everything the panel shows is
+one of the six fields below. Nothing else is captured.
+
+### 12.1 The unit is a Block
+
+```
+Block
+  range      cells [i..j], contiguous              computed
+  name       a phrase describing what it does      generated
+  state      ok | never-run | out-of-order | risky  computed
+  produces   variables bound here, read later      computed
+  defines    functions, with their call sites      computed
+  marks      markdown headings falling inside      computed
+```
+
+That is the whole model. One generated field, five computed ones.
+
+### 12.2 Two things resolved in this pass
+
+**Variables are text, not wires.** A block says `produces: df, stores`. It does
+not draw an edge. This keeps the rule set consistent — §11.4 already said
+function cross-references render as text so the cut graph view could not return
+through the side door, and variables are the same case. "What does this block
+make" is the single most useful fact about it, and it survives as a label.
+
+**The fixed stage taxonomy is cut** (was §4, Tier 2). Classifying blocks into
+load / clean / explore / model / evaluate / export reproduces exactly the domain
+problem that sank the milestone keyword lists: it fits ML pipelines and mislabels
+simulation and exploratory work — two of the three notebook kinds in scope. The
+generated name already says what the block does, in the notebook's own terms. A
+category chip on top of it adds a second claim that is wrong often enough to
+cost trust, and buys nothing navigation needs.
+
+### 12.3 Three layers, three independent degradations
+
+| Layer | Source | Absent when |
+|---|---|---|
+| Blocks (spine) | model, from code | never — always present |
+| Markdown marks | headings in range | notebook has no headings |
+| Function annotations | `def`s + call sites | notebook defines no functions |
+
+Each layer disappears cleanly without affecting the others. The honest catch,
+worth keeping in view: **markdown and functions go missing from the same
+notebooks** — large exploratory analyses of the kind that motivated the feature.
+There, the generated name carries the map alone. That is the case a prototype
+must be pointed at (§9.7).
+
+### 12.4 Provenance is visible
+
+One generated field and five computed ones, and the interface must say which is
+which — dotted underline on the name, plain text everywhere else (§6.2). Every
+name cites the cells it came from, so it is checkable in one click. This is what
+makes a wrong name a correctable annoyance rather than a reason to distrust the
+panel.
+
+### 12.5 Not captured, and why
+
+| Not captured | Why |
+|---|---|
+| Outputs — charts, tables, saved errors | Out of scope (§1) |
+| Dataflow wires / graph view | Cut from V1 (§11); text labels instead |
+| Dead-end cells | Cleanup, not navigation (§1) |
+| Intent vs. reality divergence | Comprehension, not navigation — but §11.1's marks surface it free |
+| Block category / stage taxonomy | Cut in §12.2 |
+| Cross-notebook or project-level views | One active notebook (§9.6) |
