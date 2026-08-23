@@ -2,6 +2,17 @@ import { ShieldAlert } from "lucide-react";
 import { useEffect, useRef } from "react";
 import type { ExecutionAttempt, ExecutionOperation } from "../api/client";
 
+// Who asked for the run, in the words the person deciding needs. A run a model
+// asked for is the case this dialog now has to cover, and it read exactly like
+// one the person started themselves — leaving them to approve a cell with no
+// idea the request came from a client they cannot see. The kind is already on
+// the operation; it just was not said out loud. Every other kind keeps the
+// wording it had.
+function askedFor(kind: string, cellNumber: number): string {
+  if (kind === "mcp") return `A connected client asked to run cell ${cellNumber}. It was paused for you to decide.`;
+  return `Cell ${cellNumber} was paused before running.`;
+}
+
 export default function RiskyExecutionDialog({ operation, attempt, busy, onDecision }: { operation: ExecutionOperation; attempt: ExecutionAttempt; busy: boolean; onDecision: (decision: "approve" | "skip" | "cancel") => void }) {
   // Everything a decision has to carry: the operation, where it is, and which
   // attempt is asking. Deliberately not "has a parent turn" — approve and skip
@@ -29,7 +40,7 @@ export default function RiskyExecutionDialog({ operation, attempt, busy, onDecis
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   };
   return <section ref={dialogRef} tabIndex={-1} className="risk-dialog" role="alertdialog" aria-modal="true" aria-labelledby="risk-title" aria-describedby="risk-description" onKeyDown={handleKeyDown}>
-    <div className="risk-title"><ShieldAlert /><div><h3 id="risk-title">Execution needs approval</h3><p id="risk-description">Cell {attempt.cellIndex + 1} was paused before running.</p></div></div>
+    <div className="risk-title"><ShieldAlert /><div><h3 id="risk-title">Execution needs approval</h3><p id="risk-description">{askedFor(operation.kind, attempt.cellIndex + 1)}</p></div></div>
     <ul>{attempt.risk.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
     <pre className="risk-source" aria-label={`Source preview for cell ${attempt.cellIndex + 1}`}>{attempt.sourcePreview || "Source preview unavailable"}</pre>
     {attempt.risk.matchedPatterns.length > 0 && <code>{attempt.risk.matchedPatterns.join(", ")}</code>}

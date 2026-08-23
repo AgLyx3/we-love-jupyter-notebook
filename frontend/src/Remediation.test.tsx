@@ -651,6 +651,22 @@ describe("remediation behaviors", () => {
     expect(decide).toHaveBeenCalledWith("approve");
   });
 
+  it("says a connected client asked for the run, not just that a cell paused", () => {
+    // The reason the browser tab exists. Reading identically to a run the
+    // person started themselves left them approving a cell with no idea the
+    // request came from a client they cannot see.
+    const decide = vi.fn();
+    const base = { ...operation.attempts[0], state: "awaiting_approval", risk: { level: "confirm", reasons: ["Risk"], matchedPatterns: ["pattern"] } };
+    const model = { ...operation, kind: "mcp", parentTurnId: null, state: "awaiting_approval", attempts: [base] };
+
+    const view = render(<RiskyExecutionDialog operation={model} attempt={base} busy={false} onDecision={decide} />);
+    expect(screen.getByRole("alertdialog")).toHaveAccessibleDescription(/A connected client asked to run cell 1/);
+
+    // A turn's downstream cell is not a client's request, and still reads as it did.
+    view.rerender(<RiskyExecutionDialog operation={{ ...model, kind: "agent_downstream", parentTurnId: "turn-1" }} attempt={base} busy={false} onDecision={decide} />);
+    expect(screen.getByRole("alertdialog")).toHaveAccessibleDescription("Cell 1 was paused before running.");
+  });
+
   it("offers a cancel control for a model-initiated run in flight", () => {
     // A run with no parent turn is one a person can stop directly, whether it
     // was their click or a tool call that started it.
