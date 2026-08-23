@@ -598,6 +598,44 @@ def test_accepting_an_operation_reports_it_as_kept(notebook_payload):
     assert "not yet reviewed" not in memory
 
 
+def test_undone_diff_keeps_content_lines_that_look_like_diff_headers(notebook_payload):
+    # Regression: the header strip was a prefix test, so a removed source line
+    # of "---" arrived as "----" and was dropped, along with "--" SQL comments
+    # and YAML front matter. On an UNDONE operation the diff is the only
+    # surviving copy of the content, so the row did not just render oddly — it
+    # was gone, and the feed read as though that line had never changed.
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(
+        notebook_payload(sources={"editable": "alpha = 1\n--- legacy marker\nomega = 2\n"})
+    )
+    scopes = TurnScopeService(documents)
+    recorder = _RecordingFakeAdapter([
+        FakeAttempt(edits={"editable/cell_editable.py": "alpha = 1\nomega = 2\n"}),
+        FakeAttempt(),
+    ])
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=recorder, timeout=2,
+    )
+    scopes.add("editable", editable=True)
+    first = turns.start(
+        prompt="drop the marker", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    applied = turns.get(first.turn_id)
+    turns.reject_operations(
+        first.turn_id, [op.operation_id for op in applied.operations],
+        session_id=applied.session_id,
+        expected_revision=applied.applied_revision,
+    )
+
+    memory = _memory_of_next_turn(documents, scopes, turns, recorder)
+    assert "STATUS: UNDONE by the user" in memory
+    # The removed line survives as a diff row (the renderer re-spaces the marker).
+    assert "- --- legacy marker" in memory
+    # And it is still counted as a removal, not silently absent.
+    assert "removed 1 line" in memory
+
+
 def test_partly_undone_cell_reports_both_outcomes_under_one_header(notebook_payload):
     # The failure this guards: one verdict per cell. Rounding a half-rejected
     # cell to KEPT tells the agent its rejected code is live.

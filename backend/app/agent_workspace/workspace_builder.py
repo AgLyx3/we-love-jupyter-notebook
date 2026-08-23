@@ -65,14 +65,24 @@ def _prompt_lead(prompt: str) -> tuple[str, str]:
 
 
 def _diff_body(operation: MemoryOperation) -> list[str]:
-    return [
-        line for line in difflib.unified_diff(
-            operation.previous_source.splitlines(),
-            operation.next_source.splitlines(),
-            lineterm="", n=2,
-        )
-        if not line.startswith(("---", "+++", "@@"))
-    ]
+    """The diff rows only, with unified_diff's own headers removed.
+
+    The two file headers are dropped by position, not by prefix. A removed line
+    is rendered "-" + itself, so a source line of "---" arrives as "----" and a
+    prefix filter eats it — as does "--" for a SQL comment or YAML front matter,
+    and "++" on the added side. For an UNDONE operation this diff is the only
+    surviving copy of the content, so a silently dropped row is content loss,
+    and it reads as "nothing changed here" rather than as an error.
+
+    "@@" stays a prefix test: a content line only ever reaches here with a
+    leading "-", "+" or " ", so it cannot collide with a hunk header.
+    """
+    rows = difflib.unified_diff(
+        operation.previous_source.splitlines(),
+        operation.next_source.splitlines(),
+        lineterm="", n=2,
+    )
+    return [line for line in list(rows)[2:] if not line.startswith("@@")]
 
 
 def _describe(operation: MemoryOperation, body: list[str]) -> str:
