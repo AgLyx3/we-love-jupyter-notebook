@@ -431,10 +431,12 @@ body.marquee-active iframe { pointer-events: none; }
 /* B12: classic -/+ line markers over red/green row fills. The marker is an
    absolutely positioned ::before inside the padding every .cm-line carries, so
    nothing reflows and CodeMirror's own coordinate maths is untouched. */
-.cm-diff-added-line { background: color-mix(in srgb, var(--secondary) 18%, transparent); box-shadow: inset 3px 0 0 var(--secondary); }
-.cm-diff-added-line::before { content: "+"; position: absolute; left: 6px; color: var(--secondary); font-weight: 500; }
-.cm-diff-removed-line { position: relative; background: color-mix(in srgb, var(--error) 18%, transparent); color: var(--on-surface); box-shadow: inset 3px 0 0 var(--error); padding: 0 10px 0 18px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: inherit; text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--error) 60%, transparent); }
-.cm-diff-removed-line::before { content: "-"; position: absolute; left: 6px; color: var(--error); font-weight: 500; text-decoration: none; }
+/* `.cm-editor` on the front so these beat the active-line highlight the editor
+   theme paints; a changed line has to read as changed even under the cursor. */
+.cm-editor .cm-line.cm-diff-added-line { background: color-mix(in srgb, var(--secondary) 24%, transparent); box-shadow: inset 3px 0 0 var(--secondary); }
+.cm-editor .cm-line.cm-diff-added-line::before { content: "+"; position: absolute; left: 5px; color: var(--secondary); font-weight: 500; }
+.cm-diff-removed-line { position: relative; background: color-mix(in srgb, var(--error) 20%, transparent); color: var(--on-surface); box-shadow: inset 3px 0 0 var(--error); padding: 0 10px 0 18px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: inherit; text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--error) 60%, transparent); }
+.cm-diff-removed-line::before { content: "-"; position: absolute; left: 5px; color: var(--error); font-weight: 500; text-decoration: none; }
 
 /* ------------------------------------------------------------- agent panel */
 .agent-panel { min-width: 0; background: var(--surface-container); border-left: 1px solid var(--outline-variant); display: flex; flex-direction: column; overflow: hidden; }
