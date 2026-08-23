@@ -311,32 +311,76 @@ four at a time, took **76 seconds** — far under the budget, and enough headroo
 that `--repeat 5` across everything would still finish in about three minutes.
 
 The first run with repeats immediately produced a 1/2: `add-a-cell` passed one
-attempt and failed the other. Not the tools — the client exited 1. Six further
-runs at higher contention (six concurrent, against the four that failed) all
-passed with an identical tool sequence, so parallelism is not the cause. The
-failure is **unexplained**, not diagnosed away.
+attempt and failed the other. Not the tools — the client exited 1.
 
-What it did expose was a hole in the harness: the client exited non-zero having
-written nothing to stderr, and only stderr was kept, so the stream-json
-transcript on stdout — where the client reports its own errors — was discarded
-at the moment it was wanted. Now retained. The suite existed to avoid recording
-that something went wrong without recording what, and was doing it.
+It took two more rounds to explain, and the explanation was the harness's own.
+The client exited non-zero having written nothing to stderr, and only stderr
+was kept, so the stream-json transcript on stdout — where the client reports
+its own errors — was discarded at exactly the moment it was wanted. Keeping it
+produced the answer on the next failure:
 
-### 8.5 Open
+```
+{"is_error": true, "duration_api_ms": 0, "num_turns": 1,
+ "session_id": "<the harness's own session id>", "total_cost_usd": 0, ...}
+```
 
-**`run_all` says nothing about the cells it skipped.** On an error the state is
-`failed`, the note is `"Cell execution failed"`, and the cells that never ran
-are dropped from the result entirely. The risky-cell path explicitly says later
-cells did not run; this path does not. A model reading that result could
-reasonably conclude the notebook is shorter than it is, or that everything ran.
-Pinned as current behaviour with the gap named, rather than changed while
-adding tests.
+No API call, no cost, one turn, and the *parent's* session id. A nested
+`claude` inherits the environment it was launched from, `CLAUDE_CODE_SESSION_ID`
+included, so every run in the suite was reusing the identity of the session
+running the suite — and concurrent runs sharing one identity collide. That is
+why it presented as a flake: it depended on which two runs happened to overlap.
 
-**Nothing measures frugality on writes.** Across six runs `add-a-cell` used the
-same sequence — open, insert, run_cell, run_all, save — running the notebook
-twice to check one added cell. Harmless here, not harmless on a notebook whose
-cells are expensive.
+The child's environment now has the session-identity variables removed, and
+authentication and endpoint configuration left alone. The exact case that
+failed 0/2 passes 4/4 at four concurrent.
+
+Worth stating plainly, because the first two reports of this were wrong: it was
+called unexplained twice, and once ruled "not parallelism" on the strength of
+six passing runs. Six passes did not mean the cause was absent; it meant the
+collision needed a particular overlap. The evidence that settled it came from
+recording the failure properly, not from re-running until it behaved.
+
+### 8.5 Closed since, and still open
+
+**`run_all` now says what it did (fixed).** It used to report `"Cell execution
+failed"` and drop the cells that never ran from the result, leaving them
+indistinguishable from a notebook that is simply shorter. It now reads:
+
+> Cell 'cell1' failed — its outputs carry the traceback. The run stopped there,
+> so any later cells did not run — only the cells listed here were attempted.
+
+The operation record cannot tell a run-all from a run-cell — its `kind` says
+who started the run, not how much it covered — so the run tools pass that down.
+A single-cell run deliberately says nothing about later cells: inventing a
+truncation that did not happen is its own bug. Cancellation gets the same
+sentence, and a specific message (a dead kernel, an output limit) is kept where
+the generic one is dropped rather than printed twice.
+
+**Frugality is measured now, and the answer was reassuring.**
+`frugal-verification` fails a run that reaches for `run_all` to check one added
+cell. It passes 2/2 and 3/3 with exactly the two `run_cell` calls the new
+cell's dependency requires — so the tools support the frugal path, and the
+waste seen in `add-a-cell` (which still reports `ran_all=True` every run,
+without gating on it) appears only when nothing signals that running is
+expensive.
 
 **Still one model.** Repeats separate a lucky sample from a stable one; they do
 not say whether a tool description survives a smaller model. That remains the
 next real gap.
+
+### 8.6 The failures that are not this branch's
+
+Three process-group tests fail intermittently in this sandbox, and the set
+changes between runs — one in the first full run, three in the second, a
+different three in the third. Run strictly alone they still fail sometimes.
+
+Measured against clean `origin/main` in a separate worktree, the flakiest of
+them, `test_process_runner_timeout_cleans_process_group`, passes 4 of 6 — the
+same rate as on this branch. `test_terminate_process_groups_kills_sigterm_
+ignoring_descendant` fails on `main` every time. What they have in common is
+waiting for a process group to disappear after SIGKILL, which this sandbox does
+not do promptly under load.
+
+Recorded because "known flaky" is a claim that decays into cover for real
+breakage unless someone has actually checked. This is what checking it looked
+like.

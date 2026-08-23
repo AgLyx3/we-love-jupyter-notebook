@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -402,6 +403,30 @@ TASKS: list[Task] = [
 # --- running -----------------------------------------------------------------
 
 
+# Variables that identify the session the harness itself is running in. A
+# nested `claude` inherits the parent's environment, so without this every eval
+# run reuses the parent's session identity — observed directly: a failed run
+# whose result event carried the *harness's* session_id, with num_turns 1,
+# duration_api_ms 0 and no cost, having made no API call at all. Concurrent
+# runs sharing one identity collide, which is why it looked like a flake.
+#
+# Only identity is removed. Authentication and endpoint configuration are left
+# alone, or the child cannot run at all.
+SESSION_SCOPED_VARS = (
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_REMOTE_SESSION_ID",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_PID",
+)
+
+
+def child_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    for name in SESSION_SCOPED_VARS:
+        environment.pop(name, None)
+    return environment
+
+
 def _last_events(stdout: str, keep: int = 3) -> str:
     """The tail of a stream-json transcript, for a run that exited non-zero.
 
@@ -477,6 +502,7 @@ def run_task(task: Task, keep: Path | None = None) -> Run:
                     "--output-format", "stream-json", "--verbose",
                 ],
                 cwd=workspace, capture_output=True, text=True,
+                env=child_environment(),
                 timeout=TASK_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL, check=False,
             )
         except subprocess.TimeoutExpired:
