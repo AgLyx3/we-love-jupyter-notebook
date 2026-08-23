@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Cell Under Review</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "surface-container-highest": "#e1e2e8",
+                    "background": "#f8f9ff",
+                    "tertiary-fixed-dim": "#ffb874",
+                    "error": "#ba1a1a",
+                    "on-secondary-fixed-variant": "#005230",
+                    "primary-fixed-dim": "#9dcaff",
+                    "surface-variant": "#e1e2e8",
+                    "surface-container-low": "#f2f3f9",
+                    "inverse-primary": "#9dcaff",
+                    "surface": "#f8f9ff",
+                    "error-container": "#ffdad6",
+                    "outline": "#717781",
+                    "tertiary-container": "#975600",
+                    "on-tertiary-fixed": "#2d1600",
+                    "on-tertiary-container": "#ffdfc5",
+                    "primary-container": "#1769aa",
+                    "tertiary": "#754100",
+                    "on-background": "#191c20",
+                    "surface-container-lowest": "#ffffff",
+                    "inverse-on-surface": "#eff0f7",
+                    "surface-dim": "#d8dae0",
+                    "on-error": "#ffffff",
+                    "inverse-surface": "#2e3135",
+                    "on-primary-fixed-variant": "#00497c",
+                    "tertiary-fixed": "#ffdcbf",
+                    "surface-container-high": "#e6e8ee",
+                    "on-secondary-fixed": "#002110",
+                    "primary-fixed": "#d1e4ff",
+                    "secondary-fixed": "#a2f4c0",
+                    "on-primary": "#ffffff",
+                    "surface-container": "#eceef4",
+                    "primary": "#005087",
+                    "on-secondary": "#ffffff",
+                    "on-surface-variant": "#414750",
+                    "surface-tint": "#0261a2",
+                    "surface-bright": "#f8f9ff",
+                    "secondary-fixed-dim": "#86d8a5",
+                    "on-error-container": "#93000a",
+                    "on-tertiary-fixed-variant": "#6b3b00",
+                    "on-secondary-container": "#1b7047",
+                    "on-primary-fixed": "#001d36",
+                    "on-tertiary": "#ffffff",
+                    "on-surface": "#191c20",
+                    "on-primary-container": "#d4e6ff",
+                    "secondary-container": "#9ff1bd",
+                    "outline-variant": "#c1c7d2",
+                    "secondary": "#146c43"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {
+                    "xxl": "32px",
+                    "gutter": "12px",
+                    "xl": "24px",
+                    "base": "4px",
+                    "sidebar_width": "260px",
+                    "lg": "16px",
+                    "sm": "8px",
+                    "md": "12px",
+                    "xs": "4px"
+            },
+            "fontFamily": {
+                    "code-base": ["JetBrains Mono"],
+                    "code-sm": ["JetBrains Mono"],
+                    "display": ["Inter"],
+                    "small": ["Inter"],
+                    "base": ["Inter"],
+                    "large": ["Inter"],
+                    "tiny": ["Inter"],
+                    "heading": ["Inter"]
+            },
+            "fontSize": {
+                    "code-base": ["13px", {"lineHeight": "20px", "fontWeight": "400"}],
+                    "code-sm": ["12px", {"lineHeight": "18px", "fontWeight": "400"}],
+                    "display": ["20px", {"lineHeight": "28px", "fontWeight": "600"}],
+                    "small": ["12px", {"lineHeight": "16px", "fontWeight": "400"}],
+                    "base": ["13px", {"lineHeight": "18px", "fontWeight": "400"}],
+                    "large": ["14px", {"lineHeight": "20px", "fontWeight": "500"}],
+                    "tiny": ["11px", {"lineHeight": "14px", "letterSpacing": "0.02em", "fontWeight": "500"}],
+                    "heading": ["16px", {"lineHeight": "24px", "fontWeight": "600"}]
+            }
+          }
+        }
+      }
+    </script>
+<style>
+        /* Custom styles to handle specific exact dimensions and CodeMirror simulation */
+        .cm-gutter {
+            width: 52px;
+            min-width: 52px;
+        }
+        .agent-authored-dotted {
+            text-decoration-line: underline;
+            text-decoration-style: dotted;
+            text-decoration-color: #1769aa; /* primary-container */
+            text-decoration-thickness: 1px;
+            text-underline-offset: 3px;
+        }
+    </style>
+</head>
+<body class="bg-background min-h-screen p-xl flex flex-col items-center justify-start">
+<!-- Container for demonstration -->
+<div class="w-full max-w-4xl flex flex-col gap-md mt-xxl">
+<h2 class="font-heading text-heading text-on-background mb-sm">Notebook Viewer</h2>
+<!-- Cell Under Review Component -->
+<div class="relative flex border border-outline-variant rounded-DEFAULT bg-surface-container-lowest overflow-hidden shadow-sm">
+<!-- Review Accent Strip (Left #1769aa) -->
+<div class="absolute left-0 top-0 bottom-0 w-[2px] bg-primary-container z-20"></div>
+<!-- Left Gutter (52px width) -->
+<div class="cm-gutter flex flex-col items-center bg-surface-container-low border-r border-outline-variant py-xs z-10"><div class="bg-surface-container-highest px-xs rounded-full text-tiny text-on-surface-variant mb-xs">14</div><span class="font-code-sm text-code-sm text-on-surface-variant leading-[28px]">[14]</span><div class="mt-xs" title="Agent Authored"><span class="material-symbols-outlined text-[16px] text-primary-container" style="font-variation-settings: 'FILL' 1;">smart_toy</span></div></div>
+<!-- Main Content Area -->
+<div class="flex-1 flex flex-col min-w-0">
+<!-- Cell Header / Actions Toolbar -->
+<div class="flex items-center justify-between px-md py-[6px] bg-surface border-b border-outline-variant">
+<div class="flex items-center gap-sm">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">history</span>
+<span class="font-small text-small text-on-surface-variant font-medium">Agent diff reviewing...</span>
+</div>
+<!-- Persistent Controls: Keep / Undo -->
+<div class="flex items-center gap-sm min-w-[160px] justify-end">
+<button class="flex items-center justify-center min-w-[28px] h-[28px] px-sm bg-surface-container-lowest border border-error text-error hover:bg-error-container transition-colors rounded-DEFAULT gap-xs"><span class="material-symbols-outlined text-[16px]">undo</span><span class="font-small text-small">Discard</span></button>
+<button class="flex items-center justify-center min-w-[28px] h-[28px] px-sm bg-surface-container-lowest border border-secondary text-secondary hover:bg-secondary-container transition-colors rounded-DEFAULT gap-xs"><span class="material-symbols-outlined text-[16px]">check</span><span class="font-small text-small">Keep</span></button>
+</div>
+</div>
+<!-- Simulated CodeMirror Editor with Inline Diff -->
+<div class="flex-1 overflow-x-auto py-xs bg-surface-container-lowest">
+<!-- Line 1: Unchanged -->
+<div class="flex px-xs hover:bg-surface-container-low">
+<div class="w-[32px] flex-shrink-0 text-right pr-md font-code-sm text-code-sm text-outline select-none">1</div>
+<div class="font-code-base text-code-base text-on-surface whitespace-pre">import pandas as pd</div>
+</div>
+<!-- Line 2: Unchanged -->
+<div class="flex px-xs hover:bg-surface-container-low">
+<div class="w-[32px] flex-shrink-0 text-right pr-md font-code-sm text-code-sm text-outline select-none">2</div>
+<div class="font-code-base text-code-base text-on-surface whitespace-pre">from sklearn.ensemble import RandomForestClassifier</div>
+</div>
+<!-- Line 3: Deletion (Diff Red) -->
+<div class="flex px-xs bg-error-container/30">
+<div class="w-[32px] flex-shrink-0 text-right pr-md font-code-sm text-code-sm text-error/70 select-none">-</div>
+<div class="font-code-base text-code-base text-on-surface whitespace-pre line-through decoration-error/50">model = RandomForestClassifier(n_estimators=100)</div>
+</div>
+<!-- Line 4: Addition (Diff Green) & Agent Generated (Dotted Underline) -->
+<div class="flex px-xs bg-secondary-container/20 border-l-[3px] border-secondary -ml-[3px]">
+<div class="w-[32px] flex-shrink-0 text-right pr-md font-code-sm text-code-sm text-secondary select-none">+</div>
+<!-- Agent generated text gets dotted underline -->
+<div class="font-code-base text-code-base text-on-surface whitespace-pre agent-authored-dotted">model = RandomForestClassifier(n_estimators=500, max_depth=10, random_state=42)</div>
+</div>
+<!-- Line 5: Unchanged -->
+<div class="flex px-xs hover:bg-surface-container-low">
+<div class="w-[32px] flex-shrink-0 text-right pr-md font-code-sm text-code-sm text-outline select-none">5</div>
+<div class="font-code-base text-code-base text-on-surface whitespace-pre">model.fit(X_train, y_train)</div>
+</div>
+<!-- Line 6: Unchanged -->
+<div class="flex px-xs hover:bg-surface-container-low">
+<div class="w-[32px] flex-shrink-0 text-right pr-md font-code-sm text-code-sm text-outline select-none">6</div>
+<div class="font-code-base text-code-base text-on-surface whitespace-pre">predictions = model.predict(X_test)</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</body></html>
