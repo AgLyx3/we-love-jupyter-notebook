@@ -131,7 +131,12 @@ def evaluate(name: str, path: pathlib.Path, use_model: bool, model: str | None) 
             mod = shape(ranges, last, cells)
             mod["problems"] = problems
             mod["seconds"] = round(time.time() - started, 1)
-            mod["names"] = [b["name"] for b in sorted(blocks, key=lambda b: b["start"])]
+            ordered = sorted(blocks, key=lambda b: b["start"])
+            mod["names"] = [b["name"] for b in ordered]
+            # The ranges themselves, not just their shape. Without these the
+            # baseline cannot be compared against — which is the entire reason
+            # for recording it. compare.py reads these.
+            mod["ranges"] = [[b["start"], b["end"]] for b in ordered]
         except Exception as error:
             mod = {"error": f"{type(error).__name__}: {error}",
                    "seconds": round(time.time() - started, 1)}
