@@ -33,6 +33,14 @@ test = [
   # image/png output. The app itself never imports matplotlib — the user's
   # kernel has whatever it has.
   "matplotlib>=3.8,<4",
+  # Test-only, same reason: the render tests replay real pandas, seaborn and
+  # plotly cells, and each of those cases is gated on `pytest.importorskip`.
+  # Without them the four library-idiom cases in test_plot_tuning_render.py
+  # skip and the suite still looks green. pandas is held at 2.x because
+  # seaborn 0.13 is the current release and predates pandas 3.
+  "pandas>=2.2,<3",
+  "seaborn>=0.13,<1",
+  "plotly>=5.18,<7",
 ]
 
 [project.scripts]
