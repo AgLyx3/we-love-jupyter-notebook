@@ -247,7 +247,6 @@ def list_agent_adapters(request: Request) -> dict[str, Any]:
                     adapter, "model_options",
                     ({"value": "default", "label": "Default"},),
                 )),
-                "modes": ["edit", "plan"],
             }
             for agent_id, adapter in available.items()
         ],

@@ -1333,7 +1333,7 @@ def test_agent_adapters_endpoint_reflects_registry():
     body = client.get("/agent-adapters").json()
     assert body["defaultAgent"] == "default"
     assert [a["id"] for a in body["agents"]] == ["default"]
-    assert body["agents"][0]["modes"] == ["edit", "plan"]
+    assert "modes" not in body["agents"][0]
     assert body["agents"][0]["models"][0] == {"value": "default", "label": "Default"}
 
 

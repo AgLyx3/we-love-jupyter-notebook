@@ -13,10 +13,10 @@ const scope: TurnScope = { editableCellIds: ["cell-a"], contextCellIds: [], sess
 const adapters: AgentAdaptersResponse = {
   defaultAgent: "claude",
   agents: [
-    { id: "claude", label: "Claude", modes: ["edit", "plan"], models: [
+    { id: "claude", label: "Claude", models: [
       { value: "default", label: "Default" }, { value: "opus", label: "Opus" },
       { value: "sonnet", label: "Sonnet" }, { value: "haiku", label: "Haiku" }] },
-    { id: "codex", label: "Codex", modes: ["edit", "plan"], models: [
+    { id: "codex", label: "Codex", models: [
       { value: "default", label: "Default" }, { value: "gpt-5.5", label: "GPT-5.5" },
       { value: "gpt-5.4", label: "GPT-5.4" }, { value: "gpt-5.4-mini", label: "GPT-5.4 Mini" }] },
   ],

@@ -6,7 +6,10 @@ export type WriteScope = "blocking" | "trusted";
 export interface TurnOptions { agent: string; model: AgentModel; mode: AgentMode; writeScope?: WriteScope }
 
 export interface AgentModelOption { value: string; label: string }
-export interface AgentInfo { id: string; label: string; models: AgentModelOption[]; modes: AgentMode[] }
+// No `modes`: edit and plan are app-level turn shapes offered for every
+// adapter, not adapter capabilities, so the composer renders them directly
+// rather than round-tripping a constant through the API.
+export interface AgentInfo { id: string; label: string; models: AgentModelOption[] }
 export interface AgentAdaptersResponse { defaultAgent: string; agents: AgentInfo[] }
 
 export interface NotebookCellData {

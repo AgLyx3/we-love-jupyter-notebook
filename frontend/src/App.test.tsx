@@ -25,7 +25,7 @@ function response(value: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } }));
 }
 
-const agentAdapters = { defaultAgent: "default", agents: [{ id: "default", label: "Default", modes: ["edit", "plan"], models: [{ value: "default", label: "Default" }] }] };
+const agentAdapters = { defaultAgent: "default", agents: [{ id: "default", label: "Default", models: [{ value: "default", label: "Default" }] }] };
 
 afterEach(() => vi.restoreAllMocks());
 

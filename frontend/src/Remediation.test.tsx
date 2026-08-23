@@ -25,7 +25,7 @@ const operation: ExecutionOperation = {
   attempts: [{ executionAttemptId: "attempt-1", cellId: "code-1", cellIndex: 0, sourcePreview: "print('preview')", state: "running", risk: { level: "safe", reasons: [], matchedPatterns: [] }, decision: null, outputs: [], outputsTruncated: false, executionCount: null, error: null }], error: null, createdAt: "", completedAt: null,
 };
 const turn = (id: string, state = "completed"): AgentTurn => ({ turnId: id, sessionId: "session-1", baseRevision: 3, prompt: `Prompt ${id}`, agent: "default", editableCellIds: ["code-1"], contextCellIds: [], undoEligible: state === "completed", state, attempts: 1, finalOutput: "Done", appliedRevision: state === "completed" ? 4 : null, executionOperationId: null, changes: [], error: null, createdAt: "", completedAt: state === "completed" ? "" : null });
-const agentAdapters = { defaultAgent: "default", agents: [{ id: "default", label: "Default", modes: ["edit", "plan"], models: [{ value: "default", label: "Default" }] }] };
+const agentAdapters = { defaultAgent: "default", agents: [{ id: "default", label: "Default", models: [{ value: "default", label: "Default" }] }] };
 
 function json(value: unknown, status = 200) { return Promise.resolve(new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } })); }
 function baseFetch(input: RequestInfo | URL, init?: RequestInit) {
