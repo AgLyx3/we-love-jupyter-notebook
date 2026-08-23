@@ -177,7 +177,8 @@ Responsibilities:
 
 Rules:
 
-- Permissions are turn-level, not thread-level.
+- Permissions are turn-level, not thread-level. Turn scope governs the
+  **in-editor CLI turn** and nothing else — see "Two agent surfaces" below.
 - **Isolation constrains write scope, not recall.** A turn may only write to the
   cells frozen into its scope, and that is unchanged. It may still be *told*
   about operations on cells outside that scope: the agent receives a thread
@@ -186,6 +187,31 @@ Rules:
   the intended shape — the agent needs to know what it already tried in this
   notebook, and scoping it to the current turn's cells would make the feed
   forget most of the conversation. See `docs/plans/2026-07-31-agent-thread-memory.md`.
+- **Two agent surfaces; only one of them is a turn.** Turn scope, thread memory,
+  and the operation ledger describe the in-editor CLI chat turn, and the rules
+  in this section should be read that way rather than as statements about every
+  agent that can reach the notebook. There are two:
+  - **In-editor CLI turns** (`AgentTurnService`). Write access is turn-scoped and
+    frozen; every source change lands in the operation ledger; the turn is
+    reviewable and undoable; and its history is what thread memory replays.
+    Model-initiated execution within a turn still passes the risky-cell approval
+    gate.
+  - **The MCP tool surface** (`backend/app/mcp/`). An external client drives the
+    open notebook through the ordinary HTTP routes, so it is bounded by those
+    routes and by the same backend validation, revision guards, and risky-cell
+    approval gate — not by a turn scope, because it creates no turn. It records
+    no ledger operations and therefore contributes no thread-memory entry. This
+    is deliberate: such a client carries its own conversation in its own
+    context, and synthesizing turn-shaped history for edits that were never
+    turns would invent a prompt, a reply and a review outcome that never
+    existed.
+  - Consequence for recall: a write from the MCP surface (or from the plot-tuning
+    panel, or a hand edit in the tab) reaches a later turn's feed only as a
+    derived staleness qualifier on the affected cell — "this cell has changed
+    since, outside this turn's record". The qualifier deliberately names no
+    author, because the check that derives it compares the cell to the ledger and
+    cannot tell these writers apart. `notebook.ipynb` remains authoritative
+    whoever wrote it.
 - A cell mentioned as editable in one turn is not editable in the next turn unless
   explicitly added again — **except** when the intervening turn applied no changes.
 - **No-op scope preservation.** When a turn ends without applying any change (for
@@ -1410,7 +1436,8 @@ mechanisms; the granularity ladder is turn → cell → operation.
   duplicating them would double per-turn memory against the retention budget.
 - **The ledger is what the agent is told.** Thread memory reports each past
   operation's outcome from its ledger state, so review decisions reach the next
-  turn: `accepted` renders as kept, `rejected` as undone (carrying the diff,
+  in-editor CLI turn (the MCP surface writes no operations, so it neither
+  populates the feed nor reads it — see Turn Scope → "Two agent surfaces"): `accepted` renders as kept, `rejected` as undone (carrying the diff,
   since that content exists nowhere else), and `pending` as applied-but-
   unreviewed. `pending` is deliberately not reported as kept — the change is in
   the notebook, but the user has not affirmed it, and saying otherwise invents

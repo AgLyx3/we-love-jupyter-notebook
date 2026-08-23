@@ -237,6 +237,15 @@ the user's intent, and the bulky payload never repeats.
   qualifier *beside* the status rather than as a replacement for it — a hunk can
   be kept and since overwritten, and both facts matter. Suppressing it would be
   its own kind of inference.
+- **`STALE` names no author.** Staleness is derived by comparing the cell to the
+  ledger (`stale_cell_ids()`), which sees a divergence and not who caused it.
+  Several writers reach a cell outside a turn: a person editing in the tab, an
+  MCP client calling `set_cell_source` / `insert_cell` / `delete_cell` through
+  the same HTTP routes, and `TuningApplyService` writing back a tuned plot
+  literal. So the line says the cell *has changed* and points at
+  `notebook.ipynb`; saying "the user edited this by hand" would report a
+  machine's write as a person's, which is the same manufacturing-a-fact error
+  as D21's applied-is-not-kept.
 - **Mixed-status cells are fine.** A cell with two hunks, one kept and one
   undone, renders one header and two status lines. This is history, not a
   verdict — it does not need to reduce to a single status. **Supersedes D7.**
@@ -402,9 +411,34 @@ only the Blocking one would have failed silently. See D23.
 
 ## 8. Known gaps
 
-- ~~**Manual user edits are invisible**~~ — **closed.** It did belong with the
-  ledger's staleness rules: `stale_cell_ids()` derives it, and the feed now
-  carries a `STALE` qualifier (D22).
+- ~~**Edits from outside the turn are invisible**~~ — **closed.**
+  It did belong with the ledger's staleness rules: `stale_cell_ids()` derives
+  it, and the feed now carries a `STALE` qualifier (D22). Note the qualifier is
+  deliberately author-neutral: the same check fires for a hand edit, an MCP
+  `set_cell_source`, and a plot-tuning write-back, and it cannot tell them apart
+  (D29).
+- **The MCP tool surface produces no memory entries — deliberate, not an
+  oversight.** There are now two agent surfaces onto this notebook, and only one
+  of them is a *turn*:
+  - **In-editor CLI chat turns** (`AgentTurnService`) create an `AgentTurn` and
+    per-operation ledger entries. These are what thread memory reads; they are
+    the entries the feed renders.
+  - **The MCP tool surface** (`app/mcp/server.py`) lets an external client drive
+    the open notebook through the ordinary HTTP routes. It creates no
+    `AgentTurn` and no ledger operations, so it contributes nothing to the feed.
+    Its writes are visible to the feed only as a `STALE` qualifier on a prior
+    turn's cells.
+
+  **No code change.** An MCP client already carries its own conversation in its
+  own context — it does not need this feed to recall what it just did, and it is
+  not the party the feed is written for. Synthesizing turn-shaped entries for
+  edits that were never turns would invent history: there is no prompt, no
+  reply, no review outcome, and the feed's whole value rests on those being
+  real (D16, D21). The honest signal for "something else changed this cell" is
+  the one already shipped — `STALE` — and it points at `notebook.ipynb`, which
+  is authoritative regardless of who wrote it. Revisit only if the two surfaces
+  are ever driven by the *same* agent in one session, where the omission would
+  become a genuine amnesia rather than a boundary.
 - **Execution errors are only *automatically* out of scope.** Tracebacks already
   reach the agent today via the `error`-kind attachment
   (`AgentChatPanel.tsx:83`), composed into the prompt by hand. What is missing is
@@ -471,8 +505,11 @@ only the Blocking one would have failed silently. See D23.
 - An accepted operation renders `KEPT`.
 - A cell with one hunk rejected and one kept renders **one** header and both
   status lines, and carries only the rejected hunk's content (D24).
-- A hand-edited cell renders `STALE` *in addition to* its outcome (D22) — including
-  on a turn that failed after applying, which has no outcome to qualify (D28).
+- A cell that diverged from the ledger renders `STALE` *in addition to* its
+  outcome (D22) — including on a turn that failed after applying, which has no
+  outcome to qualify (D28). Covered for both a hand edit and a non-turn write
+  through the ordinary `POST /cells/{id}/source` route, the path an MCP client
+  takes (D29).
 - A Trusted turn's `INSTRUCTIONS.md` carries the same feed as a Blocking one,
   without displacing its structural rules (D23).
 
@@ -573,13 +610,24 @@ unmerged. These supersede or add to the decisions above.
 |---|---|---|---|
 | D11′ | Keep `undone_at`, but as the marker for cells the ledger cannot represent | Delete it as redundant; keep D11's original framing | `undo()` now settles operations to `rejected` and pruning leaves `operations` alone, so undo *is* derivable for covered cells. But retyped/deleted/moved cells get no operations by design, and for those the field is the only record |
 | D21 | Include pending operations, as `APPLIED` rather than `KEPT` | Exclude them (D6); fold them into `KEPT` | `pending` no longer means "undecided proposal" — `APPLIED_STATES = {pending, accepted}`, so the change is already in the notebook. Excluding it empties the feed, since `pending` is where operations rest until the user acts. Folding it into `KEPT` invents an approval. **Supersedes D6** |
-| D22 | Carry `STALE` as a qualifier beside the status | A fourth status value; suppress it | A hunk can be kept *and* since hand-edited; those are two facts, and a single field would have to drop one. Closes the §8 manual-edit gap using `stale_cell_ids()` |
+| D22 | Carry `STALE` as a qualifier beside the status | A fourth status value; suppress it | A hunk can be kept *and* since overwritten; those are two facts, and a single field would have to drop one. Closes the §8 manual-edit gap using `stale_cell_ids()`. Wording is author-neutral — see D29 |
 | D23 | Render memory in both instruction writers | Blocking only; extract one shared writer | `_build_trusted()` is a second `INSTRUCTIONS.md` path. Memory reaching only one fails *silently* — a Trusted turn would just quietly forget the thread. Extracting a shared writer is the better end state but a larger change than this branch should carry |
 | D24 | Split a mixed cell into two entries under one header | One verdict per cell; one entry per hunk | Rounding a half-rejected cell to a single verdict has to be wrong in one direction, and rounding towards `KEPT` tells the agent its rejected code is live. Per-hunk entries were the alternative; per-outcome keeps the common single-outcome rendering unchanged |
 | D26 | Structural adds get their own memory entry, described rather than diffed | Leave them out (they are not in `changes`); synthesise a diff from `""` | Found in review: an add-only Trusted turn rendered as "It made no changes", contradicting its own reply and inviting the agent to add the cell again. Adds carry no before/after pair and the ledger keeps a hash rather than the text, so the entry states what happened and, when rejected, that the content is gone |
 | D27 | Leave the per-turn staleness derivation on the turn-start path as it is | Group `turn.operations` by cell once in `stale_cell_ids` (its inner loop rescans them per cell); cache staleness on the entry | Measured before deciding. A full feed of 10 turns each changing six 60-line cells at ten hunks a cell costs 2.5 ms, 0.9 ms of it in `stale_cell_ids`, against 8 ms for the workspace build the same turn then pays. The rescan is 0.1 ms of that 2.5 ms — the cost is `compose` over the sources, so the obvious fix buys 3%. Caching is ruled out by A5 regardless. Numbers recorded at the call site so the next reader need not re-derive them |
-| D28 | Carry `STALE` on cancelled and failed turns too | Leave it off, on the grounds that an unsettled turn has no outcome to qualify | Found in review. Staleness is not part of the outcome the cancelled/failed branch deliberately declines to guess at — it is read off the document. `changes` is only populated in the same breath as the apply, so a turn with changes to report did reach the notebook, and `FAILED` carries no "read notebook.ipynb" line of its own, so a hand-edited cell would have gone unflagged with nothing to contradict the feed's account of it |
+| D28 | Carry `STALE` on cancelled and failed turns too | Leave it off, on the grounds that an unsettled turn has no outcome to qualify | Found in review. Staleness is not part of the outcome the cancelled/failed branch deliberately declines to guess at — it is read off the document. `changes` is only populated in the same breath as the apply, so a turn with changes to report did reach the notebook, and `FAILED` carries no "read notebook.ipynb" line of its own, so a diverged cell would have gone unflagged with nothing to contradict the feed's account of it |
 | D25 | Recover undone content by composing the ledger with rejected hunks restored | Store the rejected text on the operation | `compose` is already a pure function of pre-turn source and states, so the content is recomputable. Storing it would duplicate what `changes` already holds and contradict the ledger's "index ranges only, never copies of the line text" rule |
+
+### 10.2 Revisions after rebasing onto the MCP tool surface
+
+The MCP tool surface (`app/mcp/server.py`) and `TuningApplyService` landed on
+`main` while this branch was unmerged. Both write cells outside any agent turn,
+which invalidates an assumption the feed's wording rested on.
+
+| # | Decision | Alternatives considered | Why |
+|---|---|---|---|
+| D29 | `STALE` names no author: "this cell has changed since, outside this turn's record" | Keep "the user has edited this cell by hand since"; branch on the document's `owner` to name the writer | When D22 was written a hand edit was the only way a cell could leave the ledger behind. It no longer is: MCP's `set_cell_source` / `insert_cell` / `delete_cell` go through the same HTTP routes (`owner="manual"`), and `TuningApplyService` writes back tuned literals under its own record id. The old line told the agent a *person* did what a *machine* did — a fabricated fact of exactly the kind D16 and D21 forbid. Branching on `owner` was rejected: it is a free-form string the routes set for their own bookkeeping, not an identity, and the feed does not need the answer — `notebook.ipynb` is authoritative whoever wrote it. Detection was already correct and is unchanged |
+| D30 | MCP-surface edits produce no memory entry — **no code change** | Synthesize turn-shaped entries from MCP writes; keep a second non-turn feed | An MCP client holds its own conversation in its own context, so it is neither the audience for this feed nor amnesiac without it. A synthesized entry would have no prompt, no reply and no review outcome, and the feed's worth rests on those being real. `STALE` already carries the only honest signal — that something outside the turn changed the cell — and points at the authoritative source. Recorded in §8 rather than left implicit so the next reader does not read the omission as an oversight. Revisit if one agent ever drives both surfaces in a session |
 
 ---
 
@@ -589,7 +637,9 @@ All applied to `docs/notebook-agent-editor-spec.md`:
 
 - **Turn Scope → Rules.** Isolation constrains **write scope**, not recall; a
   turn's `INSTRUCTIONS.md` may reference operations on cells outside its frozen
-  scope.
+  scope. Stated against both agent surfaces — turn scope governs the in-editor
+  CLI turn, while the MCP tool surface is bounded by the routes it calls and
+  creates no turn and no memory entry (D30).
 - **Undo And Checkpoints → whole-turn undo.** Undo is a recorded outcome, not
   merely the absence of a checkpoint — the ledger records it for covered cells
   and `undone_at` for the rest, and pruning clears neither.
