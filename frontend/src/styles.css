@@ -40,7 +40,7 @@ button.primary, .primary { background: var(--blue); border-color: var(--blue); c
 .workspace-placeholder svg { width: 34px; color: #9aa6b0; }.workspace-placeholder h2 { margin: 8px 0 0; font-size: 16px; letter-spacing: 0; color: #3d4852; }.workspace-placeholder p { font-size: 13px; margin: 0; }
 .workspace-sidebar { flex: 0 0 240px; width: 240px; border-right: 1px solid #bec7ce; background: #fafbfc; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .workspace-sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 8px 6px 8px 12px; border-bottom: 1px solid #e3e9ec; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #55636d; }
-.workspace-sidebar-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.workspace-sidebar-head button { width: 26px; min-width: 26px; height: 26px; border: 0; background: transparent; }
+.workspace-sidebar-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.workspace-sidebar-head button { width: 28px; min-width: 28px; height: 28px; border: 0; background: transparent; }
 .workspace-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 0; }
 .tree-row { width: 100%; justify-content: flex-start; gap: 5px; height: 26px; border: 0; background: transparent; padding: 0 8px; font-size: 13px; border-radius: 0; white-space: nowrap; overflow: hidden; }
 .tree-row:hover { background: #eaf1f6; border-color: transparent; }.tree-row.notebook.active { background: #dceef8; color: #0b6097; }
@@ -48,6 +48,49 @@ button.primary, .primary { background: var(--blue); border-color: var(--blue); c
 .tree-row.other { display: flex; align-items: center; color: var(--muted); cursor: default; opacity: 0.65; }.tree-row.other:hover { background: transparent; }
 .tree-empty { font-size: 12px; color: var(--muted); padding: 2px 8px; }
 .sidebar-reveal { width: 28px; min-width: 28px; height: 28px; border: 0; background: transparent; margin-right: 2px; }
+
+/* Notebook overview — the Outline tab of the left rail.
+   The name is the one generated field, so it is the only thing here with a
+   dotted underline; every computed fact renders as plain text (spec §7.3). */
+.rail-tabs { display: flex; gap: 2px; min-width: 0; }
+.rail-tabs button { height: 28px; min-width: 28px; padding: 0 9px; border: 0; background: transparent; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #7b8790; border-radius: 4px; }
+.rail-tabs button:hover { background: #eaf1f6; }
+.rail-tabs button.active { background: #dceef8; color: #0b6097; }
+.outline-panel { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 12px; }
+.outline-actions { display: flex; }
+.outline-generate { width: 100%; height: 28px; gap: 6px; font-size: 12px; font-weight: 600; }
+.outline-generate svg { width: 14px; height: 14px; }
+.outline-note { margin: 0; padding: 6px 8px; font-size: 11px; line-height: 1.4; color: #55636d; background: #f2f5f7; border: 1px solid #e0e7eb; border-radius: 5px; }
+.outline-note.stale { color: #7a4610; background: #fdf2e2; border-color: #f0d3a8; }
+.outline-note.error { display: flex; gap: 6px; align-items: flex-start; color: #8c2b23; background: #fff3f2; border-color: #e4a09a; overflow-wrap: anywhere; }
+.outline-note.error svg { width: 13px; flex: 0 0 auto; margin-top: 1px; }
+.outline-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.outline-block { border-radius: 5px; }
+.outline-block:hover { background: #eaf1f6; }
+.outline-block-head { display: flex; align-items: flex-start; }
+.outline-expander { width: 28px; min-width: 28px; height: 28px; border: 0; background: transparent; padding: 0; }
+.outline-expander svg { width: 13px; color: #8a959d; }
+.outline-expander-empty { display: inline-block; width: 28px; min-width: 28px; }
+.outline-jump { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; border: 0; background: transparent; padding: 4px 6px 5px 0; text-align: left; height: auto; border-radius: 0; }
+.outline-jump:hover { background: transparent; border-color: transparent; }
+.outline-name { font-size: 12.5px; line-height: 1.35; color: #26313a; white-space: normal; overflow-wrap: anywhere; }
+/* Provenance, made visible: dotted underline means "a model wrote this". */
+.outline-name.generated { text-decoration: underline dotted #9aa6b0; text-underline-offset: 3px; }
+.outline-name.unnamed { color: #55636d; font-weight: 600; }
+.outline-range { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted); }
+.outline-state { display: inline-flex; align-items: center; gap: 3px; padding: 0 4px; border-radius: 3px; font-weight: 650; }
+.outline-state svg { width: 10px; height: 10px; }
+.outline-state.never-run { color: #55636d; background: #e8edf0; }
+.outline-state.out-of-order { color: #7a4610; background: #fbe6c9; }
+.outline-state.risky { color: #8c2b23; background: #fbe0dd; }
+.outline-detail { padding: 0 8px 7px 28px; display: flex; flex-direction: column; gap: 3px; }
+.outline-detail p { margin: 0; font-size: 11px; line-height: 1.45; color: #55636d; overflow-wrap: anywhere; }
+.outline-detail code { font-size: 10.5px; background: #eef2f4; padding: 0 3px; border-radius: 3px; }
+.outline-label { display: inline-block; margin-right: 5px; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #8a959d; }
+.outline-mark { display: flex; align-items: baseline; gap: 4px; color: #3d4852; }
+.outline-mark svg { width: 10px; flex: 0 0 auto; color: #9aa6b0; }
+/* Hovering a block in the outline marks the cells it covers. */
+.notebook-cell.is-outlined { background: #f3f8fb; box-shadow: inset 3px 0 0 #6aa5cc; }
 .file-picker-save { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid #eef2f4; }.file-picker-save input { flex: 1; min-width: 0; height: 32px; border: 1px solid #aeb8c0; border-radius: 5px; padding: 0 9px; }.file-picker-save button { height: 32px; }
 .file-picker-foot { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid #eef2f4; font-size: 11px; color: var(--muted); }.file-picker-foot button { height: 28px; font-size: 12px; padding: 0 8px; margin-left: auto; }
 .editor-resizer { cursor: col-resize; background: #dbe1e5; transition: background 120ms; touch-action: none; }

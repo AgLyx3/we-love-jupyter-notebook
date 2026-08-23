@@ -17,11 +17,13 @@ from .api.execution_routes import router as execution_router
 from .api.event_routes import router as event_router
 from .api.session_routes import router as session_router
 from .api.tuning_routes import router as tuning_router
+from .api.overview_routes import router as overview_router
 from .agent_turns.service import AgentTurnService
 from .agent_workspace.adapters import ClaudeAgentAdapter, DevelopmentFakeAgentAdapter, FakeAgentAdapter
 from .agent_workspace.models import AgentAdapter
 from .notebook_document.models import NotebookDomainError
 from .notebook_document.service import NotebookDocumentService
+from .notebook_overview.service import NotebookOverviewService
 from .turn_scope.service import TurnScopeService
 from .kernel_execution.service import KernelExecutionService
 from .plot_tuning.apply import TuningApplyService
@@ -80,6 +82,14 @@ def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
         executions=app.state.kernel_execution_service,
         events=app.state.session_event_service,
     )
+    # Shares the agent adapter rather than owning a second route to the CLI:
+    # segmentation is a read-only prompt call on the same class that runs agent
+    # turns (overview spec §4.2). It starts nothing and caches in memory, so it
+    # needs no lifespan shutdown hook.
+    app.state.notebook_overview_service = NotebookOverviewService(
+        documents=app.state.notebook_service,
+        adapter=agent_adapter or FakeAgentAdapter(),
+    )
     app.include_router(notebook_router)
     app.include_router(file_router)
     app.include_router(turn_scope_router)
@@ -88,6 +98,7 @@ def create_app(*, agent_adapter: AgentAdapter | None = None) -> FastAPI:
     app.include_router(event_router)
     app.include_router(session_router)
     app.include_router(tuning_router)
+    app.include_router(overview_router)
 
     @app.get("/health/ready")
     def health_ready() -> dict[str, str]:
