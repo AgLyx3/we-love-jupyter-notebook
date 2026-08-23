@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, File, Folder, PanelLeftClose } from "lucide-react";
+import Icon from "../ui/Icon";
 import { useEffect, useState } from "react";
 import { api, type DirectoryEntry, type NotebookSnapshot } from "../api/client";
 import OutlinePanel from "../notebookOverview/OutlinePanel";
@@ -40,14 +40,14 @@ function TreeChildren({ path, depth, activePath, onOpenNotebook }: { path: strin
   return <>{entries.map((entry) => entry.kind === "directory"
     ? <TreeFolder key={entry.path} path={entry.path} name={entry.name} depth={depth} activePath={activePath} onOpenNotebook={onOpenNotebook} />
     : entry.kind === "notebook"
-    ? <button key={entry.path} className={`tree-row notebook ${activePath === entry.path ? "active" : ""}`} style={pad(depth)} onClick={() => onOpenNotebook(entry.path)} title={entry.name}><File /><span>{entry.name}</span></button>
-    : <span key={entry.path} className="tree-row other" style={pad(depth)} aria-disabled="true" title={`${entry.name} — not a notebook; shown for reference, can't be opened`}><File /><span>{entry.name}</span></span>)}</>;
+    ? <button key={entry.path} className={`tree-row notebook ${activePath === entry.path ? "active" : ""}`} style={pad(depth)} onClick={() => onOpenNotebook(entry.path)} title={entry.name}><Icon name="description" /><span>{entry.name}</span></button>
+    : <span key={entry.path} className="tree-row other" style={pad(depth)} aria-disabled="true" title={`${entry.name} — not a notebook; shown for reference, can't be opened`}><Icon name="description" /><span>{entry.name}</span></span>)}</>;
 }
 
 function TreeFolder({ path, name, depth, activePath, onOpenNotebook }: { path: string; name: string; depth: number; activePath: string | null; onOpenNotebook: (path: string) => void }) {
   const [open, setOpen] = useState(false);
   return <>
-    <button className="tree-row" style={pad(depth)} onClick={() => setOpen((value) => !value)} aria-expanded={open} title={name}>{open ? <ChevronDown /> : <ChevronRight />}<Folder /><span>{name}</span></button>
+    <button className="tree-row" style={pad(depth)} onClick={() => setOpen((value) => !value)} aria-expanded={open} title={name}>{open ? <Icon name="expand_more" /> : <Icon name="chevron_right" />}<Icon name="folder" /><span>{name}</span></button>
     {open && <TreeChildren path={path} depth={depth + 1} activePath={activePath} onOpenNotebook={onOpenNotebook} />}
   </>;
 }
@@ -88,7 +88,7 @@ export default function WorkspaceSidebar({ root, activePath, notebook, tab, onTa
         // With no folder open the rail is all outline. Naming the section beats
         // repeating the filename, which the title bar already shows just above.
         : <span>Outline</span>}
-      <button title="Hide sidebar" aria-label="Hide sidebar" onClick={onCollapse}><PanelLeftClose /></button>
+      <button title="Hide sidebar" aria-label="Hide sidebar" onClick={onCollapse}><Icon name="keyboard_tab_rtl" /></button>
     </header>
     {active === "files" && root
       ? <div className="workspace-tree" aria-label="File tree"><TreeChildren path={root} depth={0} activePath={activePath} onOpenNotebook={onOpenNotebook} /></div>

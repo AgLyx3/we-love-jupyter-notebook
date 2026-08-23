@@ -1,4 +1,4 @@
-import { AlertTriangle, BookOpen, PanelLeft, Save, X } from "lucide-react";
+import Icon from "./ui/Icon";
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from "react";
 import { ApiError, api, connectEvents, type AgentOperation, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type KernelStatus, type NotebookSnapshot, type TuningRecord, type TuningValue, type TurnScope, type WriteScope } from "./api/client";
 import { hasImageOutput } from "./notebook/NotebookCell";
@@ -442,8 +442,8 @@ export default function App() {
   const openPicker = picking ? <FilePicker mode="open" onOpenNotebook={(path, root) => { setPicking(false); void handleOpen(path, root); }} onOpenFolder={(path) => { setPicking(false); handleOpenFolder(path); }} onClose={() => setPicking(false)} /> : null;
 
   if (!notebook && !workspaceFolder) return <div className="app-shell empty-shell">
-    <header className="topbar"><div className="brand"><BookOpen /><strong>Notebook Agent</strong></div><FileToolbar notebook={null} onBrowse={() => setPicking(true)} onSave={handleSave} onSaveAs={() => setSaving(true)} onClose={handleClose} /></header>
-    <main className="upload-state"><BookOpen /><h1>Open a notebook or a folder to begin</h1><p>Open a local <code>.ipynb</code> file, or a project folder to browse and edit its notebooks in place.</p><button className="primary" onClick={() => setPicking(true)}>Open…</button></main>
+    <header className="topbar"><div className="brand"><Icon name="menu_book" /><strong>Notebook Agent</strong></div><FileToolbar notebook={null} onBrowse={() => setPicking(true)} onSave={handleSave} onSaveAs={() => setSaving(true)} onClose={handleClose} /></header>
+    <main className="upload-state"><Icon name="menu_book" /><h1>Open a notebook or a folder to begin</h1><p>Open a local <code>.ipynb</code> file, or a project folder to browse and edit its notebooks in place.</p><button className="primary" onClick={() => setPicking(true)}>Open…</button></main>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
     {openPicker}
   </div>;
@@ -501,8 +501,8 @@ export default function App() {
   };
   return <div className="app-shell">
     <header className="topbar">
-      <div className="brand">{(workspaceFolder || notebook) && sidebarHidden && <button className="sidebar-reveal" title="Show sidebar" aria-label="Show sidebar" onClick={() => setSidebarHidden(false)}><PanelLeft /></button>}<BookOpen /><strong>{notebook?.filename ?? "Workspace"}</strong>{notebook && <span className={notebook.dirty ? "dirty" : ""}>{notebook.dirty ? "Unsaved" : "Clean"}</span>}{notebook && <span>Revision {notebook.revision}</span>}</div>
-      <div className="toolbar-actions">{notebook && <button className={`autosave-toggle ${autoSave ? "on" : ""}`} role="switch" aria-checked={autoSave} aria-label="Auto-save" title={autoSave ? "Auto-save is on — click to turn off" : "Auto-save is off — click to turn on"} onClick={() => setAutoSave((value) => !value)}><Save /> Auto-save {autoSave ? "on" : "off"}</button>}{notebook && <KernelControls status={kernel} mutationDisabled={fileLocked} onRunAll={() => void mutate(() => api.runAll(notebook), { refreshAfter: false }, setOperation)} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} />}<FileToolbar notebook={notebook} saveDisabled={fileLocked || !notebook?.notebookPath || !notebook?.dirty} saveAsDisabled={fileLocked} closeDisabled={fileLocked} onBrowse={() => setPicking(true)} onSave={handleSave} onSaveAs={() => setSaving(true)} onClose={handleClose} /></div>
+      <div className="brand">{(workspaceFolder || notebook) && sidebarHidden && <button className="sidebar-reveal" title="Show sidebar" aria-label="Show sidebar" onClick={() => setSidebarHidden(false)}><Icon name="keyboard_tab" /></button>}<Icon name="menu_book" /><strong>{notebook?.filename ?? "Workspace"}</strong>{notebook && <span className={notebook.dirty ? "dirty" : ""}>{notebook.dirty ? "Unsaved" : "Clean"}</span>}{notebook && <span>Revision {notebook.revision}</span>}</div>
+      <div className="toolbar-actions">{notebook && <button className={`autosave-toggle ${autoSave ? "on" : ""}`} role="switch" aria-checked={autoSave} aria-label="Auto-save" title={autoSave ? "Auto-save is on — click to turn off" : "Auto-save is off — click to turn on"} onClick={() => setAutoSave((value) => !value)}><Icon name="save" /> Auto-save {autoSave ? "on" : "off"}</button>}{notebook && <KernelControls status={kernel} mutationDisabled={fileLocked} onRunAll={() => void mutate(() => api.runAll(notebook), { refreshAfter: false }, setOperation)} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} />}<FileToolbar notebook={notebook} saveDisabled={fileLocked || !notebook?.notebookPath || !notebook?.dirty} saveAsDisabled={fileLocked} closeDisabled={fileLocked} onBrowse={() => setPicking(true)} onSave={handleSave} onSaveAs={() => setSaving(true)} onClose={handleClose} /></div>
     </header>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
     {openPicker}
@@ -611,7 +611,7 @@ export default function App() {
         writeScope={writeScope} onWriteScopeChange={setWriteScope}
         onSelectTurn={setSelectedTurnId} onFocusCell={requestCellFocus} onDropCell={(cellId) => void mutate(() => api.addScope(notebook, cellId, !trustedScope), { refreshAfter: false }, setScope)}
         onDropCells={(cellIds) => { if (cellIds.length) void mutate(async () => { let latest: TurnScope | undefined; for (const cellId of cellIds) latest = await api.addScope(notebook, cellId, !trustedScope); return latest as TurnScope; }, { refreshAfter: false }, setScope); }} />
-      </div> : <main className="workspace-placeholder"><BookOpen /><h2>Select a notebook</h2><p>Choose a <code>.ipynb</code> from the file tree to open it in place.</p></main>}
+      </div> : <main className="workspace-placeholder"><Icon name="menu_book" /><h2>Select a notebook</h2><p>Choose a <code>.ipynb</code> from the file tree to open it in place.</p></main>}
     </div>
   </div>;
 }
@@ -717,5 +717,5 @@ function updateTurnRecord(items: TurnRecord[], turnId: string, update: (turn: Ag
 }
 
 function Notice({ notice, onClose }: { notice: { tone: "error" | "warning"; text: string }; onClose: () => void }) {
-  return <div className={`notice ${notice.tone}`} role="alert"><AlertTriangle /><span>{notice.text}</span><button aria-label="Dismiss message" onClick={onClose}><X /></button></div>;
+  return <div className={`notice ${notice.tone}`} role="alert"><Icon name="warning" /><span>{notice.text}</span><button aria-label="Dismiss message" onClick={onClose}><Icon name="close" /></button></div>;
 }

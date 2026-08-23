@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { MessageSquarePlus, Send, Wand2, X } from "lucide-react";
+import Icon from "../ui/Icon";
 import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
 import { Prec, StateField, type EditorState, type Extension, type Range } from "@codemirror/state";
@@ -50,34 +50,30 @@ class HunkWidget extends WidgetType {
     bar.className = "cm-hunk-actions";
     bar.setAttribute("role", "toolbar");
     bar.setAttribute("aria-label", "Review this change");
-    // Same markup and classes as the cell-header pair (icon + label, shared
+    // Same markup and classes as the cell-header pair (glyph + label, shared
     // .review-action styling), so a Keep here and a Keep there are visibly the
     // same control acting at different scopes.
-    const make = (label: string, variant: string, icon: string, onClick: () => void) => {
+    const make = (label: string, variant: string, glyphName: string, onClick: () => void) => {
       const button = document.createElement("button");
       button.type = "button";
       button.className = `review-action ${variant}`;
       button.disabled = this.disabled;
       button.setAttribute("aria-label", `${label} this change`);
-      const glyph = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      glyph.setAttribute("viewBox", "0 0 24 24");
-      glyph.setAttribute("fill", "none");
-      glyph.setAttribute("stroke", "currentColor");
-      glyph.setAttribute("stroke-width", "2");
-      glyph.setAttribute("stroke-linecap", "round");
-      glyph.setAttribute("stroke-linejoin", "round");
+      // Hand-built rather than rendered, because this lives inside a CodeMirror
+      // block widget — but it is the same span the Icon component emits, down
+      // to the aria-hidden that keeps the ligature out of the accessible name.
+      const glyph = document.createElement("span");
+      glyph.className = "material-symbols-outlined";
       glyph.setAttribute("aria-hidden", "true");
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      path.setAttribute("d", icon);
-      glyph.appendChild(path);
+      glyph.setAttribute("translate", "no");
+      glyph.textContent = glyphName;
       button.appendChild(glyph);
       button.appendChild(document.createTextNode(label));
       button.addEventListener("click", (event) => { event.preventDefault(); onClick(); });
       bar.appendChild(button);
     };
-    // lucide "check" and "rotate-ccw", matching the header icons.
-    make("Keep", "keep", "M20 6 9 17l-5-5", () => this.onKeep(this.overlay.operationId));
-    make("Undo", "undo", "M3 7v6h6M21 17a9 9 0 0 0-15-6.7L3 13", () => this.onUndo(this.overlay.operationId));
+    make("Keep", "keep", "check", () => this.onKeep(this.overlay.operationId));
+    make("Undo", "undo", "undo", () => this.onUndo(this.overlay.operationId));
     wrap.appendChild(bar);
     return wrap;
   }
@@ -223,8 +219,8 @@ export default function CellEditor({ value, label, disabled, language, change, h
     {toolbar && !inlineEdit && <div className={`selection-toolbar ${toolbar.above ? "above" : "below"}`} role="toolbar" aria-label="Selection actions"
       style={{ top: toolbar.top, left: toolbar.left }}
       onMouseDown={(event) => event.preventDefault()}>
-      {onAddSelectionToChat && <button type="button" onClick={() => { onAddSelectionToChat(toolbar.selection); setToolbar(null); }}><MessageSquarePlus /> Add to chat</button>}
-      {onInlineEdit && <button type="button" onClick={() => openInlineEdit(toolbar.selection)}><Wand2 /> Edit inline</button>}
+      {onAddSelectionToChat && <button type="button" onClick={() => { onAddSelectionToChat(toolbar.selection); setToolbar(null); }}><Icon name="add_comment" /> Add to chat</button>}
+      {onInlineEdit && <button type="button" onClick={() => openInlineEdit(toolbar.selection)}><Icon name="auto_fix_high" /> Edit inline</button>}
     </div>}
     {inlineEdit && <form className="inline-edit-widget" style={{ top: inlineEdit.top }} aria-label="Inline edit instruction" onSubmit={(event) => {
       event.preventDefault();
@@ -238,8 +234,8 @@ export default function CellEditor({ value, label, disabled, language, change, h
           aria-label="Inline edit instruction"
           onChange={(event) => setInstruction(event.target.value)}
           onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setInlineEdit(null); } }} />
-        <button className="primary" type="submit" disabled={interactionsDisabled || !instruction.trim()} aria-label="Run inline edit"><Send /></button>
-        <button type="button" aria-label="Cancel inline edit" onClick={() => setInlineEdit(null)}><X /></button>
+        <button className="primary" type="submit" disabled={interactionsDisabled || !instruction.trim()} aria-label="Run inline edit"><Icon name="arrow_upward" /></button>
+        <button type="button" aria-label="Cancel inline edit" onClick={() => setInlineEdit(null)}><Icon name="close" /></button>
       </div>
       <small>{inlineEdit.selection.startLine === inlineEdit.selection.endLine ? `Line ${inlineEdit.selection.startLine}` : `Lines ${inlineEdit.selection.startLine}–${inlineEdit.selection.endLine}`} · the agent edits the whole cell, focused on your selection</small>
     </form>}

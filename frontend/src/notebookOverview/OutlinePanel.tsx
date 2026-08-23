@@ -1,4 +1,4 @@
-import { AlertTriangle, ChevronDown, ChevronRight, CircleDashed, Hash, Shuffle, Sparkles } from "lucide-react";
+import Icon from "../ui/Icon";
 import { useEffect, useState } from "react";
 import { api, ApiError, type NotebookSnapshot, type Overview, type OverviewBlock } from "../api/client";
 
@@ -8,10 +8,10 @@ import { api, ApiError, type NotebookSnapshot, type Overview, type OverviewBlock
 // name a correctable annoyance rather than a reason to distrust the panel — and
 // every block cites its cell range, so it is checkable in one click.
 
-const stateLabels: Record<string, { text: string; icon: typeof CircleDashed }> = {
-  "never-run": { text: "never run", icon: CircleDashed },
-  "out-of-order": { text: "ran out of order", icon: Shuffle },
-  risky: { text: "touches files, network or the shell", icon: AlertTriangle },
+const stateLabels: Record<string, { text: string; icon: string }> = {
+  "never-run": { text: "never run", icon: "radio_button_unchecked" },
+  "out-of-order": { text: "ran out of order", icon: "shuffle" },
+  risky: { text: "touches files, network or the shell", icon: "warning" },
 };
 
 const range = (block: OverviewBlock): string =>
@@ -25,7 +25,6 @@ function BlockRow({ block, expanded, onToggle, onJump, onHover }: {
   onHover: (hovering: boolean) => void;
 }) {
   const state = stateLabels[block.state];
-  const StateIcon = state?.icon;
   // Progressive disclosure: blocks by default, details on expand, one level at
   // a time. A block with nothing computed to show gets no expander at all
   // rather than an expander onto an empty box.
@@ -48,7 +47,7 @@ function BlockRow({ block, expanded, onToggle, onJump, onHover }: {
             aria-label={expanded ? "Hide block details" : "Show block details"}
             onClick={onToggle}
           >
-            {expanded ? <ChevronDown /> : <ChevronRight />}
+            {expanded ? <Icon name="expand_more" /> : <Icon name="chevron_right" />}
           </button>
         ) : (
           <span className="outline-expander outline-expander-empty" aria-hidden="true" />
@@ -69,7 +68,7 @@ function BlockRow({ block, expanded, onToggle, onJump, onHover }: {
             {block.name ? range(block) : `${block.end - block.start + 1} cell${block.end === block.start ? "" : "s"}`}
             {state && (
               <span className={`outline-state ${block.state}`} title={state.text}>
-                {StateIcon && <StateIcon />}
+                {state.icon && <Icon name={state.icon} />}
                 {state.text}
               </span>
             )}
@@ -97,7 +96,7 @@ function BlockRow({ block, expanded, onToggle, onJump, onHover }: {
               boundaries disagree with it. Losing one reads as broken. */}
           {block.marks.map((mark, index) => (
             <p key={`${mark}-${index}`} className="outline-mark">
-              <Hash />
+              <Icon name="tag" />
               {mark.replace(/^#+\s*/, "")}
             </p>
           ))}
@@ -178,7 +177,7 @@ export default function OutlinePanel({ notebook, onJump, onHoverBlock }: {
           disabled={generating || !notebook.cells.length}
           title={overview?.generated ? "Build the map again from the current cells" : "Name and group these cells with a model"}
         >
-          <Sparkles />
+          <Icon name="auto_awesome" />
           {generating ? "Building…" : overview?.generated ? "Rebuild map" : "Build map"}
         </button>
       </div>
@@ -196,7 +195,7 @@ export default function OutlinePanel({ notebook, onJump, onHoverBlock }: {
       )}
       {(failure ?? overview?.error) && (
         <p className="outline-note error">
-          <AlertTriangle />
+          <Icon name="warning" />
           {failure ?? overview?.error}
         </p>
       )}

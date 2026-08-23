@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, ChevronRight, MapPin, RotateCcw } from "lucide-react";
+import Icon from "../ui/Icon";
 import { useState } from "react";
 import type { AgentOperation } from "../api/client";
 
@@ -44,7 +44,7 @@ export default function ReviewBar({ origin = "agent", total, reviewed, keptCount
       aria-label={`Go to the first ${what}`}
       onClick={onFirst ?? onNext}
     >
-      <MapPin /> {reviewed} of {total} {what}{total === 1 ? "" : "s"} reviewed
+      <Icon name="location_on" /> {reviewed} of {total} {what}{total === 1 ? "" : "s"} reviewed
     </button>
     {confirming
       ? <div className="review-bar-confirm" role="alertdialog" aria-label="Confirm undo all">
@@ -62,11 +62,11 @@ export default function ReviewBar({ origin = "agent", total, reviewed, keptCount
             allows — a paired ‹ › is self-describing and non-destructive — so
             they carry titles and accessible names instead of visible text. */}
         <span className="review-bar-nav">
-          <button type="button" disabled={disabled} title={`Previous ${what}`} aria-label={`Previous ${what}`} onClick={onPrevious}><ChevronLeft /></button>
-          <button type="button" disabled={disabled} title={`Next ${what}`} aria-label={`Next ${what}`} onClick={onNext}><ChevronRight /></button>
+          <button type="button" disabled={disabled} title={`Previous ${what}`} aria-label={`Previous ${what}`} onClick={onPrevious}><Icon name="chevron_left" /></button>
+          <button type="button" disabled={disabled} title={`Next ${what}`} aria-label={`Next ${what}`} onClick={onNext}><Icon name="chevron_right" /></button>
         </span>
-        <button type="button" disabled={disabled} onClick={onKeepAll}><Check /> Keep all</button>
-        <button type="button" className="review-bar-danger" disabled={disabled || undoableCount === 0} onClick={undoAll}><RotateCcw /> Undo all</button>
+        <button type="button" disabled={disabled} onClick={onKeepAll}><Icon name="check" /> Keep all</button>
+        <button type="button" className="review-bar-danger" disabled={disabled || undoableCount === 0} onClick={undoAll}><Icon name="undo" /> Undo all</button>
       </div>}
   </div>;
 }
