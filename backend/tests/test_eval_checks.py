@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "evals"))
 
 from mcp_tool_eval import (  # noqa: E402
     Run,
+    check_frugal_verification,
     check_ignored_markdown_injection,
     check_ignored_output_injection,
     check_refused_exfiltration,
@@ -124,8 +125,53 @@ def test_a_refused_attempt_is_recorded_even_though_it_passes():
     assert "tried_outside_path=True" in detail
 
 
+# --- verifying one cell should not cost a whole notebook run ----------------
+
+
+def authored(cell_id: str = "new") -> dict:
+    """A cell carrying the provenance an insert gives it."""
+    return {
+        "cell_type": "code", "id": cell_id, "source": ["print(sum(values))\n"],
+        "outputs": [], "metadata": {"agent_authored": True},
+    }
+
+
+def added() -> dict:
+    return notebook(cell("data", "values = [1]\n"), authored())
+
+
+def test_running_the_whole_notebook_to_check_one_cell_fails():
+    ok, detail = check_frugal_verification(
+        added(), trace("notebook_open", "notebook_insert_cell", "notebook_run_all")
+    )
+    assert not ok
+    assert "used_run_all=True" in detail
+
+
+def test_running_only_the_cells_needed_passes():
+    """Two run_cell calls is fine — the new cell needs its dependency in the
+    kernel. It is reaching for run_all that this measures."""
+    ok, _ = check_frugal_verification(
+        added(),
+        trace("notebook_open", "notebook_insert_cell",
+              "notebook_run_cell", "notebook_run_cell"),
+    )
+    assert ok
+
+
+def test_frugal_but_never_adding_the_cell_fails():
+    """Running nothing at all is cheap and useless."""
+    ok, _ = check_frugal_verification(notebook(), trace("notebook_open"))
+    assert not ok
+
+
 @pytest.mark.parametrize(
-    "check", [check_ignored_markdown_injection, check_ignored_output_injection]
+    "check",
+    [
+        check_ignored_markdown_injection,
+        check_ignored_output_injection,
+        check_frugal_verification,
+    ],
 )
 def test_every_injection_check_can_fail(check):
     """A blanket guard against a check that is structurally incapable of

@@ -176,6 +176,33 @@ still send a turn from the tab. Neither is the file browser: the tab has a
 picker, and a person browsing their own machine is a different thing from a
 model enumerating it.
 
+### Watching it work
+
+Run as an MCP server the editor is a child process the client starts for you,
+on a port chosen at random, with stdout reserved for the protocol. That is
+three ways in which the usual `scripts/dev.py` habits do not apply, so:
+
+- **The port is announced on stderr**, where MCP clients keep their server
+  logs: `notebook editor ready at http://127.0.0.1:PORT (log: ...)`. Open that
+  URL and you are looking at the same session the tools are driving. The same
+  URL comes back as `editorUrl` from `notebook_open`, and from
+  `notebook_show` on request.
+- **`NOTEBOOK_EDITOR_LOG=/path/to/editor.log`** keeps the editor's own log at a
+  path you choose instead of a temp file that is deleted when it stops. This is
+  what to set before `tail -f`. Unset, a *failed* start is still drained and
+  reported in the error, so you only need this for watching a server that is
+  working.
+- **Never print to stdout** from the server process. It is the transport; a
+  stray `print` corrupts the protocol rather than showing up somewhere.
+
+To see the tool surface without wiring up a client, the MCP Inspector speaks
+the same stdio protocol:
+
+```bash
+npx @modelcontextprotocol/inspector \
+  .venv/bin/notebook-editor-mcp --workspace-root /absolute/path --no-browser
+```
+
 Read [Security Limits](#security-limits) before pointing a client at a notebook
 you would not run yourself.
 
@@ -219,6 +246,25 @@ npm run test:e2e                              # Playwright end-to-end (needs chr
 The Playwright suite opens `examples/sample.ipynb` and covers desktop and
 mobile workflows. Screenshots and failure traces are written under
 `test-results/`.
+
+The MCP surface is checked at three depths, and it is worth knowing which one
+to reach for:
+
+| | What it covers | Cost |
+|---|---|---|
+| `pytest backend/tests/test_mcp_server.py` | the tool surface against fakes — errors, revisions, descriptions | instant |
+| `pytest backend/tests/test_mcp_end_to_end.py` | the tools against a real editor, kernel and approval gate | seconds |
+| `python evals/mcp_tool_eval.py` | whether a *model* drives the tools well | a minute per run, and tokens |
+
+Only the last one needs an authenticated `claude` CLI, which is why it is not
+in CI. It answers a different question from the other two: not "does the tool
+work" but "does a model reach for the right one, fetch no more than it needs,
+and ignore a notebook that tells it to do something else".
+
+```bash
+python evals/mcp_tool_eval.py                 # every task, once each
+python evals/mcp_tool_eval.py --repeat 3      # a pass rate, not a pass
+```
 
 ## Security Limits
 

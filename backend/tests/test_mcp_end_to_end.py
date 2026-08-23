@@ -311,10 +311,9 @@ def test_run_all_stops_at_a_failing_cell_and_leaves_the_rest_unrun(editor, works
     Everything after the failure genuinely does not run, and this pins that —
     a model that assumed otherwise would report results it never saw.
 
-    Note the shape this asserts: the result lists only the cells that ran, and
-    the note is "Cell execution failed" with no mention of the ones skipped.
-    That is current behaviour, not an endorsement of it — the risky-cell path
-    says "later cells did not run" and this path says nothing.
+    The note has to carry what the cell list cannot: the result contains only
+    the cells that were attempted, so the third one is absent rather than
+    marked, and nothing else would tell a reader it exists.
     """
     server, _ = editor
     root, _ = workspace
@@ -338,6 +337,9 @@ def test_run_all_stops_at_a_failing_cell_and_leaves_the_rest_unrun(editor, works
 
     ran = {cell["cellId"] for cell in result["cells"]}
     assert "cell2" not in ran, "the third cell must not have run"
+
+    assert "'cell1'" in result["note"], "the note names the cell that failed"
+    assert "did not run" in result["note"], "and says the rest was not attempted"
 
 
 def test_a_cell_deleted_through_the_tools_is_gone_from_the_document(editor, workspace):

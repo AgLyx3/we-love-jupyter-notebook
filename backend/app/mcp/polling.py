@@ -36,8 +36,15 @@ def await_execution(
     interval: float = POLL_INTERVAL_SECONDS,
     now: Any = time.monotonic,
     sleep: Any = time.sleep,
+    whole_notebook: bool = False,
 ) -> dict[str, Any]:
-    """Poll one execution to a terminal state and report what happened."""
+    """Poll one execution to a terminal state and report what happened.
+
+    ``whole_notebook`` says a run-all was in flight, which the operation record
+    itself cannot tell us — its ``kind`` distinguishes who started the run, not
+    how much of the notebook it covered. It matters only when the run stops
+    early: for one cell there are no later cells to report on.
+    """
     operation_id = started.get("operationId")
     if not operation_id:
         return {"state": started.get("state", "unknown"), "cells": []}
@@ -56,7 +63,11 @@ def await_execution(
             "GET", f"/execution/{operation_id}", what="Checking the run",
         )
 
-    return _finished(tools, operation, saw_approval_pause=saw_approval_pause)
+    return _finished(
+        tools, operation,
+        saw_approval_pause=saw_approval_pause,
+        whole_notebook=whole_notebook,
+    )
 
 
 def _pending_approval(operation: dict[str, Any]) -> dict[str, Any] | None:
@@ -88,8 +99,52 @@ def _timed_out(operation: dict[str, Any], timeout: float) -> dict[str, Any]:
     }
 
 
+def _stopped_early(operation: dict[str, Any], *, whole_notebook: bool) -> str:
+    """The sentence that says the rest of the notebook did not run.
+
+    A run that stops partway returns only the cells it attempted, so the cells
+    after the failure are absent rather than marked — indistinguishable, to a
+    reader, from a notebook that is simply shorter. The skipped-approval path
+    has always said so; failure and cancellation said nothing.
+    """
+    if not whole_notebook:
+        return ""
+    return (
+        " The run stopped there, so any later cells did not run — only the "
+        "cells listed here were attempted."
+    )
+
+
+def _failing_cell(operation: dict[str, Any]) -> str | None:
+    for attempt in reversed(operation.get("attempts") or []):
+        if attempt.get("state") == "failed":
+            return attempt.get("cellId")
+    return None
+
+
+# The operation-level message when a cell raised. It repeats what naming the
+# cell already says, so it is dropped rather than printed twice; anything more
+# specific — a dead kernel, an output limit — is kept.
+_GENERIC_FAILURE = "cell execution failed"
+
+
+def _failure_note(operation: dict[str, Any]) -> str:
+    """One sentence saying what failed, pointing at where the detail is."""
+    reason = (operation.get("error") or {}).get("message") or ""
+    cell_id = _failing_cell(operation)
+    if cell_id is None:
+        return reason.rstrip(".") + "." if reason else "The run failed; see the cell outputs."
+    if reason and reason.strip().rstrip(".").lower() != _GENERIC_FAILURE:
+        return f"Cell {cell_id!r} failed: {reason.rstrip('.')}."
+    return f"Cell {cell_id!r} failed — its outputs carry the traceback."
+
+
 def _finished(
-    tools: NotebookTools, operation: dict[str, Any], *, saw_approval_pause: bool
+    tools: NotebookTools,
+    operation: dict[str, Any],
+    *,
+    saw_approval_pause: bool,
+    whole_notebook: bool = False,
 ) -> dict[str, Any]:
     cells = []
     for attempt in operation.get("attempts") or []:
@@ -127,7 +182,12 @@ def _finished(
             "A person skipped a cell that needed approval, so the run stopped "
             "there. Later cells did not run."
         )
+    if operation.get("state") == "cancelled":
+        result["note"] = (
+            "The run was cancelled." + _stopped_early(operation, whole_notebook=whole_notebook)
+        )
     if operation.get("state") == "failed":
-        error = operation.get("error") or {}
-        result["note"] = error.get("message") or "The run failed; see the cell outputs."
+        result["note"] = _failure_note(operation) + _stopped_early(
+            operation, whole_notebook=whole_notebook
+        )
     return result

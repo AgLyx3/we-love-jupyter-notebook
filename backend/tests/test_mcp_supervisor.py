@@ -121,3 +121,51 @@ def test_the_child_writes_to_a_file_not_a_pipe():
 
     assert captured.get("stdout") is not sp.PIPE, "a pipe here can block the kernel"
     assert captured.get("stdout") is not None
+
+
+def test_a_named_log_survives_the_editor_stopping(tmp_path, monkeypatch):
+    """The difference between `tail -f` and guessing.
+
+    By default the log is a temp file removed on stop, which is right for a
+    failure — drained and reported — and useless for watching a server that is
+    working. Naming a path keeps it.
+    """
+    from backend.app.mcp.supervisor import LOG_PATH_ENV_VAR
+
+    wanted = tmp_path / "logs" / "editor.log"
+    monkeypatch.setenv(LOG_PATH_ENV_VAR, str(wanted))
+    editor = EditorProcess(startup_timeout=20.0)
+    try:
+        editor.ensure_running()
+    finally:
+        editor.stop()
+    assert wanted.exists(), "the named log outlives the editor"
+    assert wanted.parent.is_dir(), "and its directory is created if missing"
+
+
+def test_an_unnamed_log_is_cleaned_up(monkeypatch):
+    """The default must not litter temp files across a long session."""
+    from backend.app.mcp.supervisor import LOG_PATH_ENV_VAR
+
+    monkeypatch.delenv(LOG_PATH_ENV_VAR, raising=False)
+    editor = EditorProcess(startup_timeout=20.0)
+    editor.ensure_running()
+    log = editor._log
+    assert log is not None and log.exists()
+    editor.stop()
+    assert not log.exists()
+
+
+def test_the_editor_announces_itself_on_stderr(monkeypatch, capfd):
+    """stdout is the MCP transport and has to stay clean, so the one line that
+    makes a randomly chosen port findable goes to stderr, where a client keeps
+    its server logs."""
+    monkeypatch.delenv("NOTEBOOK_EDITOR_LOG", raising=False)
+    editor = EditorProcess(startup_timeout=20.0)
+    try:
+        editor.ensure_running()
+        out, err = capfd.readouterr()
+        assert "notebook editor ready at http://127.0.0.1:" in err
+        assert "notebook editor ready" not in out, "never on the transport"
+    finally:
+        editor.stop()

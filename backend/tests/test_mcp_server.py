@@ -229,6 +229,84 @@ def test_a_skipped_cell_says_later_cells_did_not_run():
     assert result["cells"][0]["decision"] == "skip"
 
 
+def failed_run(**extra):
+    return {
+        "operationId": "op1", "sessionId": "s1", "state": "failed",
+        "currentDocumentRevision": 4,
+        "error": {"message": "Cell execution failed"},
+        "attempts": [
+            {"cellId": "first", "state": "completed", "outputs": []},
+            {"cellId": "second", "state": "failed", "outputs": []},
+        ],
+        **extra,
+    }
+
+
+def finished(operation, **kwargs):
+    return await_execution(
+        FakeTools([]), operation, timeout=10, interval=0, sleep=lambda _s: None, **kwargs
+    )
+
+
+def test_a_failed_run_names_the_cell_that_failed():
+    """"Cell execution failed" does not say which one. The result carries an
+    attempt per cell, so naming it costs nothing and saves a read."""
+    note = finished(failed_run())["note"]
+    assert "'second'" in note
+    assert "traceback" in note, "and points at where the detail actually is"
+
+
+def test_the_generic_message_is_not_repeated_after_naming_the_cell():
+    """"Cell 'second' failed: Cell execution failed" says one thing twice."""
+    assert finished(failed_run())["note"].lower().count("failed") == 1
+
+
+def test_a_specific_failure_message_is_kept():
+    """Dropping the generic message must not drop the informative ones — a
+    kernel death or an output limit says something naming the cell does not."""
+    note = finished(
+        failed_run(error={"message": "The kernel ran out of output buffer"})
+    )["note"]
+    assert "output buffer" in note
+    assert "'second'" in note
+
+
+def test_a_failed_run_all_says_the_later_cells_did_not_run():
+    """The gap this fixes. A run that stops partway returns only the cells it
+    attempted, so the ones after the failure are absent rather than marked —
+    from the outside, indistinguishable from a shorter notebook."""
+    note = finished(failed_run(), whole_notebook=True)["note"]
+    assert "did not run" in note
+    assert [cell["cellId"] for cell in finished(failed_run())["cells"]] == ["first", "second"]
+
+
+def test_a_single_failing_cell_does_not_claim_anything_about_later_cells():
+    """notebook_run_cell ran one cell on purpose. Saying "later cells did not
+    run" there would invent a truncation that never happened."""
+    assert "did not run" not in finished(failed_run())["note"]
+
+
+def test_a_cancelled_run_all_also_says_where_it_stopped():
+    """Cancelling has the same shape as failing: the rest of the notebook is
+    silently missing from the result."""
+    cancelled = {
+        "operationId": "op1", "sessionId": "s1", "state": "cancelled",
+        "currentDocumentRevision": 4,
+        "attempts": [{"cellId": "first", "state": "cancelled"}],
+    }
+    assert "did not run" in finished(cancelled, whole_notebook=True)["note"]
+    assert "did not run" not in finished(cancelled)["note"]
+
+
+def test_a_failure_with_no_failed_attempt_still_reads_sensibly():
+    """A run can fail before any cell does — a dead kernel, a bad revision."""
+    note = finished({
+        "operationId": "op1", "sessionId": "s1", "state": "failed",
+        "error": {"message": "The kernel died"}, "attempts": [],
+    })["note"]
+    assert note.startswith("The kernel died")
+
+
 def test_run_outputs_are_summarised_like_any_other():
     """An image in a run result must not arrive as base64 either."""
     png = "iVBOR" + "C" * 5_000

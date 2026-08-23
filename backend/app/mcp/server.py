@@ -461,7 +461,10 @@ def build_server(
         ),
     )
     def notebook_run_all() -> dict[str, Any]:
-        return _run(tools, "/execution/run-all", what="Running the notebook")
+        return _run(
+            tools, "/execution/run-all",
+            what="Running the notebook", whole_notebook=True,
+        )
 
     @server.tool(
         name="notebook_cancel_run",
@@ -578,13 +581,19 @@ def _summarize_execution(execution: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def _run(tools: NotebookTools, path: str, *, what: str) -> dict[str, Any]:
+def _run(
+    tools: NotebookTools, path: str, *, what: str, whole_notebook: bool = False
+) -> dict[str, Any]:
     """Start a run, then wait for it, reporting an approval pause as it happens."""
     from .polling import await_execution
 
     body = {**tools.state.mutation(), "initiator": "mcp"}
     started = tools.request("POST", path, json_body=body, what=what)
-    return await_execution(tools, started, timeout=EXECUTION_POLL_TIMEOUT_SECONDS)
+    return await_execution(
+        tools, started,
+        timeout=EXECUTION_POLL_TIMEOUT_SECONDS,
+        whole_notebook=whole_notebook,
+    )
 
 
 def main() -> None:  # pragma: no cover - process entry point

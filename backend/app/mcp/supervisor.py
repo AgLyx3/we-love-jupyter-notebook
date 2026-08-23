@@ -37,6 +37,12 @@ IMPORT_ROOT = Path(__file__).resolve().parents[3]
 STARTUP_TIMEOUT_SECONDS = 60.0
 _POLL_SECONDS = 0.1
 
+# Where to keep the editor's log. Unset, it goes to a temp file that is deleted
+# when the editor stops — fine for a failure, which is drained and reported,
+# and useless for watching a working server. Set it to a path and the log stays
+# there, which is the difference between `tail -f` and guessing.
+LOG_PATH_ENV_VAR = "NOTEBOOK_EDITOR_LOG"
+
 
 class EditorStartupError(RuntimeError):
     """The editor process never became ready."""
@@ -71,6 +77,7 @@ class EditorProcess:
         self._process: subprocess.Popen[bytes] | None = None
         self._port: int | None = None
         self._log: Path | None = None
+        self._keep_log = False
         # Reentrant on purpose. A failed start tears itself down while
         # `ensure_running` still holds this, and with a plain Lock that second
         # acquire never returns — the first tool call hangs, and so does every
@@ -127,7 +134,13 @@ class EditorProcess:
         # and blocks the writer forever, wedging the kernel mid-cell.
         # Measured: a cell writing 400 KB to fd 1 never returned. A file has no
         # such limit and still keeps the startup diagnostics readable.
-        log = Path(tempfile.mkstemp(prefix="notebook-editor-", suffix=".log")[1])
+        chosen = os.environ.get(LOG_PATH_ENV_VAR)
+        self._keep_log = bool(chosen)
+        if chosen:
+            log = Path(chosen).expanduser()
+            log.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            log = Path(tempfile.mkstemp(prefix="notebook-editor-", suffix=".log")[1])
         try:
             handle = log.open("wb")
         except OSError as error:
@@ -144,7 +157,7 @@ class EditorProcess:
                     start_new_session=True,
                 )
         except OSError as error:
-            log.unlink(missing_ok=True)
+            self._discard_log(log)
             raise EditorStartupError(f"Could not start the editor: {error}") from error
 
         self._process = process
@@ -155,6 +168,13 @@ class EditorProcess:
         except EditorStartupError:
             self.stop()
             raise
+        # stdout is the MCP transport and must stay clean; stderr is where a
+        # client puts server output in its own logs. One line there is what
+        # makes a randomly chosen port findable at all.
+        print(
+            f"notebook editor ready at http://127.0.0.1:{port} (log: {log})",
+            file=sys.stderr, flush=True,
+        )
 
     def _await_ready(self, process: subprocess.Popen[bytes], port: int) -> None:
         deadline = time.monotonic() + self.startup_timeout
@@ -201,12 +221,15 @@ class EditorProcess:
             self._port = None
             self._log = None
         if process is None:
-            if log is not None:
-                log.unlink(missing_ok=True)
+            self._discard_log(log)
             return
         if process.poll() is None or _group_alive(process.pid):
             terminate_process_groups([process])
-        if log is not None:
+        self._discard_log(log)
+
+    def _discard_log(self, log: Path | None) -> None:
+        """Remove the log unless it is one the operator asked to keep."""
+        if log is not None and not self._keep_log:
             log.unlink(missing_ok=True)
 
     def __enter__(self) -> EditorProcess:
