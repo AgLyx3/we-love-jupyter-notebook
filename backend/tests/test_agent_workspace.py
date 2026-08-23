@@ -141,6 +141,40 @@ def test_collect_trusted_accepts_add_entry_with_new_file(notebook_payload):
         builder.destroy(workspace)
 
 
+def test_trusted_audit_honours_adapter_declared_auxiliary_paths(notebook_payload):
+    # Regression: audit() took auxiliary_paths and audit_trusted() did not, so an
+    # adapter whose CLI writes a declared scratch path worked on every Blocking
+    # turn and failed every Trusted one. Both current adapters declare nothing,
+    # which is the only reason this stayed invisible.
+    builder, workspace = _trusted_workspace(notebook_payload)
+    try:
+        (workspace.root / "scratch").mkdir()
+        (workspace.root / "scratch/state.json").write_text("{}\n", encoding="utf-8")
+        (workspace.root / "agent.log").write_text("noise\n", encoding="utf-8")
+        auditor = WorkspaceAuditor()
+
+        undeclared = auditor.audit_trusted(workspace)
+        assert "undeclared path: scratch" in undeclared
+        assert "undeclared path: scratch/state.json" in undeclared
+        assert "undeclared path: agent.log" in undeclared
+
+        declared = auditor.audit_trusted(
+            workspace, auxiliary_paths=frozenset({"scratch", "agent.log"}),
+        )
+        assert declared == []
+
+        # Declaring one path must not blanket-allow the others.
+        partial = auditor.audit_trusted(workspace, auxiliary_paths=frozenset({"scratch"}))
+        assert partial == ["undeclared path: agent.log"]
+
+        entries = auditor.collect_trusted(
+            workspace, auxiliary_paths=frozenset({"scratch", "agent.log"}),
+        )
+        assert [e.cell_id for e in entries] == ["intro", "editable"]
+    finally:
+        builder.destroy(workspace)
+
+
 def test_collect_trusted_rejects_source_escaping_cells_dir(notebook_payload):
     builder, workspace = _trusted_workspace(notebook_payload)
     try:

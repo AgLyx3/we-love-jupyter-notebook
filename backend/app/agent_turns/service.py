@@ -652,7 +652,9 @@ class AgentTurnService:
                 with self._lock:
                     turn.final_output = result.final_output
                 self._set_state(turn, "validating")
-                entries = self.auditor.collect_trusted(workspace)
+                entries = self.auditor.collect_trusted(
+                    workspace, auxiliary_paths=adapter.auxiliary_paths,
+                )
                 plan = derive_structural_plan(manifest=workspace.manifest, entries=entries)
                 last_violation = None
                 break

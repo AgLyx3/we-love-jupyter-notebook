@@ -76,21 +76,34 @@ class WorkspaceAuditor:
                 violations.append(f"undeclared path: {relative}")
         return violations
 
-    def audit_trusted(self, workspace: AgentWorkspace) -> list[str]:
+    def audit_trusted(
+        self, workspace: AgentWorkspace, *, auxiliary_paths: frozenset[str] = frozenset(),
+    ) -> list[str]:
         """Audit a Trusted workspace: protected files intact; only structure.json
-        and regular files directly under cells/ are writable; bounded file count."""
+        and regular files directly under cells/ are writable; bounded file count.
+
+        ``auxiliary_paths`` means what it means in :meth:`audit` — scratch paths
+        an adapter declares because its CLI writes them. Trusted has to honour
+        the same declarations: an adapter whose paths were accepted on a
+        Blocking turn and rejected on every Trusted one would be a trap laid for
+        whoever adds the third adapter.
+        """
         violations = self._protected_path_violations(workspace)
         root = workspace.root
         cells_dir = (root / "cells").resolve()
-        allowed_top = set(workspace.baseline_hashes) | {"structure.json"}
+        allowed_top = set(workspace.baseline_hashes) | {"structure.json"} | set(auxiliary_paths)
+
+        def declared_auxiliary(relative: str) -> bool:
+            return any(relative == item or relative.startswith(f"{item}/") for item in auxiliary_paths)
+
         cell_file_count = 0
         for path in root.rglob("*"):
             relative = path.relative_to(root).as_posix()
             if path.is_dir() and not path.is_symlink():
-                if relative != "cells":
+                if relative != "cells" and not declared_auxiliary(relative):
                     violations.append(f"undeclared path: {relative}")
                 continue
-            if relative in allowed_top:
+            if relative in allowed_top or declared_auxiliary(relative):
                 continue
             # Any NON-symlink regular file directly under cells/ is a legitimate
             # agent-created source file. Symlinks/hardlinks are caught here or on read.
@@ -107,7 +120,7 @@ class WorkspaceAuditor:
         return violations
 
     def collect_trusted(
-        self, workspace: AgentWorkspace,
+        self, workspace: AgentWorkspace, *, auxiliary_paths: frozenset[str] = frozenset(),
     ) -> list[ReturnedStructureEntry]:
         """Parse the agent-written structure.json and read every referenced
         source through the shared hardened reader. Raises WorkspaceBoundaryError
@@ -115,7 +128,7 @@ class WorkspaceAuditor:
         # Fail before reading any source when the workspace shape is already
         # wrong: an undeclared/symlinked path (e.g. a symlinked cells/ dir) must
         # not let source reads proceed and resolve outside the workspace.
-        audit_violations = self.audit_trusted(workspace)
+        audit_violations = self.audit_trusted(workspace, auxiliary_paths=auxiliary_paths)
         if audit_violations:
             raise WorkspaceBoundaryError(sorted(set(audit_violations)))
         violations: list[str] = []
