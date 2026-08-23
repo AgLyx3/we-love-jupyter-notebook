@@ -33,8 +33,14 @@ function NumberField({ label, value, kind, disabled, className, onChange }: {
   />;
 }
 
-/** One knob: the control §3.3 assigns to its type, and — for the numeric kinds
- *  — the range it moves over, with both ends editable. */
+/** One knob: the control §3.3 assigns to its type.
+ *
+ *  The min/max editors are gone (stitch-diff B8, accepted in §H) — the row is
+ *  now name + value + slider, as the approved design draws it. Widening still
+ *  works, because it was never the bound fields that did it: typing a value
+ *  past an end moves that end out of the way (`widen`), and that is the
+ *  behaviour §3.3 actually rules on. What is lost is setting a bound *without*
+ *  moving the value; `onBoundsChange` stays for the widen path. */
 export default function KnobControl({ knob, value, bounds, disabled, onChange, onBoundsChange, onReset }: {
   knob: TuningKnob; value: TuningValue; bounds: TuningBounds | null; disabled: boolean;
   onChange: (value: TuningValue) => void;
@@ -57,31 +63,21 @@ export default function KnobControl({ knob, value, bounds, disabled, onChange, o
       <code className="knob-name">{knob.name}</code>
       <span className="knob-origin">cell {knob.cellIndex + 1}</span>
       {changed && <button type="button" className="knob-reset" aria-label={`Reset ${knob.name}`} disabled={disabled} onClick={onReset}><Icon name="undo" /></button>}
+      {numeric && bounds && <NumberField className="knob-value" label={knob.name} kind={knob.kind} disabled={disabled}
+        value={typeof value === "number" ? value : 0} onChange={setNumber} />}
     </div>
 
-    {numeric && bounds && <>
-      <div className="knob-slider-row">
-        <input
-          type="range"
-          aria-label={`${knob.name} slider`}
-          disabled={disabled}
-          min={bounds.minimum}
-          max={bounds.maximum}
-          step={step}
-          value={typeof value === "number" ? value : 0}
-          onChange={(event) => setNumber(parseKnobNumber(event.target.value, knob.kind) ?? 0)}
-        />
-        <NumberField className="knob-value" label={knob.name} kind={knob.kind} disabled={disabled}
-          value={typeof value === "number" ? value : 0} onChange={setNumber} />
-      </div>
-      <div className="knob-bounds">
-        <NumberField className="knob-bound" label={`${knob.name} minimum`} kind={knob.kind} disabled={disabled}
-          value={bounds.minimum} onChange={(minimum) => onBoundsChange({ ...bounds, minimum })} />
-        <span className="knob-bounds-gap" aria-hidden="true">to</span>
-        <NumberField className="knob-bound" label={`${knob.name} maximum`} kind={knob.kind} disabled={disabled}
-          value={bounds.maximum} onChange={(maximum) => onBoundsChange({ ...bounds, maximum })} />
-      </div>
-    </>}
+    {numeric && bounds && <input
+      type="range"
+      className="knob-slider"
+      aria-label={`${knob.name} slider`}
+      disabled={disabled}
+      min={bounds.minimum}
+      max={bounds.maximum}
+      step={step}
+      value={typeof value === "number" ? value : 0}
+      onChange={(event) => setNumber(parseKnobNumber(event.target.value, knob.kind) ?? 0)}
+    />}
 
     {knob.kind === "bool" && <label className="knob-toggle">
       <input type="checkbox" aria-label={knob.name} disabled={disabled}

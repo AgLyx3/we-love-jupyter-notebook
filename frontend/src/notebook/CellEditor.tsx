@@ -2,10 +2,53 @@ import { useMemo, useRef, useState } from "react";
 import Icon from "../ui/Icon";
 import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
 import { Prec, StateField, type EditorState, type Extension, type Range } from "@codemirror/state";
 import { Decoration, EditorView, keymap, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { cellDiffRanges, type HunkOverlay } from "./cellDiff";
 import type { CellSelection } from "./selectionEdit";
+import { useTheme } from "../theme";
+
+/* ------------------------------------------------------- the theme boundary
+   CodeMirror carries its own theme, so left alone it and the stylesheet would
+   disagree the moment the app went dark. Rather than pick one of CM's stock
+   themes, both of these are written against the same CSS custom properties the
+   rest of the sheet uses: a token change moves the editor and its surroundings
+   together, and there is exactly one place (`--cm-*` in styles.css) where the
+   editor's colours are decided.
+
+   `dark` is still passed to EditorView.theme because CM branches on it for
+   things a stylesheet cannot reach — selection layers, the drop cursor, and
+   which of its own `&dark`/`&light` rules apply. */
+const editorTheme = (dark: boolean) => EditorView.theme({
+  "&": { color: "var(--on-surface)", backgroundColor: "transparent" },
+  ".cm-content": { caretColor: "var(--on-surface)" },
+  ".cm-gutters": { backgroundColor: "var(--surface-container-low)", color: "var(--outline)", border: "none" },
+  ".cm-activeLine": { backgroundColor: "color-mix(in srgb, var(--primary) 6%, transparent)" },
+  ".cm-activeLineGutter": { backgroundColor: "color-mix(in srgb, var(--primary) 10%, transparent)" },
+  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
+    backgroundColor: "color-mix(in srgb, var(--primary) 26%, transparent)",
+  },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--on-surface)" },
+  ".cm-selectionMatch": { backgroundColor: "color-mix(in srgb, var(--secondary) 20%, transparent)" },
+}, { dark });
+
+// basicSetup registers defaultHighlightStyle as a *fallback*, so a real
+// highlighter takes precedence over it without having to be ordered ahead.
+const codeHighlighting = syntaxHighlighting(HighlightStyle.define([
+  { tag: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment], color: "var(--cm-comment)", fontStyle: "italic" },
+  { tag: [tags.keyword, tags.modifier, tags.controlKeyword, tags.moduleKeyword, tags.self, tags.null], color: "var(--cm-keyword)" },
+  { tag: [tags.string, tags.special(tags.string), tags.regexp], color: "var(--cm-string)" },
+  { tag: [tags.number, tags.integer, tags.float], color: "var(--cm-number)" },
+  { tag: [tags.bool, tags.atom, tags.literal], color: "var(--cm-atom)" },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName), tags.labelName], color: "var(--cm-function)" },
+  { tag: [tags.typeName, tags.className, tags.namespace, tags.standard(tags.variableName)], color: "var(--cm-type)" },
+  { tag: [tags.variableName, tags.propertyName, tags.definition(tags.variableName), tags.attributeName], color: "var(--cm-variable)" },
+  { tag: [tags.operator, tags.punctuation, tags.separator, tags.bracket], color: "var(--cm-operator)" },
+  { tag: [tags.meta, tags.processingInstruction, tags.annotation], color: "var(--cm-meta)" },
+  { tag: tags.invalid, color: "var(--error)" },
+]));
 
 export type HunkControls = {
   overlays: HunkOverlay[];
@@ -145,7 +188,10 @@ export default function CellEditor({ value, label, disabled, language, change, h
   // its per-render identity does not invalidate the memo.
   const runRef = useRef(onRun);
   runRef.current = onRun;
+  const mode = useTheme();
+  const theme = useMemo(() => editorTheme(mode === "dark"), [mode]);
   const extensions = useMemo(() => [
+    codeHighlighting,
     ...(language === "code" ? [python()] : []),
     // Ledger-driven overlays win when available: they map hunks onto the
     // *composed* document, so highlights stay aligned after a partial undo —
@@ -207,6 +253,7 @@ export default function CellEditor({ value, label, disabled, language, change, h
       value={value}
       aria-label={label}
       readOnly={disabled}
+      theme={theme}
       extensions={extensions}
       basicSetup={{ lineNumbers: true, foldGutter: false, highlightActiveLine: true }}
       onCreateEditor={(view) => { viewRef.current = view; }}

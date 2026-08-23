@@ -30,5 +30,10 @@ export default function WorkspaceSidebar({ root, activePath, onOpenNotebook, onC
   return <aside className="workspace-sidebar" aria-label="Workspace files">
     <header className="workspace-sidebar-head"><span title={root}>{basename(root)}</span><button title="Hide files" aria-label="Hide file tree" onClick={onCollapse}><Icon name="keyboard_tab_rtl" /></button></header>
     <div className="workspace-tree" aria-label="File tree"><TreeChildren path={root} depth={0} activePath={activePath} onOpenNotebook={onOpenNotebook} /></div>
+    {/* B10. Pinned footer entry. There is no settings screen behind it, so it
+        is rendered disabled and says why rather than opening onto nothing. */}
+    <div className="sidebar-footer">
+      <button type="button" className="sidebar-settings" disabled title="Settings — not built yet"><Icon name="settings" /> Settings</button>
+    </div>
   </aside>;
 }
