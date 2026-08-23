@@ -67,21 +67,23 @@ export interface TuningPanelProps {
  *  scrollWidth. */
 const POPOVER_WIDTH = 288;
 const POPOVER_MAX_HEIGHT = 620;
-/** Keep the whole popover on screen, footer included. Clamping only the top
- *  left the Apply button below the fold on a short window — the panel is a
- *  flex column whose body scrolls, so its height has to be bounded by the
- *  space actually below it rather than by a constant. */
-const popoverHeight = (top: number) => Math.max(180, Math.min(POPOVER_MAX_HEIGHT, window.innerHeight - top - 16));
-const clampPopover = (left: number, top: number) => {
-  // Pull the top up far enough that a useful number of knobs fit, not merely
-  // far enough that the footer is on screen. The anchor is the cell's output
-  // region, which on a long notebook is near the bottom of the window; without
-  // this the popover opened as a 240px slot showing two of seven knobs.
+/** How tall the popover may be once it is at `top`: bounded by the space below
+ *  it, so the footer is always reachable. */
+const popoverHeight = (top: number) =>
+  Math.max(124, Math.min(POPOVER_MAX_HEIGHT, window.innerHeight - top - 16));
+/** Keep the box on screen. This is the only rule a *drag* obeys — the user
+ *  moving the panel somewhere deliberate must not be argued with. */
+const clampPopover = (left: number, top: number) => ({
+  left: Math.max(8, Math.min(left, window.innerWidth - POPOVER_WIDTH - 8)),
+  top: Math.max(56, Math.min(top, Math.max(56, window.innerHeight - 140))),
+});
+/** Where it *opens*. Stricter than the drag clamp: the anchor is the cell's
+ *  output region, which on a long notebook is near the bottom of the window, so
+ *  placing it there unclamped opened a 240px slot showing two of seven knobs.
+ *  Pull it up far enough that a useful panel fits. */
+const placePopover = (left: number, top: number) => {
   const wanted = Math.min(POPOVER_MAX_HEIGHT, Math.max(240, window.innerHeight - 140));
-  return {
-    left: Math.max(8, Math.min(left, window.innerWidth - POPOVER_WIDTH - 8)),
-    top: Math.max(56, Math.min(top, Math.max(56, window.innerHeight - wanted - 16))),
-  };
+  return clampPopover(left, Math.min(top, Math.max(56, window.innerHeight - wanted - 16)));
 };
 
 const boundsIndex = (knobs: TuningKnob[]): Record<string, TuningBounds> => {
@@ -345,7 +347,7 @@ export default function TuningPanel(props: TuningPanelProps) {
     if (!open || popover) return;
     const rect = rootRef.current?.getBoundingClientRect();
     if (!rect || (!rect.width && !rect.height)) return;
-    setPopover(clampPopover(rect.right - POPOVER_WIDTH - 12, rect.top + 8));
+    setPopover(placePopover(rect.right - POPOVER_WIDTH - 12, rect.top + 8));
   });
   useEffect(() => {
     if (!popover) return;
