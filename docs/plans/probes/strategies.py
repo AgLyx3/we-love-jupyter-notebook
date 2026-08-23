@@ -211,10 +211,82 @@ def _enforce_sizes(blocks: list[tuple[int, int]], cells: list[extract.Cell]) -> 
     return out
 
 
+def dataflow(cells: list[extract.Cell], target: int | None = None) -> list[tuple[int, int]]:
+    """Cut where the fewest variables flow across the seam, to a size budget.
+
+    Two borrowed ideas, both from agent codebase-navigation work, shrunk to cell
+    scale:
+
+    * **A reference graph, not lexical overlap** (Aider's repo map builds a graph
+      of files joined by symbol references and ranks that, rather than comparing
+      text). Here an edge runs from the cell that last bound a name to each cell
+      that reads it — real def→use dataflow. `cohesion` compares vocabulary,
+      which counts two cells that both mention `df` as related even when one
+      rebinds it and the other never sees that value. This does not.
+      Edges are weighted 1/distance: a config constant read ninety cells later
+      is a real dependency but a terrible reason to refuse a boundary.
+
+    * **Budget the map, do not threshold it** (Aider fits its repo map to a token
+      budget rather than a similarity cutoff). The rail has room for roughly a
+      dozen entries before it stops being a map and becomes a second thing to
+      scroll, so the block count is a *constraint* — derived from length — and
+      the segmentation is whatever best fits it. Every other strategy here picks
+      a threshold and accepts whatever count falls out.
+
+    cAST's contribution is already in `_split_oversized`: split structure
+    recursively to a size limit rather than cutting on a fixed grid.
+    """
+    first, last = cells[0].idx, cells[-1].idx
+    n = len(cells)
+    if n < 2 * MIN_BLOCK:
+        return [(first, last)]
+    if target is None:
+        # ~10 cells an entry, floored and capped so the rail stays scannable at
+        # both ends of the corpus (21 cells → 4 entries, 286 → 18).
+        target = max(4, min(18, round(n / 10)))
+
+    pos = {c.idx: i for i, c in enumerate(cells)}
+    writer: dict[str, int] = {}
+    crossing = [0.0] * (n - 1)                    # crossing[g] spans cells g..g+1
+    for i, cell in enumerate(cells):
+        if cell.kind != "code":
+            continue
+        for name in cell.reads:
+            src = writer.get(name)
+            if src is None or src == i:
+                continue
+            weight = 1.0 / (i - src)
+            for gap in range(src, i):
+                crossing[gap] += weight
+        for name in cell.binds:
+            writer[name] = i
+
+    # A markdown cell is a heading for what follows, so a seam just *before* one
+    # is cheap and a seam just after it is not: never strand a heading at the
+    # end of the block it introduces.
+    for gap in range(n - 1):
+        if cells[gap + 1].kind == "markdown":
+            crossing[gap] *= 0.5
+        if cells[gap].kind == "markdown":
+            crossing[gap] += 1.0
+
+    chosen: list[int] = []
+    for gap in sorted(range(n - 1), key=lambda g: crossing[g]):
+        if len(chosen) >= target - 1:
+            break
+        if all(abs(gap - c) >= MIN_BLOCK for c in chosen) and gap + 1 >= MIN_BLOCK \
+           and (n - 1 - gap) >= MIN_BLOCK:
+            chosen.append(gap)
+
+    starts = [first] + [cells[g + 1].idx for g in sorted(chosen)]
+    return _enforce_sizes(_split_oversized(_spans(starts, last, first), cells), cells)
+
+
 STRATEGIES = {
     "headings": headings,
     "fixed8": fixed,
     "milestones": milestones,
     "cohesion": cohesion,
     "hybrid": hybrid,
+    "dataflow": dataflow,
 }

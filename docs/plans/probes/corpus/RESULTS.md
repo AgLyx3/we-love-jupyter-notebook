@@ -175,3 +175,89 @@ on the panel's own branch with this table as the justification.
 - **`cohesion` needs identifiers.** A notebook that is mostly prose, or mostly
   shell magics, gives it nothing to work with. Untested here; the corpus has no
   such notebook.
+
+---
+
+# Borrowed from codebase navigation, and what happened — 2026-08-23
+
+Agent codebase-navigation tooling solves a bigger version of this problem, so
+two ideas were lifted from it and one deliberately not.
+
+**Taken: a reference graph instead of lexical overlap.** Aider's repo map builds
+a graph whose nodes are files and whose edges are symbol references, then ranks
+*that* rather than comparing text. The cell-scale version is def→use dataflow —
+an edge from the cell that last bound a name to each cell that reads it, weighted
+1/distance so a config constant read ninety cells later is not a reason to refuse
+a boundary. `cohesion` compares vocabulary, which scores two cells that both
+mention `df` as related even when one rebinds it and the other never sees that
+value; a dataflow edge does not.
+
+**Taken: budget the map, do not threshold it.** Aider fits its repo map to a
+token budget rather than a similarity cutoff. The rail holds roughly a dozen
+entries before it stops being a map and becomes a second thing to scroll, so
+`dataflow` treats block count as a *constraint* derived from length (~1 entry
+per 10 cells, floored at 4 and capped at 18) and finds the best cuts that fit
+it. Every other strategy here picks a threshold and accepts whatever count
+falls out.
+
+**Not taken: PageRank.** Aider ranks nodes to decide *what to show* inside a
+fixed budget. Segmentation has to cover every cell, so there is nothing to omit
+and nothing for an importance score to do. It would matter for a second-level
+map — deciding which blocks get expanded — which is a different feature.
+
+**Not taken as such: cAST.** Its contribution — recursively split structure to a
+size limit rather than cutting on a fixed grid — was already in
+`_split_oversized` before the reading. Worth recording that it is the same idea
+independently, not a borrowing.
+
+## The result: it lost
+
+```
+                      mean   mean, ≤2 headings
+hybrid                0.74        0.66
+cohesion              0.50        0.63
+dataflow              0.55        0.48
+headings  (shipped)   0.58        0.15
+```
+
+Better-motivated did not mean better. And the obvious excuse — that the
+scannability budget was starving it against a reference with 22–37 blocks —
+does not hold: re-running `dataflow` with the model's own block count moves the
+mean from **0.55 to 0.57**. The budget is not what is costing it. The seams
+themselves land in different places.
+
+Where the budget *did* matter is the heading-free end, and in both directions:
+`messy-exploration` 0.32 → 0.67 and `simulation-sweep` 0.60 → 0.91 when allowed
+more blocks, but `revenue-recovery-eda` 0.74 → 0.46 and `fraud-eda` 0.75 → 0.50
+when forced to take them. A single length-derived budget is wrong for both ends.
+
+## The reference moves, which is worse news than the loss
+
+The baseline was recorded twice (the first run saved block shape but not ranges,
+so it had to be re-run). Same corpus, same prompt, same model — different
+partitions:
+
+```
+notebook                run1  run2   drift
+handson-unsupervised      33    37    12%
+orie4741-eda               8    10    25%
+simulation-sweep           5     7    40%
+messy-adspend             28    22    21%
+mean                                  12%
+```
+
+A reference that shifts 12% on average — 40% on one notebook — cannot support
+the precision the table above implies. `hybrid` at 0.74 against `dataflow` at
+0.55 is a real gap. Anything under about 0.1 between neighbouring strategies is
+not.
+
+This is the strongest argument yet for changing the objective. Agreement with a
+single sampled partition is measuring a moving target, and it structurally
+cannot tell whether the target is any good — the metric was silent about
+`handson-unsupervised` returning a 17-cell block, because that was the
+reference.
+
+The replacement should score what the panel is for: given a question, can a
+reader find the right cell from the block names alone, and how much do they have
+to read after landing. That needs no reference partition, so it does not drift,
+and it can score the model's own map — which this metric structurally cannot.
