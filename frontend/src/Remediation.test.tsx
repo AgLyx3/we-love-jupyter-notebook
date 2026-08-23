@@ -6,6 +6,7 @@ import AgentChatPanel, { type TurnRecord } from "./agentChat/AgentChatPanel";
 import NotebookView from "./notebook/NotebookView";
 import { Outputs } from "./notebook/NotebookCell";
 import RiskyExecutionDialog from "./execution/RiskyExecutionDialog";
+import KernelControls from "./execution/KernelControls";
 import type { AgentTurn, ExecutionOperation, NotebookSnapshot, TurnScope } from "./api/client";
 import { EventSourceMock } from "./test/setup";
 
@@ -630,5 +631,36 @@ describe("remediation behaviors", () => {
     unmount();
     expect(outside).toHaveFocus();
     outside.remove();
+  });
+  it("will not restart the kernel out from under a run parked for approval", () => {
+    // The approval panel is deliberately not modal, so nothing else stops this
+    // being pressed while a person is deciding — and a restart mid-decision
+    // strands the operation the approval was meant to resolve.
+    const restart = vi.fn();
+    const live = { state: "idle", kernelSessionId: "kernel-1" } as never;
+    const view = render(<KernelControls status={live} mutationDisabled={false} runAwaitingApproval={false} onRunAll={vi.fn()} onInterrupt={vi.fn()} onRestart={restart} />);
+    expect(screen.getByLabelText("Restart kernel")).toBeEnabled();
+
+    view.rerender(<KernelControls status={live} mutationDisabled={false} runAwaitingApproval onRunAll={vi.fn()} onInterrupt={vi.fn()} onRestart={restart} />);
+    const button = screen.getByLabelText("Restart kernel");
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", "A run is paused for approval — decide or cancel it first");
+
+    // Cancelling the pause is the way out, so the control comes straight back.
+    view.rerender(<KernelControls status={live} mutationDisabled={false} runAwaitingApproval={false} onRunAll={vi.fn()} onInterrupt={vi.fn()} onRestart={restart} />);
+    expect(screen.getByLabelText("Restart kernel")).toBeEnabled();
+  });
+
+  it("says a run is paused for approval, which the kernel state alone does not", () => {
+    // A cell awaiting approval has not started a kernel, so the chip reads
+    // "Kernel not started" while a run is outstanding — true, and on its own
+    // it reads as though nothing is happening.
+    const cold = { state: "not_started", kernelSessionId: null } as never;
+    const view = render(<KernelControls status={cold} mutationDisabled={false} runAwaitingApproval onRunAll={vi.fn()} onInterrupt={vi.fn()} onRestart={vi.fn()} />);
+    expect(screen.getByText("Kernel not started")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Run paused for approval");
+
+    view.rerender(<KernelControls status={cold} mutationDisabled={false} runAwaitingApproval={false} onRunAll={vi.fn()} onInterrupt={vi.fn()} onRestart={vi.fn()} />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });
