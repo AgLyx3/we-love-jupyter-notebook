@@ -23,8 +23,10 @@ made and what it said. It needs an authenticated CLI, costs tokens, and takes
 about a minute per task, so it is run deliberately rather than in CI.
 
 ```bash
-python evals/mcp_tool_eval.py            # every task
-python evals/mcp_tool_eval.py fix-a-bug  # one by name
+python evals/mcp_tool_eval.py                    # every task, once each
+python evals/mcp_tool_eval.py fix-a-bug          # one by name
+python evals/mcp_tool_eval.py --repeat 3         # a pass rate, not a pass
+python evals/mcp_tool_eval.py --jobs 6           # more runs in flight
 ```
 
 ## 2. The tasks and what happened

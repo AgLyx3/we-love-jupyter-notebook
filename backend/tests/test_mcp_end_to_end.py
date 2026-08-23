@@ -301,3 +301,79 @@ def test_deleting_the_last_remaining_cell_is_refused(editor, workspace, tmp_path
     read = call(server, "notebook_read")
     with pytest.raises(ToolError, match="at least one cell"):
         call(server, "notebook_delete_cell", cell_id=read["cells"][0]["cellId"])
+
+
+def test_run_all_stops_at_a_failing_cell_and_leaves_the_rest_unrun(editor, workspace):
+    """What a caller is told when the notebook breaks halfway.
+
+    The error is the reason most notebooks get read at all, so it has to come
+    back diagnosable: the exception type and message, not just "it failed".
+    Everything after the failure genuinely does not run, and this pins that —
+    a model that assumed otherwise would report results it never saw.
+
+    Note the shape this asserts: the result lists only the cells that ran, and
+    the note is "Cell execution failed" with no mention of the ones skipped.
+    That is current behaviour, not an endorsement of it — the risky-cell path
+    says "later cells did not run" and this path says nothing.
+    """
+    server, _ = editor
+    root, _ = workspace
+    broken = root / "broken.ipynb"
+    broken.write_bytes(
+        notebook("print('first ok')\n", "raise ValueError('boom')\n", "marker = 1\n")
+    )
+    call(server, "notebook_open", path=str(broken))
+
+    result = call(server, "notebook_run_all")
+    assert result["state"] == "failed"
+
+    failure = next(
+        output
+        for cell in result["cells"]
+        for output in cell.get("outputs", [])
+        if output.get("type") == "error"
+    )
+    assert failure["errorName"] == "ValueError"
+    assert failure["errorValue"] == "boom"
+
+    ran = {cell["cellId"] for cell in result["cells"]}
+    assert "cell2" not in ran, "the third cell must not have run"
+
+
+def test_a_cell_deleted_through_the_tools_is_gone_from_the_document(editor, workspace):
+    """Only the refusal — deleting the last cell — was covered end to end.
+
+    A delete rewrites the whole cell list, so the invariant worth holding is
+    that the survivors come through with their identity and content intact.
+
+    The tool itself answers compactly — what was deleted, how many are left,
+    the new revision — and leaves the cell list to a read, so the document is
+    checked directly here.
+    """
+    server, tools = editor
+    root, _ = workspace
+    three = root / "three.ipynb"
+    three.write_bytes(notebook("a = 1\n", "b = 2\n", "c = 3\n"))
+    call(server, "notebook_open", path=str(three))
+
+    after = call(server, "notebook_delete_cell", cell_id="cell1")
+    assert after["deletedCellId"] == "cell1"
+    assert after["cellCount"] == 2
+
+    live = httpx.get(f"{tools.editor.api_url}/notebooks/current").json()
+    assert [cell["cellId"] for cell in live["cells"]] == ["cell0", "cell2"]
+    assert [cell["source"] for cell in live["cells"]] == ["a = 1\n", "c = 3\n"]
+
+
+def test_a_delete_moves_the_revision_so_a_stale_edit_is_refused(editor, workspace):
+    """A structural change has to advance the revision like any other write,
+    or a caller holding the pre-delete revision could edit against a document
+    that no longer has the cell it is aiming at."""
+    server, _ = editor
+    root, _ = workspace
+    three = root / "revision.ipynb"
+    three.write_bytes(notebook("a = 1\n", "b = 2\n", "c = 3\n"))
+    opened = call(server, "notebook_open", path=str(three))
+
+    after = call(server, "notebook_delete_cell", cell_id="cell1")
+    assert after["revision"] > opened["revision"]
