@@ -667,6 +667,21 @@ describe("remediation behaviors", () => {
     expect(screen.getByRole("alertdialog")).toHaveAccessibleDescription("Cell 1 was paused before running.");
   });
 
+  it("shows one Cancel run while a model-initiated run is parked, not two", () => {
+    // The standalone control and the approval panel's own Cancel are the same
+    // action on the same attempt. A manual run is never gated so the two could
+    // never coincide; a run a model asked for parks at awaiting_approval and
+    // they did.
+    const decide = vi.fn();
+    const base = { ...operation.attempts[0], state: "awaiting_approval", risk: { level: "confirm", reasons: ["Risk"], matchedPatterns: ["pattern"] } };
+    const parked = { ...operation, kind: "mcp", parentTurnId: null, state: "awaiting_approval", currentExecutionAttemptId: base.executionAttemptId, attempts: [base] };
+    render(<AgentChatPanel notebook={notebook} scope={scope} turn={null} activeTurn={null} history={[]} operation={parked} busy={false} mutationsDisabled={false} onSubmit={vi.fn()} onCancel={vi.fn()} onUndo={vi.fn()} onClearScope={vi.fn()} onDecision={decide} onSelectTurn={vi.fn()} onFocusCell={vi.fn()} onDropCell={vi.fn()} />);
+
+    expect(screen.getAllByRole("button", { name: "Cancel run" })).toHaveLength(1);
+    // And the one that survives is the one that says what it is cancelling.
+    expect(screen.getByRole("alertdialog")).toContainElement(screen.getByRole("button", { name: "Cancel run" }));
+  });
+
   it("offers a cancel control for a model-initiated run in flight", () => {
     // A run with no parent turn is one a person can stop directly, whether it
     // was their click or a tool call that started it.
