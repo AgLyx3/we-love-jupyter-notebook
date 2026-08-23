@@ -71,11 +71,18 @@ const POPOVER_MAX_HEIGHT = 620;
  *  left the Apply button below the fold on a short window — the panel is a
  *  flex column whose body scrolls, so its height has to be bounded by the
  *  space actually below it rather than by a constant. */
-const clampPopover = (left: number, top: number) => ({
-  left: Math.max(8, Math.min(left, window.innerWidth - POPOVER_WIDTH - 8)),
-  top: Math.max(56, Math.min(top, Math.max(56, window.innerHeight - 260))),
-});
 const popoverHeight = (top: number) => Math.max(180, Math.min(POPOVER_MAX_HEIGHT, window.innerHeight - top - 16));
+const clampPopover = (left: number, top: number) => {
+  // Pull the top up far enough that a useful number of knobs fit, not merely
+  // far enough that the footer is on screen. The anchor is the cell's output
+  // region, which on a long notebook is near the bottom of the window; without
+  // this the popover opened as a 240px slot showing two of seven knobs.
+  const wanted = Math.min(POPOVER_MAX_HEIGHT, Math.max(240, window.innerHeight - 140));
+  return {
+    left: Math.max(8, Math.min(left, window.innerWidth - POPOVER_WIDTH - 8)),
+    top: Math.max(56, Math.min(top, Math.max(56, window.innerHeight - wanted - 16))),
+  };
+};
 
 const boundsIndex = (knobs: TuningKnob[]): Record<string, TuningBounds> => {
   const index: Record<string, TuningBounds> = {};

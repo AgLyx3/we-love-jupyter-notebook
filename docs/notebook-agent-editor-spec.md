@@ -2236,6 +2236,49 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
   boundary, or turn scope — the agent still edits only the listed cells and only
   describes fixes that belong elsewhere.
 
+### Approved Visual Redesign (Material 3, dark theme, relabelled review)
+
+- Decision: Adopt the reviewed Stitch redesign (`docs/stitch-diff.md` §H). A
+  Material 3 token layer with a light and a VS Code-flavoured dark theme
+  replaces the four ad-hoc CSS variables; Material Symbols replaces
+  `lucide-react`; Inter and JetBrains Mono load from Google Fonts. Two
+  user-facing behaviours move rather than change:
+  - The **Blocking/Trusted write-scope select moves out of the agent-panel
+    header into the composer footer**, beside Model and Mode. It keeps more
+    visual weight than either neighbour and the row wraps rather than shrinks,
+    so its label cannot truncate at the panel's 300px minimum.
+  - The **turn scope panel is compacted** to one line per cell. It still shows
+    the editable/focus counts, still removes a single cell, and still clears
+    all; the Trusted attention-only banner is unchanged.
+  Review is relabelled — Undo → **Discard**, Undo all → **Reject All**, Keep
+  all → **Accept All**, "Agent changed this cell" → **Agent Suggestion**,
+  "N of M changes reviewed" → **N Pending Reviews** — and the per-cell
+  accessible names move with the visible words. The plot tuning knobs become a
+  floating popover with no separate preview column and no per-knob min/max
+  editors; the preview still stands in for the cell's own output and still
+  carries the "not in your notebook yet" band.
+- Alternatives: keep the four ad-hoc variables and hand-write a second dark
+  palette (drifts immediately, and CodeMirror would still disagree at the
+  boundary); leave the write scope in the panel header (the design removed it
+  entirely, which is worse); adopt Tailwind, as the generated mockups do
+  (a framework dependency for a 700-line stylesheet).
+- Rationale: Nothing here widens a boundary. The write scope is the same
+  control with the same values, moved next to the other per-turn choices and
+  given more weight than them; the scope panel shows the same facts in less
+  space; the relabels rename gestures without changing what they settle. The
+  invariants the review surface rests on are held explicitly: 28×28 minimum
+  targets, persistent and never icon-only review controls, one Keep/Discard
+  appearance at every anchor, fixed-width review-bar actions, and the dotted
+  underline reserved for model-generated outline names.
+- **Known consequence, deliberate:** accepting §A6, §A7 and §D12 together
+  dissolves the agent-vs-user colour split. Blue is now a surface accent rather
+  than the agent's identity, green no longer marks user-authored edits, and the
+  green `.cell-review.tuned` strip is gone. Provenance is still stated — the
+  strip reads "Agent Suggestion" or "You tuned this cell", agent-added cells
+  carry a filled `smart_toy` marker in the gutter — but it is no longer
+  encoded in colour. `design-brief.md` §2 records what replaced it. Worth
+  revisiting if users start mistaking their own tuned edits for the agent's.
+
 ## Open Follow-Up Decisions
 
 - Whether to add a readable Markdown-like notebook export alongside raw `.ipynb` context if agents struggle with notebook JSON.
