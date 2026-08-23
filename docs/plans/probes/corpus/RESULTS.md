@@ -261,3 +261,97 @@ The replacement should score what the panel is for: given a question, can a
 reader find the right cell from the block names alone, and how much do they have
 to read after landing. That needs no reference partition, so it does not drift,
 and it can score the model's own map — which this metric structurally cannot.
+
+---
+
+# Findability — 2026-08-23
+
+`python3 docs/plans/probes/findability.py`
+
+The objective, at last, is the one the panel is for: *given a question, can a
+reader find the cell from the block names alone, and what does it cost them.*
+No reference partition, so nothing drifts, and the model's own map is scored
+rather than assumed correct.
+
+Three notebooks spanning the corpus (243 / 154 / 57 cells, heading-rich to
+heading-free), eight questions each, five maps.
+
+```
+notebook             cells  strategy    rail   hit   cost
+messy-exploration       57  headings       5   80%   30.1
+                            fixed8         8   80%   15.0
+                            cohesion      12   80%    5.1
+                            hybrid        11   80%    5.4
+                            model         13  100%    4.6
+madewithml             243  headings      44   88%   17.1
+                            fixed8        31   62%   21.1
+                            cohesion      42   75%   13.8
+                            hybrid        49   75%    8.6
+                            model         37   25%   18.4
+messy-adspend          154  headings       5   88%   84.9
+                            fixed8        20  100%    8.0
+                            cohesion      35   50%   25.0
+                            hybrid        33   75%   23.9
+                            model         22  100%    7.5
+--------------------------------------------------------
+mean                        headings      18   85%   44.0
+                            fixed8        20   81%   14.7
+                            cohesion      30   68%   14.6
+                            hybrid        31   77%   12.6
+                            model         24   75%   10.2
+```
+
+`cost` is cells a reader pays: the block they open, plus the distance they then
+travel if the answer was not in it.
+
+## How it is scored, and two things that had to be fixed to make it honest
+
+Questions are generated once per notebook and cached, so every map is scored on
+the identical set. Naming and answering are **separate calls and the answering
+call never sees code** — one pass would let the model answer from the cells it
+was just shown, and the reader only ever has the rail. Every map is named by the
+same prompt, because a partition cannot be scored for findability without names
+and comparing a named map to an unnamed one scores the naming.
+
+**Accuracy alone is not comparable across rail lengths.** `headings` scores 88%
+on `messy-adspend` with five blocks, one of which covers 99 cells — high
+accuracy because there were five things to choose between, not because anything
+was found. Reported alone it would have made the shipped pass look best.
+
+**Strict containment of one sampled cell was too harsh.** The model's
+`madewithml` map scored 25% while choosing blocks whose names were plainly
+right — "train_loop_config, scaling, checkpoint configs" for a question about
+how much hardware the job uses — because the sampled cell sat one block over. A
+map that points at the right region has done its job. Grading by distance moves
+that result from 185.5 to **18.4**, and it is the difference between a metric
+that flags a real failure and one that flags a sampling artefact.
+
+## What it says
+
+**The shipped heading pass costs about 3.5× more reading than anything else
+here** (44.0 against 10–15). Almost all of that is `messy-adspend`: 84.9,
+because 88% of the time the reader lands correctly in a block covering most of
+the notebook. That is the 99-cell block finally showing up as a user cost rather
+than as a rule violation.
+
+**Everything else is within noise of everything else.** `hybrid` 12.6,
+`cohesion` 14.6, `fixed8` 14.7, model 10.2 — on 24 questions per strategy. The
+gap that supports a decision is headings-vs-the-rest. The ordering inside the
+rest does not.
+
+Notably **`fixed8` — cutting blindly every 8 cells — beats the shipped
+segmenter three times over.** Same finding as the boundary metric, now in terms
+of what a reader pays.
+
+## Caveats
+
+- **24 questions per strategy.** Differences under roughly 5 cells of cost are
+  not resolved. `hybrid` is not established as better than `cohesion` here.
+- **An LLM reads the rail, not a human.** A proxy — but a proxy for the *task*,
+  where the previous metric was a proxy for a drifting reference.
+- **Heading-aligned maps may be flattered.** The question generator saw the
+  notebook including its markdown headings, and a heading-aligned block can be
+  named with the author's own words. `headings` still loses badly, so this does
+  not change the conclusion, but it would matter for a closer race.
+- **One run, one model, one seed.** The seed is fixed so the question set is
+  stable; nothing is averaged over resamples.

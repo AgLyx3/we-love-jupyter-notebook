@@ -1,0 +1,689 @@
+{
+  "messy-exploration": {
+    "questions": {
+      "10": "Where does each sale get tagged with the geography of the shop it happened at?",
+      "19": "Where do the individual transactions get rolled up into one sales total per week?",
+      "35": "Where do they check whether the spread of per-sale amounts in a second territory looks like the one they just examined?",
+      "48": "How can I see whether the forecast actually tracks real sales over time, rather than trusting a single error number?",
+      "49": "Which of the model's inputs is doing most of the predictive work?"
+    },
+    "headings": {
+      "names": [
+        "pandas, numpy, matplotlib, seaborn imports",
+        "Sales with store regions, revenue, weekly store lag features",
+        "GradientBoostingRegressor revenue forecast, MAPE, feature importances",
+        "model2 retune, residuals, and pred column",
+        "forecast_v4.csv export and model_v4.pkl dump"
+      ],
+      "score": {
+        "accuracy": 0.8,
+        "cells_to_read": 34.25,
+        "rail": 5
+      },
+      "misses": [
+        [
+          48,
+          4,
+          "How can I see whether the forecast actually tracks real sales over time, rather than trusting a single error number?"
+        ]
+      ]
+    },
+    "hybrid": {
+      "names": [
+        "Sales CSV load and NA check",
+        "Store region merge and revenue column",
+        "Revenue by region and weekly totals",
+        "Weekly revenue spread across regions",
+        "Monthly region heatmap and units outlier trim",
+        "NORTH region revenue histogram",
+        "SOUTH histogram and weekly store agg",
+        "Lag/roll features and GradientBoostingRegressor fit",
+        "Test MAPE, feature importances, deeper model2",
+        "Residuals and forecast_v4.csv export",
+        "LightGBM TODO and model_v4.pkl dump"
+      ],
+      "score": {
+        "accuracy": 0.8,
+        "cells_to_read": 5.5,
+        "rail": 11
+      },
+      "misses": [
+        [
+          48,
+          10,
+          "How can I see whether the forecast actually tracks real sales over time, rather than trusting a single error number?"
+        ]
+      ]
+    },
+    "model": {
+      "names": [
+        "Sales 2023\u20132025 CSV loaded and inspected",
+        "Store dimension merged on store_id",
+        "Revenue from units \u00d7 unit_price, negatives dropped",
+        "Revenue by region totals and bar chart",
+        "Weekly revenue overall and by region",
+        "Monthly revenue by region heatmap",
+        "Units outliers above 1000 removed",
+        "NORTH and SOUTH revenue histograms",
+        "Store-week lag_1, lag_4, roll_4 features",
+        "GradientBoostingRegressor revenue forecast and MAPE",
+        "Actual vs pred, importances, tuned model2, residuals",
+        "forecast_v4.csv store_id, date, revenue, pred export",
+        "model_v4.pkl dump and lightgbm TODO"
+      ],
+      "score": {
+        "accuracy": 1.0,
+        "cells_to_read": 4.6,
+        "rail": 13
+      },
+      "misses": []
+    },
+    "fixed8": {
+      "names": [
+        "sales_2023_2025 shape, dtypes, missing values",
+        "store_dim region merge and revenue column",
+        "Regional revenue totals and weekly revenue series",
+        "Region correlation, month pivot heatmap, units outlier cut",
+        "Post-cut weekly revenue, NORTH/SOUTH histograms, store lags",
+        "GradientBoostingRegressor on lag features, test MAPE",
+        "Actual vs pred, tuned model2, forecast_v4.csv export",
+        "model_v4.pkl joblib dump"
+      ],
+      "score": {
+        "accuracy": 0.8,
+        "cells_to_read": 8,
+        "rail": 8
+      },
+      "misses": [
+        [
+          49,
+          -1,
+          "Which of the model's inputs is doing most of the predictive work?"
+        ]
+      ]
+    },
+    "cohesion": {
+      "names": [
+        "sales_2023_2025 load, shape, dtypes, missing counts",
+        "store_dim region merge and revenue column",
+        "Revenue by region totals and bar chart",
+        "Weekly revenue trend, overall and by region",
+        "Month-by-region revenue pivot heatmap",
+        "Units outlier cutoff at 1000",
+        "Weekly revenue and region totals after trim",
+        "NORTH and SOUTH revenue histograms",
+        "Store-week lag_1, lag_4, roll_4 gradient boosting fit",
+        "Test MAPE, actual-vs-pred, feature importances",
+        "Deeper model2 retune and residuals",
+        "forecast_v4.csv export and model_v4.pkl dump"
+      ],
+      "score": {
+        "accuracy": 0.8,
+        "cells_to_read": 5,
+        "rail": 12
+      },
+      "misses": [
+        [
+          19,
+          4,
+          "Where do the individual transactions get rolled up into one sales total per week?"
+        ]
+      ]
+    }
+  },
+  "madewithml": {
+    "questions": {
+      "27": "How do they show, visually, how lopsided the label distribution is across categories?",
+      "48": "How can they turn the model's numeric label outputs back into readable category names?",
+      "95": "Where do they say how many machines the training job spreads across and how much hardware each one gets?",
+      "101": "How do they hand the training routine, its settings, and the data splits to the distributed training launcher?",
+      "127": "How do they learn the vocabulary and label mapping from the training split alone and apply it to both splits before training?",
+      "154": "Where do they tell the search which metric decides a good trial, whether higher or lower wins, and how many trials to run?",
+      "197": "How do they carve out a specific subgroup of examples they care about so they can score performance on just those?",
+      "206": "Where do they display how the model performs on each of the targeted subsets of the data rather than overall?"
+    },
+    "headings": {
+      "names": [
+        "Made With ML data and modeling notebook",
+        "Ray cluster init, worker resources, EFS_DIR",
+        "Data",
+        "pandas import for data ingestion",
+        "dataset.csv loaded into df",
+        "Stratified train_df/val_df split on tag",
+        "Tag distribution and title word cloud",
+        "nltk stopwords and regex preprocessing imports",
+        "text feature from title plus description",
+        "clean_text lowercasing, stopword and regex filters",
+        "DataFrame cleanup to text and tag",
+        "class_to_index label encoding and decode",
+        "scibert tokenizer and preprocess function",
+        "Distributed Ray Dataset split and map_batches preprocess",
+        "set_seeds, load_data and CustomPreprocessor",
+        "Pretrained scibert BertModel embeddings",
+        "FinetunedLLM classifier head over llm",
+        "collate_fn repadding ids and masks",
+        "Ray Train and TorchTrainer imports",
+        "train_step and eval_step loops",
+        "train_loop_per_worker with checkpoint reporting",
+        "train_loop_config, scaling_config and run_config",
+        "Training dataset load_data and stratify_split",
+        "TorchTrainer fit, epoch metrics, best checkpoints",
+        "TorchPredictor from best checkpoint",
+        "Holdout precision, recall and f1",
+        "predict_proba tag probabilities for a sample project",
+        "MLflow tracking URI and logger callback",
+        "MLflow-tracked run and best_run by val_loss",
+        "MLflow dashboard of experiments and runs",
+        "get_best_checkpoint from MLflow run artifacts",
+        "HyperOptSearch tuning of dropout_p, lr, lr_patience",
+        "y_test, y_prob and test_df predictions",
+        "Overall weighted precision, recall, f1",
+        "Per-class metrics sorted by f1",
+        "TP, FP, FN natural-language-processing samples",
+        "Low-confidence samples and cleanlab label issues",
+        "nlp_llm and short_text slice metrics",
+        "LIME explanation of a prediction",
+        "Behavioral INV, DIR and MFT checks",
+        "Batch inference (offline)",
+        "Batch inference over test_ds with ActorPoolStrategy",
+        "ModelDeployment FastAPI /predict service",
+        "ModelDeploymentRobust threshold fallback to other"
+      ],
+      "score": {
+        "accuracy": 0.875,
+        "cells_to_read": 10.714285714285714,
+        "rail": 44
+      },
+      "misses": [
+        [
+          127,
+          15,
+          "How do they learn the vocabulary and label mapping from the training split alone and apply it to both splits before training?"
+        ]
+      ]
+    },
+    "fixed8": {
+      "names": [
+        "Ray init for the Made With ML PoC",
+        "Cluster resources, g4dn workers, EFS_DIR storage",
+        "dataset.csv ingestion and stratified tag split",
+        "Tag distribution and title word clouds",
+        "text = title + description, clean_text stopwords",
+        "DataFrame cleanup and tag class_to_index encoding",
+        "scibert BertTokenizer ids and masks",
+        "preprocess() applied over a Ray Dataset split",
+        "Distributed map_batches, set_seeds, load_data",
+        "CustomPreprocessor and FinetunedLLM over scibert",
+        "collate_fn repadding ids and masks",
+        "train_step, eval_step, train_loop_per_worker, train_loop_config",
+        "TorchTrainer fit with scaling and run configs",
+        "TorchPredictor on holdout.csv y_true and y_pred",
+        "evaluate() precision/recall/f1 and predict_proba sample",
+        "MLflow tracking URI and MLflowLoggerCallback run config",
+        "MLflow-tracked training run, runs sorted by val_loss",
+        "get_best_checkpoint from MLflow run, re-evaluated",
+        "Tuning trainer, MLflow callback, HyperOptSearch initial_params",
+        "param_space, AsyncHyperBandScheduler, Tuner best trial",
+        "Tuned best checkpoint evaluation and metrics dict",
+        "y_test, y_prob, test_df predictions, overall metrics",
+        "Per-class f1 and TP/FP/FN samples",
+        "Low-confidence natural-language-processing samples",
+        "cleanlab label issues, nlp_llm and short_text slices",
+        "Slice dataframes and per-slice precision/recall/f1",
+        "LIME classifier_fn explanation and INVariance verb test",
+        "DIRectional/MFT tests and batch inference on test_ds",
+        "FastAPI ModelDeployment served with Ray Serve",
+        "Noise queries and ModelDeploymentRobust other-class threshold",
+        "Robust deployment noise query and serve.shutdown"
+      ],
+      "score": {
+        "accuracy": 0.625,
+        "cells_to_read": 8,
+        "rail": 31
+      },
+      "misses": [
+        [
+          48,
+          14,
+          "How can they turn the model's numeric label outputs back into readable category names?"
+        ],
+        [
+          95,
+          13,
+          "Where do they say how many machines the training job spreads across and how much hardware each one gets?"
+        ],
+        [
+          127,
+          10,
+          "How do they learn the vocabulary and label mapping from the training split alone and apply it to both splits before training?"
+        ]
+      ]
+    },
+    "cohesion": {
+      "names": [
+        "Ray cluster setup and dataset.csv ingestion",
+        "tag value counts before splitting",
+        "Stratified train/val split and EDA imports",
+        "Tag distribution and title word cloud",
+        "text feature from title plus description",
+        "clean_text, DataFrame cleanup, and class_to_index encoding",
+        "decode indices back to tags",
+        "scibert BertTokenizer input_ids and attention_mask",
+        "tokenize batch into ids, masks, targets",
+        "preprocess function combining all steps",
+        "Ray Dataset stratify_split and map_batches preprocessing",
+        "set_seeds, load_data, CustomPreprocessor",
+        "torch.nn and BertModel imports",
+        "FinetunedLLM over pretrained scibert",
+        "collate_fn padded batches and train_step",
+        "eval_step and train_loop_per_worker",
+        "train_loop_config, scaling_config, run_config",
+        "TorchTrainer fit and TorchPredictor on holdout",
+        "precision, recall, f1 on test split",
+        "format_prob probabilities per class",
+        "predict_proba sample and MLflow tracking setup",
+        "MLflow-tracked training run and sorted_runs",
+        "best_run checkpoint loading from MLflow artifacts",
+        "Tuning trainer, dataset, and MLflow callback",
+        "HyperOptSearch param_space and AsyncHyperBandScheduler",
+        "Tuner fit and best trial metrics",
+        "Best trial hyperparameters and test performance",
+        "y_test, y_prob, and overall weighted metrics",
+        "Per-class precision, recall, f1 per tag",
+        "Tags sorted by f1",
+        "TP, FP, FN natural-language-processing samples",
+        "natural-language-processing indices for confidence learning",
+        "Low-confidence samples and cleanlab label issues",
+        "short_text slicing function",
+        "nlp_llm and short_text slices of test_df",
+        "Slice metrics and LIME classifier_fn",
+        "LIME explanation and invariance verb injection",
+        "Directional and minimum functionality behavioral tests",
+        "Batch inference with ActorPoolStrategy",
+        "ModelDeployment FastAPI service and predict query",
+        "Random noise query and serve shutdown",
+        "ModelDeploymentRobust threshold fallback to other"
+      ],
+      "score": {
+        "accuracy": 0.75,
+        "cells_to_read": 7.333333333333333,
+        "rail": 42
+      },
+      "misses": [
+        [
+          127,
+          12,
+          "How do they learn the vocabulary and label mapping from the training split alone and apply it to both splits before training?"
+        ],
+        [
+          197,
+          35,
+          "How do they carve out a specific subgroup of examples they care about so they can score performance on just those?"
+        ]
+      ]
+    },
+    "hybrid": {
+      "names": [
+        "Made With ML lessons intro",
+        "Ray init, worker resources, EFS_DIR storage",
+        "pandas import for dataset ingestion",
+        "dataset.csv read into df",
+        "Stratified train/val split on tag",
+        "Tag distribution and title word cloud",
+        "nltk stopwords and regex preprocessing imports",
+        "text feature from title plus description",
+        "clean_text: lowercase, stopwords, non-alphanumeric stripping",
+        "DataFrame cleanup to text and tag",
+        "class_to_index label encoding and decode",
+        "scibert BertTokenizer and preprocess function",
+        "Ray Dataset stratify_split and distributed preprocessing",
+        "set_seeds, load_data, CustomPreprocessor",
+        "FinetunedLLM head over pretrained scibert",
+        "FinetunedLLM model initialization",
+        "collate_fn repadding of ids and masks",
+        "train_step over iter_torch_batches",
+        "eval_step and train_loop_per_worker",
+        "Optional class weights for imbalance",
+        "train_loop_config, scaling_config, run_config",
+        "Train/val datasets fit with CustomPreprocessor",
+        "TorchTrainer fit and best checkpoints",
+        "TorchPredictor from checkpoint on holdout dataset",
+        "y_true vs y_pred precision, recall, f1",
+        "predict_proba tag probabilities on sample project",
+        "MLflow tracking URI and MLflowLoggerCallback",
+        "MLflow-tracked run sorted by val_loss",
+        "MLflow dashboard server on port 8080",
+        "get_best_checkpoint from MLflow run artifacts",
+        "Ray Tune imports and num_runs trials",
+        "HyperOptSearch seeded with initial dropout_p and lr",
+        "param_space, AsyncHyperBandScheduler, Tuner fit",
+        "Best trial hyperparameters and checkpoint",
+        "Tuned model test performance and sample prediction",
+        "y_test, y_prob, and test_df predictions",
+        "Overall weighted precision, recall, f1",
+        "Per-class metrics sorted by f1",
+        "TP, FP, FN samples for natural-language-processing",
+        "Low-confidence samples and cleanlab label issues",
+        "nlp_llm slicing function",
+        "short_text slice and nlp_llm slice DataFrames",
+        "PandasSFApplier slices record array",
+        "Per-slice precision, recall, f1",
+        "LIME explanation of object detection text",
+        "Invariance, directional, and minimum functionality tests",
+        "Batch inference with ActorPoolStrategy over test_ds",
+        "ModelDeployment FastAPI service and noise query",
+        "ModelDeploymentRobust: other class below threshold"
+      ],
+      "score": {
+        "accuracy": 0.75,
+        "cells_to_read": 5.666666666666667,
+        "rail": 49
+      },
+      "misses": [
+        [
+          127,
+          22,
+          "How do they learn the vocabulary and label mapping from the training split alone and apply it to both splits before training?"
+        ],
+        [
+          197,
+          41,
+          "How do they carve out a specific subgroup of examples they care about so they can score performance on just those?"
+        ]
+      ]
+    },
+    "model": {
+      "names": [
+        "Ray cluster init and worker resources",
+        "Project tag dataset ingestion",
+        "Stratified train/val split by tag",
+        "Tag distribution and title word cloud",
+        "Text cleaning of title + description",
+        "Column drop to text and tag",
+        "Tag label encoding via class_to_index",
+        "SciBERT tokenizer over text batches",
+        "preprocess() combining all steps",
+        "Distributed stratify_split on Ray Dataset",
+        "set_seeds, load_data, CustomPreprocessor",
+        "FinetunedLLM over scibert BertModel",
+        "collate_fn repadding ids and masks",
+        "train_step and eval_step loops",
+        "train_loop_config, scaling, checkpoint configs",
+        "TorchTrainer fit on train/val shards",
+        "TorchPredictor holdout precision/recall/f1",
+        "predict_proba on sample title",
+        "MLflow callback and tracking URI",
+        "Training run logged to MLflow",
+        "MLflow dashboard server",
+        "Best checkpoint from MLflow run_id",
+        "HyperOptSearch trainer and MLflow setup",
+        "dropout_p and lr search space tuning",
+        "Best trial config and test evaluation",
+        "y_test and y_prob on test_df",
+        "Overall weighted precision/recall/f1",
+        "Per-class f1 sorted by tag",
+        "TP/FP/FN samples for natural-language-processing",
+        "Low-confidence NLP samples",
+        "cleanlab label issues on y_prob",
+        "nlp_llm and short_text slice metrics",
+        "LIME explanation of classifier_fn",
+        "INV, DIR, MFT behavioral checks",
+        "Batch inference with ActorPoolStrategy",
+        "FastAPI ModelDeployment predict endpoint",
+        "ModelDeploymentRobust other-class threshold"
+      ],
+      "score": {
+        "accuracy": 0.25,
+        "cells_to_read": 13,
+        "rail": 37
+      },
+      "misses": [
+        [
+          27,
+          4,
+          "How do they show, visually, how lopsided the label distribution is across categories?"
+        ],
+        [
+          48,
+          7,
+          "How can they turn the model's numeric label outputs back into readable category names?"
+        ],
+        [
+          95,
+          15,
+          "Where do they say how many machines the training job spreads across and how much hardware each one gets?"
+        ],
+        [
+          101,
+          16,
+          "How do they hand the training routine, its settings, and the data splits to the distributed training launcher?"
+        ],
+        [
+          127,
+          11,
+          "How do they learn the vocabulary and label mapping from the training split alone and apply it to both splits before training?"
+        ],
+        [
+          154,
+          24,
+          "Where do they tell the search which metric decides a good trial, whether higher or lower wins, and how many trials to run?"
+        ]
+      ]
+    }
+  },
+  "messy-adspend": {
+    "questions": {
+      "36": "Where do the shorthand and alternate names for the same ad platform get collapsed onto a single label?",
+      "45": "How do they check whether the cost table has more than one row for the same day, platform, and ad program?",
+      "66": "How does the search-ads channel's smoothed spending track against the signups it brought in?",
+      "69": "Is there a reusable helper for these dual-axis spend-versus-signup charts instead of rewriting the plot for every channel?",
+      "91": "Does the unpaid traffic channel have any ad cost recorded at all, or are those merged-in rows contaminating the history-based features?",
+      "107": "How do they make sure the month-long running cost total only counts days before the one being predicted?",
+      "124": "Where can I see how closely the fitted predictions follow the real signup numbers over time?",
+      "132": "How large is the model's typical error, ignoring direction, within each individual channel?"
+    },
+    "headings": {
+      "names": [
+        "Ad spend vs signups scratch: pandas, seaborn setup",
+        "Daily spend/signups by channel: cleanup, CPA, lag features",
+        "Ridge and gb signups models, leakage fix, residuals",
+        "Verdict: gb memorising Q1, don't ship",
+        "model_df CSV and gb.pkl exports, then scratch"
+      ],
+      "score": {
+        "accuracy": 0.875,
+        "cells_to_read": 82.14285714285714,
+        "rail": 5
+      },
+      "misses": [
+        [
+          107,
+          2,
+          "How do they make sure the month-long running cost total only counts days before the one being predicted?"
+        ]
+      ]
+    },
+    "fixed8": {
+      "names": [
+        "spend.csv path hunt and plotting imports",
+        "spend_2025_q1_FINAL and signups.csv first look",
+        "channel vs source vocabulary and date ranges",
+        "Negative spend rows dropped, spend distribution",
+        "fb/goog/google ads channel name cleanup",
+        "source aliases and duplicate date/channel/campaign rows",
+        "Daily spend outer-merged with signups counts",
+        "Total spend vs signups, 7d rolling",
+        "Per-channel two_axis spend and signups plots",
+        "CPA by channel and >500 outliers",
+        "dow/week/month features and spend lags",
+        "spend_7d/28d saturation, organic zero-spend rows dropped",
+        "Ridge on channel dummies, TimeSeriesSplit r2",
+        "spend_7d leakage fixed with shift(1)",
+        "Ridge alpha sweep and coefficients",
+        "Gradient boosting fit, importances, actual vs fit",
+        "Residuals by channel, month, dow",
+        "Worst residuals and ridge vs gb MAE",
+        "model_df.csv and gb.pkl saved",
+        "Leftover scratch: del other, print ok"
+      ],
+      "score": {
+        "accuracy": 1.0,
+        "cells_to_read": 8,
+        "rail": 20
+      },
+      "misses": []
+    },
+    "cohesion": {
+      "names": [
+        "Ad spend vs signups scratch preamble",
+        "spend.csv read from data/",
+        "Hunting down ../data/spend_2025_q1_FINAL.csv",
+        "df shape, columns, dtypes",
+        "signups.csv loaded",
+        "df.channel vs signups.source vocabulary gap",
+        "date and created_at parsed to datetime",
+        "Date ranges and the 2025-01-01 cutoff",
+        "Negative spend rows dropped",
+        "Spend histogram, log1p, channel case cleanup",
+        "channel collapsed to facebook and google",
+        "signups.source collapsed to facebook and organic",
+        "referral and affiliate left unmatched",
+        "Duplicate date/channel/campaign rows summed into daily",
+        "daily spend outer-merged with signups into m",
+        "7d rolling spend vs signups per channel",
+        "cpa from spend over signups",
+        "Median cpa after nulling cpa above 500",
+        "week, month, is_weekend calendar columns",
+        "Weekend signups effect and spend lag columns",
+        "spend_7d and spend_28d rolling sums",
+        "saturation as spend_7d over spend_28d",
+        "Zero-spend organic rows dropped, features rebuilt",
+        "Ridge TimeSeriesSplit r2 and the spend_7d leakage",
+        "spend_7d and spend_28d shifted off today",
+        "Ridge alpha sweep from 1 to 300",
+        "Ridge coefficients at ALPHA 100",
+        "GradientBoosting signups fit and feature importances",
+        "from_marketing_dont_delete.xlsx peek",
+        "Marketing sheet columns, pred column added",
+        "Residual mean by channel",
+        "Residual seasonality by date, month, dow",
+        "Worst 20 residual rows",
+        "ridge vs gb MAE on signups",
+        "model_df.csv and gb.pkl saved, then scratch"
+      ],
+      "score": {
+        "accuracy": 0.5,
+        "cells_to_read": 5.5,
+        "rail": 35
+      },
+      "misses": [
+        [
+          69,
+          -1,
+          "Is there a reusable helper for these dual-axis spend-versus-signup charts instead of rewriting the plot for every channel?"
+        ],
+        [
+          91,
+          23,
+          "Does the unpaid traffic channel have any ad cost recorded at all, or are those merged-in rows contaminating the history-based features?"
+        ],
+        [
+          124,
+          32,
+          "Where can I see how closely the fitted predictions follow the real signup numbers over time?"
+        ],
+        [
+          132,
+          31,
+          "How large is the model's typical error, ignoring direction, within each individual channel?"
+        ]
+      ]
+    },
+    "hybrid": {
+      "names": [
+        "Ad spend vs signups scratch setup",
+        "Hunting down spend_2025_q1_FINAL.csv",
+        "Spend columns, dtypes and shape",
+        "signups.csv rows and shape",
+        "channel vs source vocabulary mismatch",
+        "date and created_at as daily datetimes",
+        "Spend date range trimmed to 2025",
+        "Negative spend rows dropped",
+        "Spend histogram, log1p, channel lowercasing",
+        "Channel aliases: fb, goog, google ads",
+        "Source aliases: fb, seo, organic search",
+        "Leftover referral and affiliate channels",
+        "Duplicate date/channel/campaign rows summed",
+        "Daily spend by date and channel",
+        "Daily signups outer-merged onto spend",
+        "Merge NaNs filled, total spend trend",
+        "Spend vs signups dual-axis plots per channel",
+        "cpa from spend over signups",
+        "CPA above 500 nulled, medians by channel",
+        "dow, week, month, is_weekend columns",
+        "Weekday signups, spend lags and rolling sums",
+        "saturation ratio and zero-spend organic rows",
+        "Rebuilt spend features into model_df X, y",
+        "Ridge CV r2 and spend_7d leakage",
+        "Shifted spend_7d, spend_28d, saturation",
+        "Ridge alpha sweep, 1 to 300",
+        "Ridge fit at ALPHA 100",
+        "Ridge coefficients, lowest and highest twelve",
+        "GradientBoosting r2, importances, actual vs fit",
+        "from_marketing_dont_delete.xlsx columns",
+        "gb residuals by channel",
+        "Residual seasonality, ridge vs gb MAE",
+        "model_df.csv, gb.pkl, and scratch"
+      ],
+      "score": {
+        "accuracy": 0.75,
+        "cells_to_read": 5.333333333333333,
+        "rail": 33
+      },
+      "misses": [
+        [
+          69,
+          -1,
+          "Is there a reusable helper for these dual-axis spend-versus-signup charts instead of rewriting the plot for every channel?"
+        ],
+        [
+          132,
+          31,
+          "How large is the model's typical error, ignoring direction, within each individual channel?"
+        ]
+      ]
+    },
+    "model": {
+      "names": [
+        "spend_2025_q1_FINAL.csv path hunt",
+        "spend and signups columns, dtypes, shapes",
+        "channel vs source vocabulary and date range",
+        "Negative spend rows and spend distribution",
+        "channel and source label normalization",
+        "Duplicate date/channel/campaign rows collapsed into daily spend",
+        "daily spend outer-merged with signups counts",
+        "Spend and signups time series per channel",
+        "two_axis spend/signups plotting helper",
+        "CPA per channel and >500 outliers",
+        "dow, week, month, is_weekend features",
+        "Spend lags, 7d/28d sums, saturation",
+        "Zero-spend organic rows poisoning the lags",
+        "Ridge baseline R\u00b2 over TimeSeriesSplit folds",
+        "spend_7d same-day leakage, shifted rolling windows",
+        "Ridge alpha sweep and coefficient extremes",
+        "GradientBoosting R\u00b2, feature importances, MAE fit",
+        "from_marketing_dont_delete.xlsx columns",
+        "Residuals by channel, month, dow, worst rows",
+        "ridge vs gb MAE comparison",
+        "model_df.csv and gb.pkl exports",
+        "Scratch checks on feats and X"
+      ],
+      "score": {
+        "accuracy": 1.0,
+        "cells_to_read": 7.5,
+        "rail": 22
+      },
+      "misses": []
+    }
+  }
+}
