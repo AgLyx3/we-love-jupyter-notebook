@@ -61,8 +61,13 @@ class AgentWorkspaceBuilder:
     def build(
         self, snapshot: NotebookSnapshot, scope: FrozenTurnScope,
         *, write_scope: str = "blocking", correction: str | None = None,
-        file_access_via_shell: bool = False,
+        file_access_via_shell: bool = False, writable: bool = True,
     ) -> AgentWorkspace:
+        # `writable` is the turn's permission mode, not the shape of its cell
+        # set. A Plan turn can have editable cells and still write nothing — the
+        # adapter gives it --sandbox read-only — so keying the shell rule on
+        # "are there editable cells" told every plan-with-selection turn it may
+        # write while the sandbox forbade it.
         if write_scope == "trusted":
             return self._build_trusted(
                 snapshot, scope, correction=correction,
@@ -135,7 +140,8 @@ class AgentWorkspaceBuilder:
                                 "request calls for a concrete edit, and explain any edit you make.",
                                 "Do not modify files that are not listed.",
                                 "Do not change notebook structure, metadata, outputs, or cell types.",
-                                _shell_rule(file_access_via_shell), "", "Editable files:"]
+                                _shell_rule(file_access_via_shell, writable=writable), "",
+                                "Editable files:"]
                 instructions.extend(f"- {item.relative_path}" for item in manifest.editable_cells)
             else:
                 instructions = [scope.prompt, "", *notebook_context,

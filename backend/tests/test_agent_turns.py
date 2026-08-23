@@ -1241,6 +1241,45 @@ def test_shell_file_access_reaches_instructions_on_every_turn_shape(notebook_pay
             assert "read and write" not in instructions
 
 
+def test_omitted_agent_falls_back_to_an_installed_cli(notebook_payload):
+    # Regression: GET /agent-adapters advertises a fallback when the configured
+    # default's CLI is missing, but start() resolved "default" straight to
+    # self.default_agent. So a request that merely omitted `agent` took the
+    # document lease and then failed against a CLI that is not installed, while
+    # the composer showed a different agent as the default.
+    class _Missing(FakeAgentAdapter):
+        def is_available(self):
+            return False
+
+    class _Present(FakeAgentAdapter):
+        def is_available(self):
+            return True
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    present = _Present([FakeAttempt()])
+    service = AgentTurnService(
+        documents=documents, scopes=scopes, timeout=2,
+        adapters={"gone": _Missing([FakeAttempt()]), "here": present},
+        default_agent="gone",
+    )
+    scopes.add("editable", editable=True)
+    turn = service.start(
+        prompt="go", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    assert turn.agent == "here", "an omitted agent must not pick an uninstalled CLI"
+
+    # The configured default still wins whenever it is actually installed.
+    both_here = AgentTurnService(
+        documents=documents, scopes=scopes, timeout=2,
+        adapters={"gone": _Present([FakeAttempt()]), "here": _Present([FakeAttempt()])},
+        default_agent="gone",
+    )
+    assert both_here._resolved_default_agent() == "gone"
+
+
 def test_service_requires_at_least_one_adapter():
     # Regression: with neither argument supplied the registry became
     # {"default": None} and construction succeeded, deferring the failure to an

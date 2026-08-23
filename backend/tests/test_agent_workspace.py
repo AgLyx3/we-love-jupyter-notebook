@@ -842,6 +842,14 @@ def test_codex_editable_turn_uses_workspace_write_sandbox(notebook_payload, monk
             "sandbox_workspace_write.exclude_slash_tmp=true",
         }
         assert args[args.index("-C") + 1] == str(workspace.root)
+        # The `apps` feature exposes account-level connectors (GitHub write,
+        # site deploys) that no sandbox or config flag reaches — verified
+        # against codex-cli 0.135.0, where the model called one and it ran.
+        assert args[args.index("--disable") + 1] == "apps"
+        # The prompt is last and behind "--", so a prompt starting with "-"
+        # (a pasted markdown bullet, a diff line) is not parsed as a flag.
+        assert args[-2] == "--"
+        assert not args[-1].startswith("--ephemeral")
         # Final-message capture must live outside the audited workspace.
         out = pathlib.Path(args[args.index("--output-last-message") + 1])
         assert workspace.root not in out.parents
@@ -903,6 +911,62 @@ def test_codex_adapter_grants_write_sandbox_for_trusted_workspace(
         builder.destroy(workspace)
 
 
+def test_process_runner_gives_the_cli_no_stdin(tmp_path):
+    # Regression: stdin was inherited. `codex exec` reads stdin even when the
+    # prompt is an argument, so when the server's own stdin never reaches EOF
+    # the CLI blocks until the 600s turn timeout, holding the document lease
+    # throughout. The bundled editor launched by mcp/supervisor.py inherits the
+    # MCP stdio pipe, which never sees EOF, so that is the live case.
+    #
+    # To reproduce, this process's fd 0 IS an open pipe for the duration: an
+    # inherited stdin then blocks and the run times out, while DEVNULL reads
+    # EOF at once. Verified against the real CLI too — DEVNULL exits in ~3s,
+    # an open pipe was still running at 20s.
+    read_fd, write_fd = os.pipe()
+    saved_stdin = os.dup(0)
+    try:
+        os.dup2(read_fd, 0)  # nothing is ever written, so no EOF arrives
+        runner = ProcessRunner()
+        try:
+            stdout, _ = runner.run(
+                [sys.executable, "-c", "import sys; print(len(sys.stdin.read()))"],
+                cwd=tmp_path, timeout=5, cancel_event=Event(),
+            )
+        finally:
+            runner.shutdown()
+        assert stdout.strip() == "0", "the child should read EOF immediately"
+    finally:
+        os.dup2(saved_stdin, 0)
+        os.close(saved_stdin)
+        os.close(read_fd)
+        os.close(write_fd)
+
+
+def test_plan_turn_with_editable_cells_is_not_told_it_may_write(notebook_payload):
+    # Regression: writable was keyed on "are there editable cells", but a Plan
+    # turn can have a selection and still write nothing — the adapter gives it
+    # --sandbox read-only. So a plan-with-selection turn was told to "read and
+    # write" while the sandbox forbade writing.
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scope = FrozenTurnScope.create(
+        turn_id="turn", session_id=snapshot.session_id,
+        notebook_revision=snapshot.revision,
+        selection=ScopeSelection(("editable",), ("intro",)), prompt="plan it",
+    )
+    builder = AgentWorkspaceBuilder()
+    workspace = builder.build(
+        snapshot, scope, file_access_via_shell=True, writable=False,
+    )
+    try:
+        instructions = (workspace.root / "INSTRUCTIONS.md").read_text()
+        assert "Editable files:" in instructions, "the selection is still declared"
+        assert "shell/exec tool only to read files" in instructions
+        assert "read and write" not in instructions
+    finally:
+        builder.destroy(workspace)
+
+
 def test_codex_read_only_and_plan_turns_use_read_only_sandbox(notebook_payload, monkeypatch):
     captured = {}
 
@@ -932,7 +996,10 @@ def test_codex_read_only_and_plan_turns_use_read_only_sandbox(notebook_payload, 
         )
         args = captured["args"]
         assert args[args.index("--sandbox") + 1] == "read-only"
-        assert args[2].startswith("You are operating in plan mode")
+        # The prompt is the last argument, behind "--", so a prompt beginning
+        # with "-" cannot be parsed as a flag.
+        assert args[-2] == "--"
+        assert args[-1].startswith("You are operating in plan mode")
     finally:
         builder.destroy(workspace)
 

@@ -55,6 +55,11 @@ LINEAGE_ACTIONS = ("reject",)
 PERMISSION_MODE_BY_MODE = {"edit": "acceptEdits", "plan": "plan"}
 
 
+def _is_available(adapter) -> bool:
+    probe = getattr(adapter, "is_available", None)
+    return True if probe is None else bool(probe())
+
+
 def _model_values(adapter: AgentAdapter) -> frozenset[str]:
     """The model ids this adapter offers, the same list the UI is given."""
     options = getattr(adapter, "model_options", ({"value": "default"},))
@@ -209,13 +214,33 @@ class AgentTurnService:
     def adapter(self) -> AgentAdapter:
         return self.adapters[self.default_agent]
 
+    def _resolved_default_agent(self) -> str:
+        """The agent an omitted `agent` field should actually run on.
+
+        GET /agent-adapters advertises a fallback when the configured default's
+        CLI is missing, so resolving "default" straight to self.default_agent
+        made the composer's advertised default and the turn's real default
+        disagree: a request that simply omitted the field took the document
+        lease and then failed against a CLI that is not installed. Same rule in
+        both places, so the answer is the same in both places.
+        """
+        adapter = self.adapters.get(self.default_agent)
+        if adapter is None or _is_available(adapter):
+            return self.default_agent
+        for agent_id, candidate in self.adapters.items():
+            if _is_available(candidate):
+                return agent_id
+        # Nothing is installed. Keep the configured default so the failure names
+        # the agent the operator actually configured.
+        return self.default_agent
+
     def start(
         self, *, prompt: str, session_id: str, expected_revision: int,
         model: str = "default", mode: str = "edit", agent: str = "default",
         write_scope: str = "blocking", background: bool = True,
     ) -> AgentTurn:
         turn_id = uuid4().hex
-        agent = self.default_agent if agent in ("", "default") else agent
+        agent = self._resolved_default_agent() if agent in ("", "default") else agent
         with self._lock:
             if self._shutting_down:
                 raise AgentTurnServiceShuttingDown()
@@ -506,6 +531,7 @@ class AgentTurnService:
             workspace = self.builder.build(
                 frozen_snapshot, scope, correction=correction,
                 file_access_via_shell=_file_access_via_shell(adapter),
+                writable=turn.mode != "plan",
             )
             attempt_error: BaseException | None = None
             cleanup_error: WorkspaceCleanupError | None = None

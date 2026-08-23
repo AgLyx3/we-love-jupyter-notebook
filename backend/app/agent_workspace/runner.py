@@ -32,6 +32,13 @@ class ProcessRunner:
                     raise AgentAdapterError("Agent process runner is shutting down")
                 process = subprocess.Popen(
                     args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    # Inheriting stdin hangs the turn: `codex exec` reads stdin
+                    # even when the prompt is an argument, so if the server's own
+                    # stdin never reaches EOF the CLI blocks until the turn times
+                    # out — holding the document lease the whole time. The
+                    # bundled editor launched by mcp/supervisor.py inherits the
+                    # MCP stdio pipe, which is exactly that case.
+                    stdin=subprocess.DEVNULL,
                     start_new_session=True,
                 )
                 self._active[process.pid] = process

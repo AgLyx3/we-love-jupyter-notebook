@@ -260,10 +260,19 @@ class CodexAgentAdapter(CliAvailability):
         with tempfile.TemporaryDirectory(prefix="codex-final-message-") as capture_dir:
             final_message_path = Path(capture_dir) / "final-message.txt"
             args = [
-                self.executable, "exec", prompt,
+                self.executable, "exec",
                 "--ephemeral", "--ignore-user-config", "--skip-git-repo-check",
                 "--color", "never", "-C", str(workspace.root),
                 "--sandbox", sandbox,
+                # `apps` exposes account-level connectors (GitHub write, site
+                # deploys, plugin uninstall) that are routed server-side, so no
+                # sandbox or config flag reaches them. Verified against
+                # codex-cli 0.135.0: with every other flag we pass, the model
+                # called a GitHub tool and it executed — there is no approval
+                # gate on exec. They cannot touch the notebook, so the product
+                # invariant holds either way, but an ungated path to the user's
+                # GitHub is not something a notebook edit should carry.
+                "--disable", "apps",
                 # workspace-write grants cwd *plus* $TMPDIR plus /tmp by
                 # default; the post-run audit only inspects the workspace root,
                 # so without these two the writable set is wider than anything
@@ -278,6 +287,11 @@ class CodexAgentAdapter(CliAvailability):
             ]
             if model in self._MODEL_ALIASES:
                 args += ["--model", model]
+            # The prompt goes last, behind `--`. As a bare positional, a prompt
+            # that starts with "-" is parsed as a flag and the turn dies with
+            # exit 2 before the model is reached — a pasted markdown bullet or a
+            # diff line is enough. Claude is unaffected: its prompt is a value.
+            args += ["--", prompt]
             stdout, _stderr = self.runner.run(
                 args, cwd=workspace.root, timeout=timeout, cancel_event=cancel_event
             )
