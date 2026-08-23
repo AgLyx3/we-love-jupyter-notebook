@@ -142,7 +142,12 @@ Do not weaken these guarantees without explicit user approval:
 - Only cells in the current turn editable set may receive agent-written source changes.
 - The live `.ipynb` document must not be edited directly by external CLI agents.
 - Backend validation is authoritative; UI state is advisory.
-- V1 CLI agents must not run shell commands.
+- A CLI agent gets a shell only when it has no other way to reach files, and then
+  only scoped to its own turn workspace. Claude uses a per-tool allow-list and no
+  shell; Codex has no non-shell file API, so it runs under a sandbox confined to
+  the turn workspace. The boundary is enforced by that sandbox plus the post-run
+  workspace audit — not by the absence of a shell. See the spec's decision log
+  entry "Sandboxed Shell For Adapters With No Other File API".
 
 ## Documentation
 
