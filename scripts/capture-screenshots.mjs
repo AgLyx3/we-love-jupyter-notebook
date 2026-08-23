@@ -237,11 +237,20 @@ async function main() {
       await page.waitForTimeout(1000);
     }
     await page.waitForTimeout(1500);
+    // Pin the conversation to the top before shooting it. It is aria-live and
+    // ends up scrolled to the bottom, so how much of the turn is in frame
+    // depends on how long the agent's answer happened to be — and the first
+    // thing this shot is meant to show, the user's own turn card, is the first
+    // thing to scroll away.
+    await page.locator(".conversation").evaluate((node) => { node.scrollTop = 0; });
+    await page.waitForTimeout(300);
     await shot(page, "05-agent-panel", ".agent-panel");
     const diffCell = page.locator(".notebook-cell").filter({ has: page.locator(".cell-review-label") }).first();
     await diffCell.scrollIntoViewIfNeeded();
     await page.waitForTimeout(300);
     await shot(page, "04-cell-under-review", diffCell);
+    await page.locator(".conversation").evaluate((node) => { node.scrollTop = 0; });
+    await page.waitForTimeout(300);
     await shot(page, "02-app-shell-reviewing", null);
   }
 

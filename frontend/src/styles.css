@@ -490,10 +490,18 @@ body.marquee-active iframe { pointer-events: none; }
 .empty-conversation { text-align: center; color: var(--on-surface-variant); margin-top: 40px; }
 .empty-conversation p { color: var(--on-surface); font-weight: 600; margin-bottom: 4px; }
 .empty-conversation span { font-size: var(--text-small); }
-.turn-history { display: grid; gap: 4px; margin-bottom: 12px; }
-.turn-history button { width: 100%; height: auto; min-height: 40px; display: grid; justify-content: stretch; text-align: left; padding: 6px 8px; background: var(--surface-container-lowest); font-size: var(--text-small); }
-.turn-history button.selected { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, var(--surface-container-lowest)); }
-.turn-history span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* What the user sent, as the mirror of what the agent sent back. Same border,
+   radius, surface and padding as .turn-status below it — the accent rule is on
+   the *right* instead of the left, and that is the whole difference. Sidedness
+   is what says who wrote it, so the two read as one conversation rather than as
+   a chip and a card that happen to be stacked. */
+.turn-history { display: grid; gap: 8px; margin-bottom: 10px; }
+.turn-history button { width: 100%; height: auto; min-height: 40px; display: grid; gap: 2px; justify-items: end; text-align: right; padding: 10px 12px; border: 1px solid var(--outline-variant); border-right: 3px solid var(--primary); border-radius: var(--radius); background: var(--surface-container-lowest); font-size: var(--text-small); }
+/* The global button hover sets `border-color`, which is a shorthand and would
+   take the right rule with it. */
+.turn-history button:hover:not(:disabled) { background: var(--surface-container-low); border-color: var(--outline-variant); border-right-color: var(--primary); }
+.turn-history button.selected { background: color-mix(in srgb, var(--primary) 10%, var(--surface-container-lowest)); }
+.turn-history span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .turn-history small { color: var(--on-surface-variant); text-transform: capitalize; font-size: var(--text-tiny); }
 .manual-cancel { height: 28px; width: auto; flex: 0 0 auto; padding: 0 10px; font-size: var(--text-small); margin-bottom: 10px; }
 .turn-status, .execution-status { border: 1px solid var(--outline-variant); border-left: 3px solid var(--primary); border-radius: var(--radius); background: var(--surface-container-lowest); padding: 10px 12px; margin-bottom: 10px; }
