@@ -163,8 +163,11 @@ export function Outputs({ outputs, disabled = false, onAddErrorToChat, onHoverCh
   </div>;
 }
 
-export default function NotebookCell({ cell, focused, selected, dragIds, editable, context, trusted = false, change, operations = [], origin = "agent", retyped, revertable = true, tunable = false, tuning, disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onKeep, onKeepOperation, onUndoOperation, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
-  cell: NotebookCellData; focused: boolean; selected: boolean; dragIds: string[]; editable: boolean; context: boolean; trusted?: boolean; change?: AgentChange; revertable?: boolean;
+export default function NotebookCell({ cell, focused, selected, outlined = false, dragIds, editable, context, trusted = false, change, operations = [], origin = "agent", retyped, revertable = true, tunable = false, tuning, disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onKeep, onKeepOperation, onUndoOperation, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
+  cell: NotebookCellData; focused: boolean; selected: boolean;
+  /** Covered by the outline block the pointer is over. Presentational only. */
+  outlined?: boolean;
+  dragIds: string[]; editable: boolean; context: boolean; trusted?: boolean; change?: AgentChange; revertable?: boolean;
   operations?: ReviewOperation[];
   origin?: ReviewOrigin;
   /** The scan already found knobs for this cell; Tune is worth offering. */
@@ -314,7 +317,7 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
     event.dataTransfer.setData("application/x-notebook-cell", cell.cellId);
     event.dataTransfer.setData("application/x-notebook-cells", JSON.stringify(ids));
     event.dataTransfer.effectAllowed = "copy";
-  }} className={`notebook-cell ${focused ? "is-focused" : ""} ${selected ? "is-selected" : ""}`} tabIndex={0} onFocus={onFocus} onContextMenu={onContextMenu} aria-label={description}>
+  }} className={`notebook-cell ${focused ? "is-focused" : ""} ${selected ? "is-selected" : ""} ${outlined ? "is-outlined" : ""}`} tabIndex={0} onFocus={onFocus} onContextMenu={onContextMenu} aria-label={description}>
     <div className="cell-gutter" aria-label={`Select ${description}`} title="Click to select · Shift-click for a range · right-click for scope actions" onClick={onSelect}><span className="cell-number" title={`Cell ${cell.index + 1}`}>{cell.index + 1}</span><span className="execution-count">{cell.cellType === "code" ? `[${cell.executionCount ?? " "}]` : cell.cellType === "raw" ? "RAW" : "MD"}</span>{cell.metadata?.agent_authored ? <span className="agent-authored-badge" role="img" aria-label="Added by the agent" title="Added by the agent — review before running"><Icon name="smart_toy" filled /></span> : null}</div>
     <div className="cell-main">
       <div className="cell-actions">
