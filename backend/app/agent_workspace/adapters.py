@@ -264,7 +264,16 @@ class CodexAgentAdapter(CliAvailability):
                 "--ephemeral", "--ignore-user-config", "--skip-git-repo-check",
                 "--color", "never", "-C", str(workspace.root),
                 "--sandbox", sandbox,
+                # workspace-write grants cwd *plus* $TMPDIR plus /tmp by
+                # default; the post-run audit only inspects the workspace root,
+                # so without these two the writable set is wider than anything
+                # that checks it. The --output-last-message capture file still
+                # lands in $TMPDIR because Codex's own process writes it — the
+                # sandbox binds the shell commands the model runs, not the CLI
+                # that spawns them (verified against codex-cli 0.135.0).
                 "-c", "sandbox_workspace_write.network_access=false",
+                "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+                "-c", "sandbox_workspace_write.exclude_slash_tmp=true",
                 "--output-last-message", str(final_message_path),
             ]
             if model in self._MODEL_ALIASES:

@@ -795,7 +795,14 @@ def test_codex_editable_turn_uses_workspace_write_sandbox(notebook_payload, monk
         assert "--ephemeral" in args
         assert "--ignore-user-config" in args
         assert "--skip-git-repo-check" in args
-        assert args[args.index("-c") + 1] == "sandbox_workspace_write.network_access=false"
+        # workspace-write also grants $TMPDIR and /tmp unless both are excluded,
+        # and the audit below only ever looks at the workspace root.
+        overrides = {args[i + 1] for i, a in enumerate(args) if a == "-c"}
+        assert overrides == {
+            "sandbox_workspace_write.network_access=false",
+            "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+            "sandbox_workspace_write.exclude_slash_tmp=true",
+        }
         assert args[args.index("-C") + 1] == str(workspace.root)
         # Final-message capture must live outside the audited workspace.
         out = pathlib.Path(args[args.index("--output-last-message") + 1])
