@@ -747,9 +747,81 @@ def test_hand_edited_cell_is_flagged_stale_without_losing_its_outcome(notebook_p
     )
 
     memory = _memory_of_next_turn(documents, scopes, turns, recorder)
-    assert "STALE: the user has edited this cell by hand since" in memory
+    assert "STALE: this cell has changed since, outside this turn's record" in memory
     # The outcome is still reported; staleness qualifies it, it does not erase it.
     assert "STATUS: APPLIED but not yet reviewed by the user" in memory
+    # And it does not say *who* changed it: the same route serves a person
+    # typing in the tab, an MCP client, and the plot-tuning panel. See the
+    # route-level test below.
+    assert "by hand" not in memory
+
+
+def _await_turn(api, turn_id, state="completed"):
+    for _ in range(200):
+        current = api.get(f"/agent-turns/{turn_id}").json()
+        if current["state"] == state:
+            return current
+        time.sleep(0.01)
+    raise AssertionError(f"turn stuck in {current['state']!r}")
+
+
+def test_non_turn_route_edit_marks_a_prior_turn_stale(notebook_payload):
+    # Exercised through the HTTP route rather than the document service, because
+    # that is what a non-turn writer actually calls: MCP's `set_cell_source`
+    # posts exactly this body to exactly this path (`mcp/server.py:377`), and so
+    # does the editor tab. Neither creates an AgentTurn or a ledger operation,
+    # so the only way the change reaches a later turn is as STALE on the earlier
+    # one. Without it the feed keeps asserting an account of a cell that some
+    # other writer has since replaced.
+    recorder = _RecordingFakeAdapter([
+        FakeAttempt(edits={"editable/cell_editable.py": "value = 2\n"}),
+        FakeAttempt(),
+    ])
+    app = create_app(agent_adapter=recorder)
+    with TestClient(app) as api:
+        uploaded = api.post(
+            "/notebooks/upload",
+            files={"file": ("sample.ipynb", notebook_payload(), "application/json")},
+        ).json()
+        api.post("/turn-scope/editable-cells", json={
+            "sessionId": uploaded["sessionId"],
+            "expectedDocumentRevision": uploaded["revision"],
+            "cellId": "editable",
+        })
+        first = api.post("/agent-turns", json={
+            "sessionId": uploaded["sessionId"],
+            "expectedDocumentRevision": uploaded["revision"],
+            "prompt": "bump it",
+        }).json()
+        _await_turn(api, first["turnId"])
+
+        revision = api.get("/session/status").json()["documentRevision"]
+        edited = api.post("/cells/editable/source", json={
+            "sessionId": uploaded["sessionId"],
+            "expectedDocumentRevision": revision,
+            "source": "value = 99  # not the turn\n",
+        })
+        assert edited.status_code == 200
+
+        api.post("/turn-scope/editable-cells", json={
+            "sessionId": uploaded["sessionId"],
+            "expectedDocumentRevision": edited.json()["revision"],
+            "cellId": "editable",
+        })
+        second = api.post("/agent-turns", json={
+            "sessionId": uploaded["sessionId"],
+            "expectedDocumentRevision": edited.json()["revision"],
+            "prompt": "what next",
+        }).json()
+        _await_turn(api, second["turnId"])
+
+    memory = _memory_section(recorder.instructions[-1])
+    assert 'You asked: "bump it"' in memory
+    assert "STALE: this cell has changed since, outside this turn's record" in memory
+    # The outcome survives the qualifier, and the qualifier names no author —
+    # this write came through a route, not from a person's hands.
+    assert "STATUS: APPLIED but not yet reviewed by the user" in memory
+    assert "by hand" not in memory
 
 
 class _FailAfterApplyExecutions:
@@ -808,7 +880,7 @@ def test_failed_turn_that_applied_reports_staleness_of_its_cells(notebook_payloa
 
     memory = _memory_of_next_turn(documents, scopes, turns, recorder)
     assert "STATUS: FAILED (internal_error)" in memory
-    assert "STALE: the user has edited this cell by hand since" in memory
+    assert "STALE: this cell has changed since, outside this turn's record" in memory
 
 
 def test_boundary_violation_retries_in_fresh_workspace(notebook_payload):

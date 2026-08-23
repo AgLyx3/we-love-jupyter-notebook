@@ -173,9 +173,17 @@ def _render_entry(entry: MemoryEntry, distance: int, indexed: dict) -> list[str]
                 # Said after the status, not instead of it: the outcome above is
                 # still what the user chose. This only warns that the cell has
                 # moved on since, so the account above no longer describes it.
+                #
+                # Deliberately says nothing about *who* changed it. Staleness is
+                # derived by comparing the cell against the ledger, and several
+                # writers trip it: a hand edit in the tab, an MCP client calling
+                # set_cell_source, the plot-tuning panel writing back a tuned
+                # literal. Naming the user would report a machine's edit as a
+                # person's, and the agent might act on that fiction.
                 lines.append(
-                    f"{prefix}STALE: the user has edited this cell by hand since. "
-                    "notebook.ipynb is the only reliable source for it."
+                    f"{prefix}STALE: this cell has changed since, outside this "
+                    "turn's record. notebook.ipynb is the only reliable source "
+                    "for it."
                 )
     if entry.turn_status == "CANCELLED" and entry.operations:
         lines.append(

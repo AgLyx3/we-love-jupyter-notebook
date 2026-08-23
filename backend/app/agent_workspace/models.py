@@ -134,10 +134,12 @@ class MemoryOperation:
     status: str  # "KEPT" | "APPLIED" | "UNDONE"
     previous_source: str
     next_source: str
-    # The user has hand-edited this cell since. Orthogonal to status rather than
-    # a fourth value of it: a hunk can be kept *and* since overwritten, and the
-    # agent needs both facts. Without it the feed asserts an account of the cell
-    # that the document no longer matches.
+    # The cell has diverged from the ledger since — a hand edit in the tab, an
+    # MCP client's set_cell_source, or the plot-tuning panel writing back a
+    # tuned literal all do it, and the check that derives this cannot tell them
+    # apart. Orthogonal to status rather than a fourth value of it: a hunk can
+    # be kept *and* since overwritten, and the agent needs both facts. Without
+    # it the feed asserts an account of the cell the document no longer matches.
     stale: bool = False
     # "edit" or "add". A whole cell a Trusted turn created has no before/after
     # source to diff — the ledger keeps a hash for it, not the text — so it is
