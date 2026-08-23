@@ -98,3 +98,80 @@ row that has to stay green.
 - **The corpus has no notebook whose headings lie** — copied from a template and
   never updated. That is the case where following headings is actively wrong,
   and nothing here measures it.
+
+---
+
+# Alternative splits — 2026-08-23
+
+`python3 docs/plans/probes/compare.py`
+
+Five candidates in `strategies.py`, all scored on **F1 of block boundaries
+against the model's partition** (±1 cell). The model is not ground truth; it is
+what the panel actually renders when someone presses Build map, so a free
+strategy is useful to the extent it lands in the same places. If the model's
+own splits are wrong, this metric is measuring the wrong target — which is why
+`RESULTS.md` keeps the shape table above as well.
+
+```
+notebook              cells  head    headings   fixed8  milestones  cohesion   hybrid
+madewithml              243    36        0.85     0.48       0.09      0.44     0.82
+handson-unsupervised    286    27        0.70     0.45       0.05      0.37     0.67
+orie4741-eda             54     6        0.71     0.53       0.20      0.33     0.72
+revenue-recovery-eda     87    20        0.74     0.38       0.15      0.56     0.76
+fraud-eda                21     4        0.77     0.00       0.33      0.33     0.75
+messy-exploration        57     0        0.12     0.42       0.13      0.70     0.55
+simulation-sweep         21     1        0.25     0.25       0.25      0.71     0.91
+messy-adspend           154     2        0.09     0.50       0.08      0.49     0.53
+tidy-phased             122    19        0.95     0.36       0.18      0.61     0.95
+------------------------------------------------------------------------------------
+mean                                     0.58     0.38       0.16      0.50     0.74
+mean, ≤2 headings                        0.15     0.39       0.16      0.63     0.66
+```
+
+## The uncomfortable one
+
+**On heading-poor notebooks, cutting blindly every 8 cells beats the shipped
+segmenter — 0.39 against 0.15.** `fixed8` is in the corpus as a floor nothing
+should fall below, and the current pass falls below it by a factor of 2.6 on
+exactly the notebooks a map is for. That is the strongest single argument in
+this document for changing it.
+
+## What each one showed
+
+- **`milestones`** (0.16) — the shipped pass with headings taken away, run
+  directly. 5 blocks for 286 cells, a 167-cell block. There is no salvaging the
+  milestone signal on its own; it is not doing the work.
+- **`cohesion`** (0.50 overall, **0.63** on ≤2 headings) — TextTiling over
+  identifiers, cutting at vocabulary valleys. Beats headings by 4× where
+  headings are absent and loses to them where they are present, which is
+  exactly the complementary shape you would want.
+- **`hybrid`** (**0.74** overall, 0.66 on ≤2 headings) — headings first, then
+  subdivide anything over 12 cells by cohesion and fold 1-cell blocks into the
+  neighbour they share more vocabulary with. It gives up almost nothing where
+  headings are good (0.82 / 0.95 against headings' 0.85 / 0.95) and rescues the
+  case where they are not.
+
+## Recommendation
+
+Replace `extract.segment()` with `hybrid`. It is strictly better on the corpus
+mean, materially better on the notebooks the panel exists for, and costs nothing
+extra — same inputs, no model call. The heading signal is kept where it is
+genuinely evidence; the difference is that it is no longer the *only* signal.
+
+That is a change to the overview feature, not to this evaluation, so it belongs
+on the panel's own branch with this table as the justification.
+
+## Caveats worth carrying
+
+- **One reference, one model, one run.** Nothing here is averaged over repeated
+  samples, so small differences between neighbouring strategies are noise. The
+  gaps being relied on above (0.15 vs 0.66) are not small.
+- **Tolerance ±1 flatters everyone.** At exact-match the ordering survives but
+  the numbers halve: hybrid 0.52, headings 0.51 overall, and on ≤2 headings
+  hybrid 0.40 against headings' 0.11.
+- **`fixed8` scores 0.00 on `fraud-eda`** — 21 cells, so cutting at 8 and 16
+  misses every real boundary. Small notebooks punish a fixed grid, which is the
+  other half of why it is only a floor.
+- **`cohesion` needs identifiers.** A notebook that is mostly prose, or mostly
+  shell magics, gives it nothing to work with. Untested here; the corpus has no
+  such notebook.
