@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -416,8 +417,29 @@ def _contain_process_groups(process_group_ids: set[int]) -> None:
             pass
 
 
+@pytest.fixture
+def frontend_dev_toolchain():
+    """Skip when the launcher's frontend half cannot start, for want of Node.
+
+    `pytest backend/tests` is the documented backend test command and needs
+    nothing from Node — except here, where the whole point is to drive the real
+    `scripts/dev.py`, and that runs `npm run dev`, i.e. vite out of
+    `node_modules/.bin`. On a fresh clone that binary does not exist yet, the
+    launcher dies on `vite: command not found`, and the startup assertion below
+    reports it as a failure of the change under test. Skipping instead keeps the
+    signal honest and names the one-line remedy. Compare `built_frontend` in
+    conftest, which dodges the same dependency by faking a build; this test
+    cannot, because it is testing the launcher itself.
+    """
+    if shutil.which("npm") is None or not (ROOT / "node_modules" / ".bin" / "vite").exists():
+        pytest.skip(
+            "development launcher needs the frontend toolchain; run `npm install` "
+            "in the repo root"
+        )
+
+
 @pytest.mark.parametrize("shutdown_signal", [signal.SIGINT, signal.SIGTERM])
-def test_sigterm_launcher_exits_and_releases_server_ports(shutdown_signal):
+def test_sigterm_launcher_exits_and_releases_server_ports(shutdown_signal, frontend_dev_toolchain):
     (backend_port, frontend_port), reservations = _reserve_ports(2)
     with tempfile.TemporaryFile() as output:
         for reservation in reservations:

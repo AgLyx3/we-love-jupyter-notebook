@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from threading import Thread
 
 import pytest
 
@@ -18,6 +19,7 @@ from backend.app.kernel_execution.kernel_session import KernelResult
 from backend.app.kernel_execution.service import KernelExecutionService
 from backend.app.notebook_document.models import RevisionConflict, SessionConflict
 from backend.app.notebook_document.service import NotebookDocumentService
+from backend.app.plot_tuning import apply as apply_module
 from backend.app.plot_tuning.apply import (
     MAX_RECORDS, ORIGIN_TUNE, TuningApplyService, TuningOperationConflict,
     TuningRewriteFailed, serialize_record,
@@ -236,6 +238,39 @@ def test_history_is_bounded():
             edits=[(_knob(snapshot, "bins"), 30)], background=False,
         )
     assert len(service.history_for_session(snapshot.session_id)) == MAX_RECORDS
+
+
+def test_a_worker_that_fails_to_start_releases_the_lease(monkeypatch):
+    # Apply hands the lease to `_execute_guarded`, which releases it in its own
+    # `finally`. A thread that never starts never reaches that `finally`, so
+    # claiming the hand-off any earlier than a successful `start()` leaks the
+    # lease for the life of the process — the notebook stays leased and every
+    # later edit, tune or agent turn, answers a mutation conflict.
+    documents, service, snapshot, _kernel = _services()
+
+    class UnstartableThread(Thread):
+        def start(self) -> None:
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(apply_module, "Thread", UnstartableThread)
+
+    with pytest.raises(RuntimeError):
+        service.apply(
+            session_id=snapshot.session_id, expected_revision=snapshot.revision,
+            edits=[(_knob(snapshot, "bins"), 60)], background=True,
+        )
+
+    assert documents.coordinator.active_lease is None
+    # The bookkeeping assertion above is not the point; this is. A leaked lease
+    # is only visible to a user as "the notebook can no longer be edited".
+    documents.update_cell_source(
+        cell_id="cell0", source="import math  # after\n",
+        expected_revision=documents.get_snapshot().revision, owner="user",
+    )
+    # A worker that never ran must not stay in the join set either: `shutdown`
+    # joins every registered worker, and joining an unstarted thread raises.
+    assert service._workers == {}
+    service.shutdown(timeout=1.0)
 
 
 # ------------------------------------------------------------------- undo

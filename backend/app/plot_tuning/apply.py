@@ -261,16 +261,35 @@ class TuningApplyService:
             self._remember(record)
             self._publish_notebook_updated(updated, record_id)
 
-            handed_off = True
             if background:
                 worker = Thread(
                     target=self._execute_guarded, args=(record_id, updated, lease),
                     name=f"plot-tune-{record_id[:8]}", daemon=True,
                 )
+                # Registered before `start` so that a worker which runs to
+                # completion immediately still finds its own entry to pop; and
+                # unregistered again if it never starts, because `shutdown`
+                # joins everything in this dict and joining an unstarted thread
+                # raises.
                 with self._lock:
                     self._workers[worker] = record_id
-                worker.start()
+                try:
+                    worker.start()
+                except BaseException:
+                    with self._lock:
+                        self._workers.pop(worker, None)
+                    raise
+                # Only *now* does the lease belong to `_execute_guarded`, which
+                # releases it in its own `finally`. A thread that failed to
+                # start never reaches that `finally`, so hand-off must not be
+                # claimed a moment earlier: the outer `finally` below is the
+                # only thing standing between `can't start new thread` and a
+                # document that stays leased until the process restarts.
+                handed_off = True
             else:
+                # Entering the call is the hand-off on this path: whatever
+                # happens inside, `_execute_guarded` releases the lease.
+                handed_off = True
                 self._execute_guarded(record_id, updated, lease)
             return self.get(record_id)
         finally:

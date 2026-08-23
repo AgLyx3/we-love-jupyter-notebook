@@ -237,18 +237,31 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   });
   await page.goto("/");
   const initialCurrentResponse = await initialCurrent;
+  // Opening over a notebook that is already loaded is a guarded replacement:
+  // the backend refuses it unless the request names the session and revision it
+  // expects to displace, so that one client cannot silently discard another's
+  // unsaved work. Playwright shares a single backend across projects, and the
+  // desktop specs hand the mobile project a dirty notebook, so this run usually
+  // is the second client. Carry the preconditions from the snapshot that was
+  // just read; on a clean backend (404 above) there is no session to name, so
+  // leave the fields off rather than send nulls — the guard only applies when a
+  // notebook is loaded, and this keeps the request honest about that.
+  const openBody: Record<string, unknown> = { path: sample };
   if (initialCurrentResponse.ok()) {
-    replacedSessionId = String((await initialCurrentResponse.json()).sessionId);
+    const { sessionId, revision } = await initialCurrentResponse.json();
+    replacedSessionId = String(sessionId);
+    openBody.sessionId = replacedSessionId;
+    openBody.expectedDocumentRevision = revision;
   }
   phase = "upload";
   const opened = page.waitForResponse((response) => response.url().includes("/api/notebooks/open") && response.request().method() === "POST");
-  await page.evaluate(async (path) => {
+  await page.evaluate(async (body) => {
     const response = await fetch("/api/notebooks/open", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path }),
+      body: JSON.stringify(body),
     });
     await response.text();
-  }, sample);
+  }, openBody);
   expect((await opened).ok()).toBeTruthy();
   await page.reload();
   await expect(page.getByText("sample.ipynb", { exact: true })).toBeVisible();
