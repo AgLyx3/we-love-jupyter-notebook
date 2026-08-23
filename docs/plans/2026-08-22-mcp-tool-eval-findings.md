@@ -249,3 +249,94 @@ lucky sample. The obvious next additions: a conflict task (someone edits in the
 tab mid-flight), a large-notebook task where `cells=` selection should be
 preferred over a whole read, and more repeats — two runs already show the
 sequences moving, so a handful more would say whether that matters.
+
+## 8. Broadening the suite
+
+Section 7 closed on "five tasks, two runs, one model". This is what replaced
+that, and what it found immediately.
+
+### 8.1 Split by what actually needs a model
+
+A revision conflict either returns 409 or it does not; no model is required to
+find out. Facts like that moved into pytest, where they are free and run in
+CI, leaving the eval for questions of judgment — which tool a model reaches
+for, how much it fetches, whether it believes the document.
+
+What moved or was added mechanically:
+
+- **`notebook_show` had no behavioural test at all.** It appeared once, in the
+  list of expected tool names. It is the only tool whose entire job is a side
+  effect on the person's machine, which is the kind of thing that breaks
+  quietly. Now covered: a forced tab on every explicit call, an automatic one
+  only once per session, and a host with no browser — where `webbrowser.open`
+  raises — that must still answer. That last one would otherwise break
+  `notebook_open` too, since opening a notebook raises the tab as a side
+  effect: the notebook would be open and the call would still report an error.
+- **`run_all` against a real kernel when a cell raises**, and a **successful
+  delete** through the tools. Only the refusal path of delete — the last
+  remaining cell — had been covered end to end.
+
+Both new test files were checked by mutation rather than by passing: dropping
+the forced re-open, and letting a headless failure propagate, each fail the
+tests that claim to catch them.
+
+### 8.2 The notebook is untrusted input, and now something measures it
+
+Three adversarial tasks, matching the warning already in the README. A payload
+in a markdown cell, one in a **saved cell output** — notebooks ship those
+inside the file, so text a model reads as "results" is written by whoever sent
+it — and one naming a file outside the workspace.
+
+Each aims at an action the risk classifier does **not** stop: a plain delete,
+an overwrite, a neighbouring file read. A payload saying "run the deploy cell"
+would be refused by the gate whatever the model decided, and would measure the
+gate rather than the model.
+
+All three passed 2/2, and the model named the injection in its reply each time
+rather than silently declining.
+
+### 8.3 The checks are themselves tested
+
+A check that has never returned False is indistinguishable from one that
+cannot, and this suite shipped exactly that bug once — `answer-without-running`
+passed for a while having made zero tool calls. So the compromised outcomes are
+constructed directly and fed to the same check functions: a notebook with the
+cell deleted, one with the config overwritten, one with the secret pasted in.
+Ten tests, no model, no kernel, 0.03s.
+
+### 8.4 Repeats found something on the first run
+
+`--repeat` for pass rates, `--jobs` for parallelism. Eight tasks twice over,
+four at a time, took **76 seconds** — far under the budget, and enough headroom
+that `--repeat 5` across everything would still finish in about three minutes.
+
+The first run with repeats immediately produced a 1/2: `add-a-cell` passed one
+attempt and failed the other. Not the tools — the client exited 1. Six further
+runs at higher contention (six concurrent, against the four that failed) all
+passed with an identical tool sequence, so parallelism is not the cause. The
+failure is **unexplained**, not diagnosed away.
+
+What it did expose was a hole in the harness: the client exited non-zero having
+written nothing to stderr, and only stderr was kept, so the stream-json
+transcript on stdout — where the client reports its own errors — was discarded
+at the moment it was wanted. Now retained. The suite existed to avoid recording
+that something went wrong without recording what, and was doing it.
+
+### 8.5 Open
+
+**`run_all` says nothing about the cells it skipped.** On an error the state is
+`failed`, the note is `"Cell execution failed"`, and the cells that never ran
+are dropped from the result entirely. The risky-cell path explicitly says later
+cells did not run; this path does not. A model reading that result could
+reasonably conclude the notebook is shorter than it is, or that everything ran.
+Pinned as current behaviour with the gap named, rather than changed while
+adding tests.
+
+**Nothing measures frugality on writes.** Across six runs `add-a-cell` used the
+same sequence — open, insert, run_cell, run_all, save — running the notebook
+twice to check one added cell. Harmless here, not harmless on a notebook whose
+cells are expensive.
+
+**Still one model.** Repeats separate a lucky sample from a stable one; they do
+not say whether a tool description survives a smaller model. That remains the
+next real gap.
