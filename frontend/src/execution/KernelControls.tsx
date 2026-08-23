@@ -1,4 +1,4 @@
-import { CircleStop, Play, RefreshCcw } from "lucide-react";
+import Icon from "../ui/Icon";
 import type { KernelStatus } from "../api/client";
 
 export default function KernelControls({ status, mutationDisabled, runAwaitingApproval = false, onRunAll, onInterrupt, onRestart }: { status: KernelStatus; mutationDisabled: boolean; runAwaitingApproval?: boolean; onRunAll: () => void; onInterrupt: () => void; onRestart: () => void }) {
@@ -21,8 +21,8 @@ export default function KernelControls({ status, mutationDisabled, runAwaitingAp
         it does not describe, the pause gets its own word next to it, in a live
         region so it is announced and not only seen. */}
     {runAwaitingApproval && <span className="kernel-paused" role="status">Run paused for approval</span>}
-    <button title="Run all cells" aria-label="Run all cells" disabled={mutationDisabled} onClick={onRunAll}><Play /></button>
-    <button title="Interrupt kernel" aria-label="Interrupt kernel" disabled={!status.kernelSessionId || status.state !== "busy"} onClick={onInterrupt}><CircleStop /></button>
-    <button title={restartBlocked ? "A run is paused for approval — decide or cancel it first" : "Restart kernel"} aria-label="Restart kernel" disabled={!status.kernelSessionId || restartBlocked} onClick={onRestart}><RefreshCcw /></button>
+    <button title="Run all cells" aria-label="Run all cells" disabled={mutationDisabled} onClick={onRunAll}><Icon name="play_arrow" /></button>
+    <button title="Interrupt kernel" aria-label="Interrupt kernel" disabled={!status.kernelSessionId || status.state !== "busy"} onClick={onInterrupt}><Icon name="stop_circle" /></button>
+    <button title={restartBlocked ? "A run is paused for approval — decide or cancel it first" : "Restart kernel"} aria-label="Restart kernel" disabled={!status.kernelSessionId || restartBlocked} onClick={onRestart}><Icon name="refresh" /></button>
   </div>;
 }

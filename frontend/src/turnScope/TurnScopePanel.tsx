@@ -1,4 +1,4 @@
-import { Eraser, LockKeyhole, X } from "lucide-react";
+import Icon from "../ui/Icon";
 import type { NotebookSnapshot, TurnScope } from "../api/client";
 
 export function ScopeCellList({ notebook, editableCellIds, contextCellIds, disabled, onFocusCell, onRemoveCell }: { notebook: NotebookSnapshot; editableCellIds: string[]; contextCellIds: string[]; disabled?: boolean; onFocusCell: (id: string) => void; onRemoveCell?: (id: string) => void }) {
@@ -7,7 +7,7 @@ export function ScopeCellList({ notebook, editableCellIds, contextCellIds, disab
     if (!cell) return null;
     return <div className="scope-item-row" key={`${kind}-${id}`}>
       <button type="button" className={`scope-item ${kind}`} title={`Cell ID: ${id}`} onClick={() => onFocusCell(id)}><b>{cell.index + 1}</b><span><strong>{cell.cellType}</strong>{cell.source.trim().slice(0, 46) || "Empty cell"}</span></button>
-      {onRemoveCell && <button type="button" className="scope-remove" disabled={disabled} title="Remove from turn scope" aria-label={`Remove cell ${cell.index + 1} from turn scope`} onClick={() => onRemoveCell(id)}><X /></button>}
+      {onRemoveCell && <button type="button" className="scope-remove" disabled={disabled} title="Remove from turn scope" aria-label={`Remove cell ${cell.index + 1} from turn scope`} onClick={() => onRemoveCell(id)}><Icon name="close" /></button>}
     </div>;
   });
   return <div className="scope-items">{items(editableCellIds, "editable")}{items(contextCellIds, "context")}</div>;
@@ -15,7 +15,7 @@ export function ScopeCellList({ notebook, editableCellIds, contextCellIds, disab
 
 export default function TurnScopePanel({ notebook, scope, disabled, trusted = false, onClear, onFocusCell, onDropCell, onRemoveCell }: { notebook: NotebookSnapshot; scope: TurnScope; disabled: boolean; trusted?: boolean; onClear: () => void; onFocusCell: (id: string) => void; onDropCell: (id: string) => void; onRemoveCell?: (id: string) => void }) {
   return <section className="scope-panel" aria-labelledby="scope-heading" onDragOver={(event) => { if (!disabled) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); const id = event.dataTransfer.getData("application/x-notebook-cell"); if (id && !disabled) onDropCell(id); }}>
-    <div className="section-heading"><div><LockKeyhole /><h2 id="scope-heading">Turn scope</h2></div><button title="Clear turn scope" aria-label="Clear turn scope" disabled={disabled || (!scope.editableCellIds.length && !scope.contextCellIds.length)} onClick={onClear}><Eraser /></button></div>
+    <div className="section-heading"><div><Icon name="lock" /><h2 id="scope-heading">Turn scope</h2></div><button title="Clear turn scope" aria-label="Clear turn scope" disabled={disabled || (!scope.editableCellIds.length && !scope.contextCellIds.length)} onClick={onClear}><Icon name="layers_clear" /></button></div>
     {trusted && <p className="scope-trusted-banner" role="note">Trusted turn: the whole notebook is editable. These marks are attention hints only, not a permission fence.</p>}
     {!trusted && <div className="scope-counts"><span>{scope.editableCellIds.length} editable</span><span>{scope.contextCellIds.length} focus</span></div>}
     <ScopeCellList notebook={notebook}

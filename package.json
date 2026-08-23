@@ -11,10 +11,10 @@
   },
   "dependencies": {
     "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/language": "^6.12.4",
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.38.1",
     "@uiw/react-codemirror": "^4.23.13",
-    "lucide-react": "^0.525.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0"

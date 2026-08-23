@@ -1,4 +1,4 @@
-import { RotateCcw } from "lucide-react";
+import Icon from "../ui/Icon";
 import { useEffect, useState } from "react";
 import type { TuningBounds, TuningKnob, TuningKnobKind, TuningValue } from "../api/client";
 import { parseKnobNumber, sameValue, stepFor, widen } from "./knobs";
@@ -56,7 +56,7 @@ export default function KnobControl({ knob, value, bounds, disabled, onChange, o
     <div className="knob-head">
       <code className="knob-name">{knob.name}</code>
       <span className="knob-origin">cell {knob.cellIndex + 1}</span>
-      {changed && <button type="button" className="knob-reset" aria-label={`Reset ${knob.name}`} disabled={disabled} onClick={onReset}><RotateCcw /></button>}
+      {changed && <button type="button" className="knob-reset" aria-label={`Reset ${knob.name}`} disabled={disabled} onClick={onReset}><Icon name="undo" /></button>}
     </div>
 
     {numeric && bounds && <>

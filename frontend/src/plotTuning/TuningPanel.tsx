@@ -1,4 +1,4 @@
-import { Check, ShieldAlert, X } from "lucide-react";
+import Icon from "../ui/Icon";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   CellOutput, TuningBounds, TuningKnob, TuningPlan, TuningPreview, TuningRecord,
@@ -359,7 +359,7 @@ export default function TuningPanel(props: TuningPanelProps) {
   return <section className="tuning-panel" data-state={state} aria-label="Plot tuning">
     <header className="tuning-panel-head">
       <strong>Tune</strong>
-      <button type="button" className="tuning-close" aria-label="Close tuning panel" onClick={close}><X /></button>
+      <button type="button" className="tuning-close" aria-label="Close tuning panel" onClick={close}><Icon name="close" /></button>
     </header>
 
     {state === "scanning" && <p className="tuning-message" role="status">Looking for values you can tune…</p>}
@@ -375,7 +375,7 @@ export default function TuningPanel(props: TuningPanelProps) {
     </div>}
 
     {state === "risky-confirm" && plan && <div className="tuning-message tuning-risky">
-      <p className="risk-title"><ShieldAlert /> Warming up re-runs {plan.risky.length} flagged {plan.risky.length === 1 ? "cell" : "cells"} above this one.</p>
+      <p className="risk-title"><Icon name="gpp_maybe" /> Warming up re-runs {plan.risky.length} flagged {plan.risky.length === 1 ? "cell" : "cells"} above this one.</p>
       <p>Nothing runs until you approve. Your notebook and its kernel are not touched either way.</p>
       <ul>{plan.risky.map((cell) => <li key={cell.cellId}>Cell {cell.cellIndex + 1} — {cell.reasons.join(", ") || cell.categories.join(", ")}</li>)}</ul>
       <div className="tuning-actions">
@@ -397,7 +397,7 @@ export default function TuningPanel(props: TuningPanelProps) {
     {(state === "warming" || stage === "ready" || stage === "applying" || stage === "applied") && <div className="tuning-panel-body">
       <div className="tuning-preview-column">
         {stage === "applied" && record && <p className="tuning-applied-strip" role="status">
-          <Check /> Applied {record.knobs.length} {record.knobs.length === 1 ? "change" : "changes"}. This is your notebook now.
+          <Icon name="check" /> Applied {record.knobs.length} {record.knobs.length === 1 ? "change" : "changes"}. This is your notebook now.
         </p>}
         {state === "warming"
           ? <p className="tuning-message" role="status">{warmProgressLabel(props.warmTimings?.length ? props.warmTimings : timings, elapsed)}</p>
