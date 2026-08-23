@@ -279,7 +279,7 @@ export default function NotebookCell({ cell, focused, selected, outlined = false
   const outputsStale = undone && undoneAt.current === cell.executionCount;
   // Every string on the review surface is keyed off the origin. The user reused
   // the agent's ledger on purpose, but their own edit must never be attributed
-  // to the agent — so "Agent changed this cell" becomes "You tuned this cell",
+  // to the agent — so "Agent Suggestion" becomes "You tuned this cell",
   // and so does everything around it.
   const tuned = origin === "tune";
   const reviewLabel = stale
@@ -288,14 +288,17 @@ export default function NotebookCell({ cell, focused, selected, outlined = false
     // unreachable for it today. The branch is here so that a structural tune,
     // if one ever lands, cannot silently fall through to the agent's wording.
     : added ? tuned ? "You added this cell" : "Agent added this cell"
-    : tuned ? "You tuned this cell" : "Agent changed this cell";
+    : tuned ? "You tuned this cell" : "Agent Suggestion";
   const staleNote = tuned
     ? "This cell changed after you tuned it — these values can no longer be undone individually; edit them by hand."
     : "This cell changed after the agent edited it — undo the whole turn or edit it by hand.";
   const keepLabel = tuned ? `Keep tuned change to ${description}` : `Keep agent change to ${description}`;
-  const undoLabel = tuned ? `Undo tuned change to ${description}` : `Revert agent change to ${description}`;
+  // C1 renamed the visible word to Discard, so the accessible name has to
+  // carry it too: WCAG 2.5.3 wants the visible label inside the accessible
+  // name, and "Revert agent change to…" no longer contains it.
+  const undoLabel = tuned ? `Discard tuned change to ${description}` : `Discard agent change to ${description}`;
   const keepTitle = tuned ? "Keep these tuned values" : added ? "Keep this cell" : "Keep this agent change";
-  const undoTitle = tuned ? "Undo these tuned values" : added ? "Remove this added cell" : "Undo this agent change";
+  const undoTitle = tuned ? "Discard these tuned values" : added ? "Remove this added cell" : "Discard this agent change";
   // §3.5's gate: a picture to compare against, and knobs the scan actually
   // found. Without the second half the button would promise a panel that opens
   // on "nothing here can be tuned".
@@ -349,7 +352,7 @@ export default function NotebookCell({ cell, focused, selected, outlined = false
           ? null
           : <>
             {onKeep && <button className="review-action keep" disabled={dependentDisabled} title={keepTitle} aria-label={keepLabel} onClick={onKeep}><Icon name="check" /> Keep</button>}
-            <button className="review-action undo" disabled={dependentDisabled} title={undoTitle} aria-label={undoLabel} onClick={onRevert}><Icon name="undo" /> Undo</button>
+            <button className="review-action undo" disabled={dependentDisabled} title={undoTitle} aria-label={undoLabel} onClick={onRevert}><Icon name="undo" /> Discard</button>
           </>}
       </div>}
       {retypedTo && <p className="cell-retyped" role="note">

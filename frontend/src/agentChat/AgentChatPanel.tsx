@@ -144,9 +144,15 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
         <div className="turn-state"><span className={active ? "activity-dot" : ""} />{turn.state.replaceAll("_", " ")}</div>
         {turn.finalOutput && <div className="turn-output"><ReactMarkdown>{turn.finalOutput}</ReactMarkdown></div>}
         {turn.error && <p className="error-text">{turn.error.message}</p>}
-        {turn.changes.length > 0 && turn.writeScope !== "trusted" && <p>{turn.changes.length} cell{turn.changes.length === 1 ? "" : "s"} changed. Review the inline diff.</p>}
+        {/* C7. The design's card, with the count kept: "Cell Edit Proposed"
+            says what happened, the count says how much, and the sentence says
+            where to go and settle it. */}
+        {turn.changes.length > 0 && turn.writeScope !== "trusted" && <div className="turn-edit-card">
+          <p className="turn-edit-card-head"><Icon name="edit_document" /> Cell Edit Proposed<span>{turn.changes.length} cell{turn.changes.length === 1 ? "" : "s"}</span></p>
+          <p>Review the changes inline in the notebook editor.</p>
+        </div>}
         {turn.structuralOps && turn.structuralOps.length > 0 && <p className="structural-summary">Structural changes: {structuralSummary(turn.structuralOps)}. Review the inline diff — undo reverts the whole turn.</p>}
-        {/* Unlike "Undo all" in the review bar, restoring the checkpoint also
+        {/* Unlike "Reject All" in the review bar, restoring the checkpoint also
             reverses changes the user explicitly kept, so say so rather than
             letting the label imply it only undoes outstanding work. */}
         {keptCount > 0 && turn.undoEligible && !active && <p className="turn-undo-note" role="note">Undoing the turn also reverses the {keptCount} change{keptCount === 1 ? "" : "s"} you kept.</p>}

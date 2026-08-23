@@ -12,7 +12,7 @@ import type { AgentOperation } from "../api/client";
 // editors — a destructive "undo all" sitting beside "keep all" in a bar that
 // reflows as the count drops, so users repeatedly destroy work by mis-clicking:
 //   * the buttons keep fixed positions and widths regardless of the counter, and
-//   * undo-all asks for confirmation once anything has been kept, because that
+//   * reject-all asks for confirmation once anything has been kept, because that
 //     is the point where it starts discarding decisions rather than just
 //     undoing the agent.
 export default function ReviewBar({ origin = "agent", total, reviewed, keptCount, undoableCount, disabled, onPrevious, onNext, onFirst, onKeepAll, onUndoAll }: {
@@ -26,6 +26,10 @@ export default function ReviewBar({ origin = "agent", total, reviewed, keptCount
 }) {
   const tuned = origin === "tune";
   const what = tuned ? "tuned change" : "change";
+  // C5. The counter counts what is left to decide rather than what is done:
+  // "0 of 2 changes reviewed" and "2 Pending Reviews" are the same fact, but
+  // only the second one names the work.
+  const pending = total - reviewed;
   const [confirming, setConfirming] = useState(false);
   if (total === 0) return null;
   const undoAll = () => {
@@ -40,20 +44,20 @@ export default function ReviewBar({ origin = "agent", total, reviewed, keptCount
         that itself rather than making the ‹ › the only route to the first one. */}
     <button
       type="button" className="review-bar-count" disabled={disabled}
-      title={`Show the first of ${total} ${what}${total === 1 ? "" : "s"}`}
+      title={`${reviewed} of ${total} ${what}${total === 1 ? "" : "s"} reviewed — show the first one still pending`}
       aria-label={`Go to the first ${what}`}
       onClick={onFirst ?? onNext}
     >
-      <Icon name="location_on" /> {reviewed} of {total} {what}{total === 1 ? "" : "s"} reviewed
+      <Icon name="location_on" /> {pending} Pending Review{pending === 1 ? "" : "s"}
     </button>
     {confirming
-      ? <div className="review-bar-confirm" role="alertdialog" aria-label="Confirm undo all">
-        {/* State what it actually does. Undo all rejects the changes still
+      ? <div className="review-bar-confirm" role="alertdialog" aria-label="Confirm reject all">
+        {/* State what it actually does. Reject All rejects the changes still
             awaiting review; anything already kept stays, and reversing those
             too is what the separate whole-turn undo is for. */}
-        <span>Undo {undoableCount} unreviewed {what}{undoableCount === 1 ? "" : "s"}?{keptCount > 0 ? ` The ${keptCount} you kept stay.` : ""}</span>
+        <span>Reject {undoableCount} unreviewed {what}{undoableCount === 1 ? "" : "s"}?{keptCount > 0 ? ` The ${keptCount} you kept stay.` : ""}</span>
         <button type="button" onClick={() => setConfirming(false)}>Cancel</button>
-        <button type="button" className="review-bar-danger" disabled={disabled} onClick={undoAll}>Undo them</button>
+        <button type="button" className="review-bar-danger" disabled={disabled} onClick={undoAll}>Reject them</button>
       </div>
       : <div className="review-bar-actions">
         {/* Both directions: reviewing means moving back over a change as often
@@ -65,8 +69,8 @@ export default function ReviewBar({ origin = "agent", total, reviewed, keptCount
           <button type="button" disabled={disabled} title={`Previous ${what}`} aria-label={`Previous ${what}`} onClick={onPrevious}><Icon name="chevron_left" /></button>
           <button type="button" disabled={disabled} title={`Next ${what}`} aria-label={`Next ${what}`} onClick={onNext}><Icon name="chevron_right" /></button>
         </span>
-        <button type="button" disabled={disabled} onClick={onKeepAll}><Icon name="check" /> Keep all</button>
-        <button type="button" className="review-bar-danger" disabled={disabled || undoableCount === 0} onClick={undoAll}><Icon name="undo" /> Undo all</button>
+        <button type="button" disabled={disabled} onClick={onKeepAll}><Icon name="check" /> Accept All</button>
+        <button type="button" className="review-bar-danger" disabled={disabled || undoableCount === 0} onClick={undoAll}><Icon name="undo" /> Reject All</button>
       </div>}
   </div>;
 }

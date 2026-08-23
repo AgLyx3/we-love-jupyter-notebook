@@ -533,7 +533,7 @@ export default function App() {
       {notebook ? <div className="editor-layout" style={{ "--agent-width": `${agentWidth}px` } as CSSProperties}>
       <div className="notebook-pane">
       {/* Gated on unsettled work, so finishing a review clears the bar rather
-          than leaving a live "Undo all" behind a "2 of 2 reviewed" counter.
+          than leaving a live "Reject All" behind a "0 Pending Reviews" counter.
           Keyed by turn so no confirmation survives a switch to another turn.
           Trusted turns carry no ledger, so this never shows for them. */}
       {(reviewingTune ? Boolean(tuningRecord) : Boolean(selectedTurn)) && reviewUnsettled.length > 0 && <ReviewBar

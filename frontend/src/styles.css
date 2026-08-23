@@ -510,6 +510,13 @@ body.marquee-active iframe { pointer-events: none; }
 .activity-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--tertiary); animation: pulse 1.2s infinite; }
 .turn-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .turn-actions button { height: 28px; width: auto; flex: 0 0 auto; padding: 0 10px; font-size: var(--text-small); }
+/* C7. The turn's link to the inline diff. */
+.turn-edit-card { margin: 8px 0; padding: 8px 10px; border: 1px solid var(--outline-variant); border-radius: var(--radius); background: var(--surface-container-low); }
+.turn-edit-card p { margin: 0; }
+.turn-edit-card-head { display: flex; align-items: center; gap: 8px; color: var(--primary); font-size: var(--text-small); font-weight: 500; margin-bottom: 2px !important; }
+.turn-edit-card-head .material-symbols-outlined { font-size: 16px; }
+.turn-edit-card-head span { margin-left: auto; color: var(--on-surface-variant); font-size: var(--text-tiny); font-weight: 400; }
+.turn-edit-card p + p { font-size: var(--text-tiny); color: var(--on-surface-variant); }
 .turn-undo-note { color: var(--on-surface-variant); font-size: var(--text-tiny); }
 .execution-status { font-size: var(--text-small); color: var(--on-surface-variant); border-left-color: var(--outline); text-transform: capitalize; }
 .structural-summary { color: var(--tertiary); }
