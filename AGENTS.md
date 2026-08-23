@@ -129,6 +129,29 @@ Before preparing frontend UI work for GitHub deployment:
 - Visually verify meaningful UI changes when a browser/dev server is available.
 - Report what was verified.
 
+## Local Agent CLIs
+
+Both production CLI agents are installed and runnable in this environment, and
+both may be invoked for verification:
+
+- **Claude Code** — `claude` (2.1.223 at time of writing)
+- **Codex** — `codex` (codex-cli 0.135.0 at time of writing)
+
+Versions drift and both adapters gate on a supported range, so check
+`claude --version` / `codex --version` against the gates in
+`backend/app/agent_workspace/adapters.py` before concluding that a failure is a
+bug rather than an unsupported version.
+
+- **Verify agent behaviour against the real CLI, not the fake adapter.** The fake
+  adapter proves the plumbing — routes, ledger, review flow — and nothing about
+  what an agent actually does with `INSTRUCTIONS.md`. A turn that reports
+  `completed` after doing nothing looks identical to a successful one.
+- Real-CLI runs spend real tokens. That is the expected cost of verifying a turn
+  and does not need separate approval; say in the summary that a run was real.
+- The two adapters reach files differently — Claude via a per-tool allow-list,
+  Codex via a workspace-scoped sandboxed shell — so a change to workspace or
+  boundary logic must be exercised on **both**, not just the default agent.
+
 ## Agent And Permission Model
 
 Preserve the core product invariant:
