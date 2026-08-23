@@ -36,6 +36,20 @@ def _text_of(value: Any) -> str:
     return str(value) if value is not None else ""
 
 
+def _decoded_size(encoded: str) -> int:
+    """The image's real size, not the length of its base64 text.
+
+    Base64 is about 4/3 of what it encodes, so reporting the string length
+    overstates every image by a third — including in the example this module's
+    own docstring used to give.
+    """
+    stripped = len(encoded.strip())
+    if stripped == 0:
+        return 0
+    padding = encoded.strip().count("=", -2)
+    return max(0, (stripped * 3) // 4 - padding)
+
+
 def _truncate(text: str, limit: int) -> tuple[str, int]:
     """Return the kept prefix and how many characters were dropped."""
     if len(text) <= limit:
@@ -90,7 +104,8 @@ def summarize_output(output: dict[str, Any]) -> dict[str, Any]:
             # 17.7 KB" knows a plot rendered and can ask the person to look;
             # the base64 would tell it nothing and cost thousands of tokens.
             summary["images"] = [
-                {"mimeType": mime, "bytes": len(_text_of(data[mime]))} for mime in images
+                {"mimeType": mime, "bytes": _decoded_size(_text_of(data[mime]))}
+                for mime in images
             ]
             if not text:
                 summary["text"] = f"<{', '.join(images)} — view it in the editor tab>"

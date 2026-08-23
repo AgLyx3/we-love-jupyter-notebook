@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -13,18 +15,24 @@ from backend.app.mcp.supervisor import EditorProcess, EditorStartupError, free_l
 
 
 class DyingEditor(EditorProcess):
-    """A child that prints why it failed and exits, as uvicorn does."""
+    """A child that prints why it failed and exits, as uvicorn does.
+
+    Writes to a file rather than a pipe, mirroring the real start: the kernel
+    inherits these descriptors, and a pipe nobody drains blocks its writer.
+    """
 
     def _start_locked(self) -> None:
         self._port = free_loopback_port()
-        self._process = subprocess.Popen(
-            [
-                sys.executable, "-c",
-                "import sys; print('RuntimeError: No built frontend found. "
-                "Run `npm run build`'); sys.exit(1)",
-            ],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
-        )
+        self._log = Path(tempfile.mkstemp(prefix="eval-editor-", suffix=".log")[1])
+        with self._log.open("wb") as handle:
+            self._process = subprocess.Popen(
+                [
+                    sys.executable, "-c",
+                    "import sys; print('RuntimeError: No built frontend found. "
+                    "Run `npm run build`'); sys.exit(1)",
+                ],
+                stdout=handle, stderr=subprocess.STDOUT, start_new_session=True,
+            )
         self._await_ready(self._process, self._port)
 
 
@@ -79,3 +87,37 @@ def test_a_free_port_is_a_real_one():
 
 def test_stopping_an_editor_that_never_started_is_harmless():
     EditorProcess().stop()
+
+
+def test_the_child_writes_to_a_file_not_a_pipe():
+    """The kernel inherits the editor child's stdout and stderr.
+
+    Nothing reads that stream until the child fails to start, so a pipe fills
+    at the buffer size and blocks its writer forever — measured: a cell writing
+    400 KB to fd 1 left the kernel stuck at `running` for 45s and never
+    finished. With a file it completed in 1s. Anything that reintroduces a pipe
+    here reintroduces that.
+    """
+    import subprocess as sp
+
+    editor = EditorProcess(startup_timeout=5)
+    captured: dict[str, object] = {}
+    real_popen = sp.Popen
+
+    def record(command, **kwargs):
+        captured.update(kwargs)
+        return real_popen(
+            [sys.executable, "-c", "import sys; sys.exit(0)"],
+            **{k: v for k, v in kwargs.items()},
+        )
+
+    sp.Popen = record
+    try:
+        with pytest.raises(EditorStartupError):
+            editor.ensure_running()
+    finally:
+        sp.Popen = real_popen
+        editor.stop()
+
+    assert captured.get("stdout") is not sp.PIPE, "a pipe here can block the kernel"
+    assert captured.get("stdout") is not None

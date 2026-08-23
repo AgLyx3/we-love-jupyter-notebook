@@ -168,7 +168,49 @@ passes for the right reason: one call, `opened=True`.
 Worth keeping in mind for any task added later — a permissive client is a
 silent way for an eval to measure nothing.
 
-## 6. Still open
+## 6. Code review
+
+A review of the whole branch found six defects. All six were verified before
+being acted on, and all six were real.
+
+**The kernel could be wedged by a cell writing to stdout.** The editor child
+was started with `stdout=PIPE`, and that pipe is only read on the
+startup-failure path. The Jupyter kernel inherits those descriptors — it is
+launched with `stdout=None` — so anything reaching fd 1 or 2 fills the pipe
+and blocks the writer forever. Measured: a cell doing `os.write(1, b"x" *
+400_000)` left the run stuck at `running` for the full timeout and never
+finished. No approval was involved, so the gate does not stand between a user
+and this. The child now writes to a file, which cannot block; the same cell
+completes in one second. A test fails if a pipe is reintroduced.
+
+**`notebook_status` could launder a stale view into a fresh one.** It is
+annotated read-only and shows no cell content, but it adopted the server's
+revision as the write baseline. Read, a person edits in the tab, call status,
+write — and the write went out against the *new* revision and silently
+overwrote them, instead of conflicting. It no longer observes.
+
+**A paused run held the notebook with no way out.** A model-initiated run
+parks in `awaiting_approval` holding the mutation lease. Headless, or with
+`--no-browser`, nobody can approve it and there was no cancel tool, so every
+later write — from the tools *and* from the tab — failed with
+`mutation_conflict` until the server was restarted. Added
+`notebook_cancel_run`.
+
+**Insert and delete never told the tab.** Every other mutating route publishes
+`notebook.updated`; the new ones did not. The tab kept showing the old cell
+list and then refused the person's next edit as a conflict over a change they
+were never shown — which is precisely the failure the shared-session design
+exists to avoid.
+
+**A missing cell was described, not named.** `_explain` interpolated the
+error's generic message where the cell id belonged: *"There is no cell
+'Notebook cell was not found'"*. The id is in `details.cellId`.
+
+**Image sizes were overstated by a third.** `bytes` was the length of the
+base64 text rather than of what it encodes — including in this module's own
+docstring example.
+
+## 7. Still open
 
 **~~There is no way to add or delete a cell.~~ Closed.** This was the finding,
 and it was real: `/cells/{id}/source` edited an existing cell and structural

@@ -19,6 +19,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -69,6 +70,7 @@ class EditorProcess:
         self.startup_timeout = startup_timeout
         self._process: subprocess.Popen[bytes] | None = None
         self._port: int | None = None
+        self._log: Path | None = None
         # Reentrant on purpose. A failed start tears itself down while
         # `ensure_running` still holds this, and with a plain Lock that second
         # acquire never returns — the first tool call hangs, and so does every
@@ -117,21 +119,37 @@ class EditorProcess:
             "--host", "127.0.0.1", "--port", str(port),
             "--log-level", "warning",
         ]
+        # A file, not a pipe. The kernel jupyter_client starts inherits these
+        # descriptors — it is launched with stdout=None — so anything a cell
+        # writes to fd 1 or 2 lands here: a C extension's chatter, os.write, a
+        # subprocess that did not capture its output. Nothing reads the child's
+        # output until it fails to start, so a pipe fills at the buffer size
+        # and blocks the writer forever, wedging the kernel mid-cell.
+        # Measured: a cell writing 400 KB to fd 1 never returned. A file has no
+        # such limit and still keeps the startup diagnostics readable.
+        log = Path(tempfile.mkstemp(prefix="notebook-editor-", suffix=".log")[1])
         try:
-            process = subprocess.Popen(
-                command,
-                env=environment,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                # Its own group, so the kernel uvicorn spawns is torn down with
-                # it rather than reparented and left running.
-                start_new_session=True,
-            )
+            handle = log.open("wb")
         except OSError as error:
+            raise EditorStartupError(f"Could not open an editor log: {error}") from error
+        try:
+            with handle:
+                process = subprocess.Popen(
+                    command,
+                    env=environment,
+                    stdout=handle,
+                    stderr=subprocess.STDOUT,
+                    # Its own group, so the kernel uvicorn spawns is torn down
+                    # with it rather than reparented and left running.
+                    start_new_session=True,
+                )
+        except OSError as error:
+            log.unlink(missing_ok=True)
             raise EditorStartupError(f"Could not start the editor: {error}") from error
 
         self._process = process
         self._port = port
+        self._log = log
         try:
             self._await_ready(process, port)
         except EditorStartupError:
@@ -157,36 +175,39 @@ class EditorProcess:
             f"The editor did not become ready within {self.startup_timeout:.0f}s"
         )
 
-    @staticmethod
-    def _drain(process: subprocess.Popen[bytes]) -> str:
+    def _drain(self, _process: subprocess.Popen[bytes]) -> str:
         """The child's output, so a startup failure says why.
 
         Without it the caller gets "the editor exited" and has to go looking;
         the usual causes — no built frontend, a port taken, a bad workspace
         root — all announce themselves clearly on stderr.
         """
-        if process.stdout is None:
+        if self._log is None:
             return "(no output captured)"
         try:
-            return process.stdout.read().decode(errors="replace").strip() or "(no output)"
-        except (OSError, ValueError):
+            text = self._log.read_text(errors="replace").strip()
+        except OSError:
             return "(output unavailable)"
+        # The tail is where the traceback ends and the reason is stated; a
+        # long-running editor's log can be large.
+        return text[-4000:] if text else "(no output)"
 
     def stop(self) -> None:
         """Terminate the editor and its whole process group."""
         with self._lock:
             process = self._process
+            log = self._log
             self._process = None
             self._port = None
+            self._log = None
         if process is None:
+            if log is not None:
+                log.unlink(missing_ok=True)
             return
         if process.poll() is None or _group_alive(process.pid):
             terminate_process_groups([process])
-        if process.stdout is not None:
-            try:
-                process.stdout.close()
-            except OSError:
-                pass
+        if log is not None:
+            log.unlink(missing_ok=True)
 
     def __enter__(self) -> EditorProcess:
         self.ensure_running()

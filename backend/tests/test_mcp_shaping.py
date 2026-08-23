@@ -53,7 +53,10 @@ def test_an_image_is_described_never_carried():
             "metadata": {},
         }
     )
-    assert summary["images"] == [{"mimeType": "image/png", "bytes": len(png)}]
+    assert summary["images"][0]["mimeType"] == "image/png"
+    # The decoded size, not the length of the base64 text — see
+    # test_an_image_is_measured_decoded_not_as_base64_text.
+    assert 0 < summary["images"][0]["bytes"] < len(png)
     assert summary["text"] == "<Figure size 600x300>"
     assert png[:40] not in json.dumps(summary)
 
@@ -206,3 +209,25 @@ def test_shaping_collapses_a_realistic_plot_notebook():
     shaped = len(json.dumps(shape_notebook(plots)))
     assert raw > 70_000
     assert shaped < raw // 20, f"expected a large reduction, got {shaped} from {raw}"
+
+
+def test_an_image_is_measured_decoded_not_as_base64_text():
+    """Base64 is ~4/3 of what it encodes, so the string length overstates every
+    image by a third — the number a caller uses to judge whether to look."""
+    import base64
+
+    raw = b"\x89PNG" + b"\x00" * 9_000
+    encoded = base64.b64encode(raw).decode()
+    summary = summarize_output(
+        {"output_type": "display_data", "data": {"image/png": encoded}, "metadata": {}}
+    )
+    reported = summary["images"][0]["bytes"]
+    assert abs(reported - len(raw)) <= 2, f"{reported} vs real {len(raw)}"
+    assert reported < len(encoded)
+
+
+def test_an_empty_image_payload_measures_zero():
+    summary = summarize_output(
+        {"output_type": "display_data", "data": {"image/png": ""}, "metadata": {}}
+    )
+    assert summary["images"][0]["bytes"] == 0

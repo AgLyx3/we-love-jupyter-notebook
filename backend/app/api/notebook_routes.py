@@ -183,6 +183,24 @@ def download_notebook(request: Request) -> Response:
     )
 
 
+def _announce(request: Request, snapshot: NotebookSnapshot, owner: str) -> None:
+    """Tell the open tab the document moved.
+
+    Every other mutating route does this, and a structural change needs it
+    most: without it the tab still shows the old cell list, and the next edit a
+    person makes there is refused as a revision conflict over a change they
+    were never shown.
+    """
+    request.app.state.session_event_service.publish(
+        "notebook.updated",
+        {
+            "sessionId": snapshot.session_id,
+            "revision": snapshot.revision,
+            "ownerId": owner,
+        },
+    )
+
+
 @router.post("/cells", status_code=201)
 def insert_cell(body: CellInsertRequest, request: Request) -> dict[str, Any]:
     """Add a cell. It is marked as agent-authored and is NOT executed."""
@@ -194,6 +212,7 @@ def insert_cell(body: CellInsertRequest, request: Request) -> dict[str, Any]:
         expected_revision=body.expected_revision,
         owner="cell_insert",
     )
+    _announce(request, snapshot, "cell_insert")
     return serialize_snapshot(snapshot)
 
 
@@ -205,6 +224,7 @@ def delete_cell(cell_id: str, body: CellDeleteRequest, request: Request) -> dict
         expected_revision=body.expected_revision,
         owner="cell_delete",
     )
+    _announce(request, snapshot, "cell_delete")
     return serialize_snapshot(snapshot)
 
 

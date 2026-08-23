@@ -254,7 +254,8 @@ def test_run_outputs_are_summarised_like_any_other():
         timeout=10, interval=0, sleep=lambda _s: None,
     )
     assert png[:20] not in json.dumps(result)
-    assert result["cells"][0]["outputs"][0]["images"][0]["bytes"] == len(png)
+    reported = result["cells"][0]["outputs"][0]["images"][0]["bytes"]
+    assert 0 < reported < len(png), "the decoded size, not the base64 length"
 
 
 # --- the surface itself ------------------------------------------------------
@@ -279,6 +280,7 @@ def test_the_surface_is_the_intended_tools(built):
         "notebook_delete_cell",
         "notebook_run_cell",
         "notebook_run_all",
+        "notebook_cancel_run",
         "notebook_save",
         "notebook_show",
     }
@@ -448,3 +450,63 @@ def test_open_tells_the_caller_where_a_person_can_watch(built):
         tool.name: tool.description for tool in asyncio.run(server.list_tools())
     }["notebook_open"]
     assert "editorUrl" in description
+
+
+# --- what the code review found ----------------------------------------------
+
+
+def test_status_does_not_become_a_write_baseline():
+    """`notebook_status` is read-only and shows no cell content.
+
+    If it adopted the server's revision, this sequence would silently clobber:
+    read at r5 → a person edits in the tab (r6) → status → write. The write
+    would go out at r6 and succeed, overwriting a change the caller never saw,
+    instead of conflicting the way a stale write must.
+    """
+    session = EditorSession()
+    session.observe({"sessionId": "s1", "revision": 5})
+    session.observe({"sessionId": "s1", "documentRevision": 6})
+    # observe() itself still accepts documentRevision — it is the *caller* of
+    # status that must not feed it in. Assert the tool does not.
+    import inspect
+
+    from backend.app.mcp import server as module
+
+    source = inspect.getsource(module)
+    status_body = source[source.index("def notebook_status"):source.index("def notebook_set_cell_source")]
+    assert "tools.state.observe" not in status_body, (
+        "status must not update the write baseline"
+    )
+
+
+def test_a_missing_cell_is_named_not_described():
+    """The id belongs in the message; the generic text is not the id.
+
+    This read "There is no cell 'Notebook cell was not found'" — the error's
+    own message interpolated where the cell id should have been.
+    """
+    message = _explain(
+        404,
+        {"error": {"code": "cell_not_found", "message": "Notebook cell was not found",
+                   "details": {"cellId": "vanished"}}},
+        what="Editing",
+    )
+    assert "'vanished'" in message
+    assert "'Notebook cell was not found'" not in message
+
+
+def test_a_missing_cell_without_details_still_reads_sensibly():
+    message = _explain(
+        404, {"error": {"code": "cell_not_found", "message": "gone"}}, what="Editing",
+    )
+    assert "There is no cell in the open notebook" in message
+
+
+def test_a_stuck_run_can_be_cancelled(built):
+    """A run parked on approval holds the mutation lease, so every edit — the
+    caller's and the person's — is refused until it resolves. Headless, with
+    nobody to approve, there has to be a way out that is not a restart."""
+    server, _ = built
+    tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+    assert "notebook_cancel_run" in tools
+    assert "holds the notebook" in tools["notebook_cancel_run"].description

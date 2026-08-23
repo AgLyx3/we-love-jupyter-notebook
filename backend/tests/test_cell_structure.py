@@ -182,3 +182,43 @@ def test_a_round_trip_leaves_the_notebook_as_it_was(client, opened):
     assert [cell["source"] for cell in restored["cells"]] == [
         cell["source"] for cell in opened["cells"]
     ]
+
+
+# --- the open tab has to hear about it ---------------------------------------
+
+
+def published(client):
+    return [
+        event for event in client.app.state.session_event_service.list()
+        if event.event_type == "notebook.updated"
+    ]
+
+
+def test_inserting_tells_the_open_tab(client, opened):
+    """Without this the tab still shows the old cell list, and the person's
+    next edit there is refused as a conflict over a change nobody showed them.
+
+    Every other mutating route publishes; a structural change needs it most.
+    """
+    before = len(published(client))
+    snapshot = client.post("/cells", json={**mutation(opened), "source": "x\n"}).json()
+    events = published(client)
+    assert len(events) == before + 1
+    assert events[-1].data["revision"] == snapshot["revision"]
+
+
+def test_deleting_tells_the_open_tab(client, opened):
+    before = len(published(client))
+    snapshot = client.request("DELETE", "/cells/cell0", json=mutation(opened)).json()
+    events = published(client)
+    assert len(events) == before + 1
+    assert events[-1].data["revision"] == snapshot["revision"]
+
+
+def test_a_refused_change_announces_nothing(client, opened):
+    """A conflict changed nothing, so waking the tab would be a lie."""
+    stale = mutation(opened)
+    client.post("/cells", json={**stale, "source": "one\n"})
+    before = len(published(client))
+    assert client.post("/cells", json={**stale, "source": "two\n"}).status_code == 409
+    assert len(published(client)) == before

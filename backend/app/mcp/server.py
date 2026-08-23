@@ -163,10 +163,12 @@ def _explain(status: int, body: dict[str, Any] | None, *, what: str) -> str:
     if code == "notebook_not_loaded":
         return "No notebook is open. Call notebook_open with a path first."
     if code == "cell_not_found":
+        missing = (error.get("details") or {}).get("cellId")
+        named = f" {missing!r}" if missing else ""
         return (
-            f"There is no cell {message!r} in the open notebook. Call "
-            "notebook_read for the current cell ids — they change when cells "
-            "are added or removed."
+            f"There is no cell{named} in the open notebook. Call notebook_read "
+            "for the current cell ids — they change when cells are added or "
+            "removed."
         )
     if code == "notebook_path_invalid":
         return (
@@ -350,7 +352,11 @@ def build_server(
     )
     def notebook_status() -> dict[str, Any]:
         status = tools.request("GET", "/session/status", what="Reading session status")
-        tools.state.observe(status)
+        # Deliberately NOT observed. This reports what the editor is doing; it
+        # shows no cell content. Adopting its revision as the write baseline
+        # would silently launder a stale view into a fresh one — read, someone
+        # edits in the tab, call status, and the next write clobbers their
+        # change instead of conflicting with it.
         execution = status.get("activeExecution")
         summary: dict[str, Any] = {
             "sessionId": status.get("sessionId"),
@@ -456,6 +462,39 @@ def build_server(
     )
     def notebook_run_all() -> dict[str, Any]:
         return _run(tools, "/execution/run-all", what="Running the notebook")
+
+    @server.tool(
+        name="notebook_cancel_run",
+        description=(
+            "Cancel the run in progress, including one paused waiting for a "
+            "person to approve a risky cell. Until it is cancelled or approved "
+            "it holds the notebook, and every edit — yours and theirs — is "
+            "refused. Use this when nobody is going to approve it."
+        ),
+    )
+    def notebook_cancel_run() -> dict[str, Any]:
+        status = tools.request("GET", "/session/status", what="Reading session status")
+        execution = status.get("activeExecution")
+        if not execution:
+            return {"cancelled": False, "note": "Nothing is running."}
+        attempts = execution.get("attempts") or []
+        attempt = next(
+            (item for item in attempts if item.get("executionAttemptId") == execution.get("currentExecutionAttemptId")),
+            attempts[-1] if attempts else None,
+        )
+        if attempt is None:
+            return {"cancelled": False, "note": "The run has no cell to cancel."}
+        tools.request(
+            "POST", f"/execution/{attempt['executionAttemptId']}/cancel",
+            json_body={
+                "sessionId": execution.get("sessionId"),
+                "expectedDocumentRevision": execution.get("currentDocumentRevision"),
+                "turnId": execution.get("parentTurnId"),
+                "cellId": attempt.get("cellId"),
+            },
+            what="Cancelling the run",
+        )
+        return {"cancelled": True, "cellId": attempt.get("cellId")}
 
     @server.tool(
         name="notebook_save",
