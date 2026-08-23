@@ -14,6 +14,11 @@ import pytest
 from backend.app.mcp.supervisor import EditorProcess, EditorStartupError, free_loopback_port
 
 
+@pytest.fixture(autouse=True)
+def _built_frontend(built_frontend):
+    """The tests below that start a real editor need a build to serve."""
+
+
 class DyingEditor(EditorProcess):
     """A child that prints why it failed and exits, as uvicorn does.
 

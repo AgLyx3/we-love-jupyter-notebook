@@ -67,7 +67,7 @@ def workspace(tmp_path):
 
 
 @pytest.fixture
-def editor(workspace):
+def editor(workspace, built_frontend):
     root, _ = workspace
     server, tools = build_server(workspace_root=str(root), open_browser=False)
     try:
