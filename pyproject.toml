@@ -17,8 +17,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The MCP server is optional: the editor runs perfectly well without it, and
+# nothing in the app imports these.
+mcp = [
+  "mcp>=2,<3",
+  "httpx>=0.27,<1",
+]
 test = [
   "httpx>=0.27,<1",
+  # The MCP tool surface is covered by backend/tests, so the test extra needs
+  # what it imports — CI installs `.[test]` and nothing else.
+  "mcp>=2,<3",
   "pytest>=8,<9",
   # Test-only: the plot-tuning fixture notebook has to produce a real
   # image/png output. The app itself never imports matplotlib — the user's
@@ -26,10 +35,20 @@ test = [
   "matplotlib>=3.8,<4",
 ]
 
+[project.scripts]
+# So `claude mcp add notebook-editor -- notebook-editor-mcp` has a command to name.
+notebook-editor-mcp = "backend.app.mcp.server:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["backend.app*"]
 namespaces = true
+
+# The built frontend, which `npm run build` writes into the package (see
+# vite.config.ts). Without this the wheel carries Python only and the bundled
+# server has no UI to serve.
+[tool.setuptools.package-data]
+"backend.app" = ["web/**/*", "web/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]

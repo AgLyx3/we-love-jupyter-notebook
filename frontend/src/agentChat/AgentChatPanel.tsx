@@ -148,7 +148,14 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
         <div className="turn-actions">{active && <button onClick={onCancel}><Square /> Cancel turn</button>}{turn.undoEligible && !active && <button disabled={mutationsDisabled} onClick={onUndo}><RotateCcw /> Undo entire turn</button>}</div>
       </div>}
       {operation && <div className={`execution-status ${operation.error ? "has-error" : ""}`}><span>Execution: {operation.state.replaceAll("_", " ")}</span>{operation.error && <p>{operation.error.message}</p>}{operation.attempts.filter((attempt) => attempt.error).map((attempt) => <p key={attempt.executionAttemptId}>Cell {attempt.cellIndex + 1}: {attempt.error!.message}</p>)}{operation.attempts.filter((attempt) => attempt.outputsTruncated).map((attempt) => <p key={`${attempt.executionAttemptId}-output-truncated`}>Cell {attempt.cellIndex + 1}: Retained execution output was truncated.</p>)}</div>}
-      {operation && operation.kind === "manual" && !["completed", "failed", "cancelled", "validation_incomplete", "timed_out"].includes(operation.state) && manualAttempt && <button disabled={!manualCorrelated} className="manual-cancel" onClick={() => onDecision(manualAttempt, "cancel")}><Square /> Cancel run</button>}
+      {/* Not while the approval panel is up. That panel carries its own Cancel
+          run beside Skip and Approve, and this button is the same action on the
+          same attempt — two identical controls a few pixels apart, one of them
+          without the context of what is being cancelled. It only became
+          possible to see both at once when this stopped being manual-only: a
+          manual run is never gated, so it never reaches `awaiting_approval`,
+          but a run a model asked for does exactly that. */}
+      {operation && operation.parentTurnId === null && !awaiting && !["completed", "failed", "cancelled", "validation_incomplete", "timed_out"].includes(operation.state) && manualAttempt && <button disabled={!manualCorrelated} className="manual-cancel" onClick={() => onDecision(manualAttempt, "cancel")}><Square /> Cancel run</button>}
       {operation && awaiting && <RiskyExecutionDialog operation={operation} attempt={awaiting} busy={busy} onDecision={(decision) => onDecision(awaiting, decision)} />}
     </section>
     <form className="prompt-form" onSubmit={(event) => { event.preventDefault(); submitPrompt(); }}>

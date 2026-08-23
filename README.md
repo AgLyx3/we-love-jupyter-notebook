@@ -110,6 +110,108 @@ Useful flags:
 .venv/bin/python scripts/dev.py --backend-port 8055 --frontend-port 5199
 ```
 
+## As an MCP server
+
+The editor can also run as an [MCP](https://modelcontextprotocol.io) server, so
+an MCP client — Claude Code, for instance — edits and runs the notebook through
+tools while you watch the same session in a browser tab and step in when you
+want to. The tab is not a read-only view: the notebook, the kernel and the
+scope are one server-side session, so a cell the client edits updates in front
+of you, and a cell you edit is a cell the client is then refused for editing
+against a stale read.
+
+Install the extra and build the frontend — **both**, in this order. The tab is
+served from the built frontend, so skipping `npm run build` leaves the editor
+unable to start and the first tool call fails with exactly that message:
+
+```bash
+.venv/bin/pip install -e '.[mcp]'
+npm run build
+```
+
+```bash
+claude mcp add agent-notebook -- \
+  /absolute/path/to/.venv/bin/notebook-editor-mcp \
+  --workspace-root /absolute/path/to/your/project
+```
+
+Use absolute paths in both places — the client decides what directory the
+server starts in, so a relative one is ambiguous. `--workspace-root` confines
+every path the editor will open, list, or write to that directory; it is
+optional and strongly recommended, since without it the editor reaches
+anywhere you can. A typo fails at launch rather than at the first tool call.
+
+`--no-browser` stops the tab opening by itself. On a headless or remote
+machine no tab can open regardless, so `open` returns an `editorUrl`
+for the client to hand you, and `show` returns it again on request.
+
+If a client names a notebook that is not there, the error lists the `.ipynb`
+files that *are* in the workspace, so it can pick one rather than guess again.
+
+**The tools.** The server is registered under a name, and MCP namespaces every
+tool by it, so a client sees `mcp__agent_notebook__open`. The tools are
+therefore named for what they do and nothing more — repeating the domain in
+each one only produced `notebook_open` inside a namespace already called
+notebook.
+
+`open`, `read`, `status`,
+`set_cell_source`, `insert_cell`, `delete_cell`,
+`run_cell`, `run_all`, `cancel_run`, `save`, `show`.
+
+Three things about them are deliberate:
+
+- **Running a cell can stop and wait for you.** Execution asked for by a tool
+  is treated as agent-initiated, so a cell the risk classifier flags pauses at
+  *awaiting approval* and does not run until you approve it in the tab — the
+  same gate an agent turn's downstream cells get. That pause is the reason to
+  have a browser window at all.
+- **Edits are checked against what the client last read.** If you changed the
+  notebook in the tab in between, the edit is refused rather than applied, and
+  the client is told to re-read. Nothing retries over the top of your change.
+- **Images are described, not returned.** A plot comes back as its size and
+  type; the picture is in the tab. A modest plotting notebook is about 23K
+  tokens of base64 if forwarded whole, and unreadable to a model either way.
+- **An added cell is never run for you.** `insert_cell` marks the new
+  cell as agent-authored — the tab shows it with a badge reading "review before
+  running" — and leaves it inert. Running it is a separate call, and goes
+  through the approval gate like any other.
+
+Agent turns are **not** exposed as tools — the client is already the agent, and
+running the `claude` CLI underneath it would just nest a second one. You can
+still send a turn from the tab. Neither is the file browser: the tab has a
+picker, and a person browsing their own machine is a different thing from a
+model enumerating it.
+
+### Watching it work
+
+Run as an MCP server the editor is a child process the client starts for you,
+on a port chosen at random, with stdout reserved for the protocol. That is
+three ways in which the usual `scripts/dev.py` habits do not apply, so:
+
+- **The port is announced on stderr**, where MCP clients keep their server
+  logs: `notebook editor ready at http://127.0.0.1:PORT (log: ...)`. Open that
+  URL and you are looking at the same session the tools are driving. The same
+  URL comes back as `editorUrl` from `open`, and from
+  `show` on request.
+- **`NOTEBOOK_EDITOR_LOG=/path/to/editor.log`** keeps the editor's own log at a
+  path you choose instead of a temp file that is deleted when it stops. This is
+  what to set before `tail -f`. Unset, a *failed* start is still drained and
+  reported in the error, so you only need this for watching a server that is
+  working.
+- **Never print to stdout** from the server process. It is the transport; a
+  stray `print` corrupts the protocol rather than showing up somewhere.
+
+To see the tool surface without wiring up a client, the MCP Inspector speaks
+the same stdio protocol:
+
+```bash
+npx @modelcontextprotocol/inspector \
+  .venv/bin/notebook-editor-mcp --workspace-root /absolute/path --no-browser
+```
+
+Read [Security Limits](#security-limits) before pointing a client at a notebook
+you would not run yourself.
+
 ## Using it
 
 1. **Open a notebook.** From the start screen choose a local `.ipynb` file, or
@@ -151,6 +253,45 @@ The Playwright suite opens `examples/sample.ipynb` and covers desktop and
 mobile workflows. Screenshots and failure traces are written under
 `test-results/`.
 
+The MCP surface is checked at three depths, and it is worth knowing which one
+to reach for:
+
+| | What it covers | Cost |
+|---|---|---|
+| `pytest backend/tests/test_mcp_server.py` | the tool surface against fakes — errors, revisions, descriptions | instant |
+| `pytest backend/tests/test_mcp_end_to_end.py` | the tools against a real editor, kernel and approval gate | seconds |
+| `python evals/mcp_tool_eval.py` | whether a *model* drives the tools well | a minute per run, and tokens |
+
+Only the last one needs an authenticated `claude` CLI, which is why it is not
+in CI. It answers a different question from the other two: not "does the tool
+work" but "does a model reach for the right one, fetch no more than it needs,
+and ignore a notebook that tells it to do something else".
+
+```bash
+python evals/mcp_tool_eval.py                 # every task, once each
+python evals/mcp_tool_eval.py --repeat 3      # a pass rate, not a pass
+python evals/mcp_tool_eval.py \
+  --model claude:sonnet --model claude:haiku  # the same tasks, two models
+```
+
+`--model` takes `client[:model]` and repeats. A tool description that only
+reads well to the strongest model is a defect a single-model suite cannot see —
+running Haiku alongside Sonnet is what makes that visible.
+
+Two clients are wired: `claude` and `codex`. The Claude path is the verified
+one. The Codex path was built against the CLI's own help and shipped event
+names without a credential to run it, so treat its first run as a shakedown: if
+the transcript does not match what the parser expects it says so, naming the
+event types it saw, rather than reporting a run that used no tools. Codex needs
+`codex login` first — the harness deliberately does not touch `CODEX_HOME`,
+which is where that credential lives.
+
+They are not perfectly matched. Claude runs with `--tools ""`, so the MCP
+surface is the only way to reach the notebook at all. Codex has no equivalent
+switch and runs under a read-only sandbox instead: it cannot write the notebook
+by other means, but it could read one without the tools. Every task asserts the
+surface was used, so such a run fails rather than passing hollowly.
+
 ## Security Limits
 
 The editor binds to loopback and keeps one active notebook in process memory.
@@ -172,6 +313,14 @@ cells are marked with a provenance badge and are not auto-executed, yet once acc
 they are ordinary cells a later Run-All will run. Review the diff before running, and
 use Trusted only with agents and instructions you trust. The risky-cell execution
 approval flow still gates execution.
+
+**Driving it from an MCP client** narrows two of these and widens one. Model-
+initiated runs are gated, where a click of Run is not, and `--workspace-root`
+confines every path the server accepts. But the notebook's own text — markdown,
+code, and cell outputs — is read into the model's context while that same model
+holds a tool that executes cells. A notebook from somewhere you do not trust
+can therefore carry instructions to an agent that can run code on your machine.
+The approval pause is the control that matters there; do not wave it through.
 
 This is not an operating-system sandbox. The CLI and executed notebook code run
 with the current user's permissions. Risk classification is heuristic, approval

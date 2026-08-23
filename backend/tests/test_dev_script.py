@@ -14,6 +14,9 @@ from threading import Event
 
 import pytest
 
+# The launcher re-exports these; the implementation lives in the package so
+# installed code (the MCP supervisor) can share it. Patch targets below name
+# the package module, since that is whose globals the code reads.
 from scripts.dev import (
     _process_group_exists,
     child_exit_code,
@@ -73,8 +76,8 @@ def test_terminate_process_groups_escalates_only_stubborn_children(monkeypatch):
             if pid == stubborn.pid:
                 stubborn.returncode = -signal.SIGKILL
 
-    monkeypatch.setattr("scripts.dev.os.killpg", signal_group)
-    monkeypatch.setattr("scripts.dev._process_group_exists", groups.__contains__)
+    monkeypatch.setattr("backend.app.process_group.os.killpg", signal_group)
+    monkeypatch.setattr("backend.app.process_group._process_group_exists", groups.__contains__)
 
     errors = terminate_process_groups([graceful, stubborn], grace_period=0.1)
 
@@ -102,8 +105,8 @@ def test_terminate_process_groups_reports_errors_and_continues(monkeypatch):
         if pid == broken.pid and sig == signal.SIGKILL:
             broken.returncode = -signal.SIGKILL
 
-    monkeypatch.setattr("scripts.dev.os.killpg", signal_group)
-    monkeypatch.setattr("scripts.dev._process_group_exists", lambda _pid: False)
+    monkeypatch.setattr("backend.app.process_group.os.killpg", signal_group)
+    monkeypatch.setattr("backend.app.process_group._process_group_exists", lambda _pid: False)
 
     errors = terminate_process_groups([broken, graceful], grace_period=0.1)
 
@@ -122,8 +125,8 @@ def test_terminate_process_groups_kills_and_reaps_after_poll_error(monkeypatch):
     )
     graceful = FakeProcess(202, exits_gracefully=True)
     signals: list[tuple[int, int]] = []
-    monkeypatch.setattr("scripts.dev.os.killpg", lambda pid, sig: signals.append((pid, sig)))
-    monkeypatch.setattr("scripts.dev._process_group_exists", lambda _pid: False)
+    monkeypatch.setattr("backend.app.process_group.os.killpg", lambda pid, sig: signals.append((pid, sig)))
+    monkeypatch.setattr("backend.app.process_group._process_group_exists", lambda _pid: False)
 
     errors = terminate_process_groups([broken, graceful], grace_period=0.1)
 
@@ -144,8 +147,8 @@ def test_terminate_process_groups_kills_and_reaps_after_term_error(monkeypatch):
         if pid == 101 and sig == signal.SIGTERM:
             raise PermissionError("term denied")
 
-    monkeypatch.setattr("scripts.dev.os.killpg", signal_group)
-    monkeypatch.setattr("scripts.dev._process_group_exists", lambda _pid: False)
+    monkeypatch.setattr("backend.app.process_group.os.killpg", signal_group)
+    monkeypatch.setattr("backend.app.process_group._process_group_exists", lambda _pid: False)
 
     errors = terminate_process_groups([broken, graceful], grace_period=0.1)
 
@@ -168,8 +171,8 @@ def test_terminate_process_groups_kills_group_after_leader_exits(monkeypatch):
         if sig == signal.SIGKILL:
             group_exists = False
 
-    monkeypatch.setattr("scripts.dev.os.killpg", signal_group)
-    monkeypatch.setattr("scripts.dev._process_group_exists", lambda _pid: group_exists)
+    monkeypatch.setattr("backend.app.process_group.os.killpg", signal_group)
+    monkeypatch.setattr("backend.app.process_group._process_group_exists", lambda _pid: group_exists)
 
     errors = terminate_process_groups([leader], grace_period=0.01)
 

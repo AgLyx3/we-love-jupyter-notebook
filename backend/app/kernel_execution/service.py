@@ -22,6 +22,11 @@ from .models import (
 from .risky_cell_classifier import RiskyCellClassifier
 
 
+# Operation kind for a run a model asked for directly, as opposed to "manual"
+# (a person pressed Run) or "agent_downstream" (a turn revalidating its edits).
+# It carries no parent turn, so it is approved the same way a manual run is.
+MODEL_INITIATED_KIND = "mcp"
+
 DEFAULT_TERMINAL_OPERATION_LIMIT = 100
 DEFAULT_TERMINAL_RETENTION_SECONDS = 3600
 DEFAULT_OPERATION_HISTORY_BYTES = 16 * 1024 * 1024
@@ -51,21 +56,45 @@ class KernelExecutionService:
         self._kernel_notebook_session_id: str | None = None
         documents.register_session_replacement_listener(self._on_session_replaced)
 
-    def start_cell(self, *, cell_id: str, session_id: str, expected_revision: int) -> ExecutionOperation:
-        return self._start_manual(cell_id=cell_id, session_id=session_id, expected_revision=expected_revision)
+    def start_cell(
+        self, *, cell_id: str, session_id: str, expected_revision: int,
+        initiator: str = "user",
+    ) -> ExecutionOperation:
+        return self._start_direct(
+            cell_id=cell_id, session_id=session_id,
+            expected_revision=expected_revision, initiator=initiator,
+        )
 
-    def start_all(self, *, session_id: str, expected_revision: int) -> ExecutionOperation:
-        return self._start_manual(cell_id=None, session_id=session_id, expected_revision=expected_revision)
+    def start_all(
+        self, *, session_id: str, expected_revision: int, initiator: str = "user",
+    ) -> ExecutionOperation:
+        return self._start_direct(
+            cell_id=None, session_id=session_id,
+            expected_revision=expected_revision, initiator=initiator,
+        )
 
-    def _start_manual(self, *, cell_id: str | None, session_id: str, expected_revision: int) -> ExecutionOperation:
+    def _start_direct(
+        self, *, cell_id: str | None, session_id: str, expected_revision: int,
+        initiator: str,
+    ) -> ExecutionOperation:
+        """Run cells now, on request rather than as a turn's downstream validation.
+
+        ``initiator`` decides whether the risky-cell gate applies, and it is the
+        only thing that does. A person pressing Run *is* the approval, so
+        re-asking them would be noise; nothing authorises a run a model asked
+        for, so those stop at ``awaiting_approval`` for a human to decide in the
+        browser tab — the same pause an agent turn's downstream cells get.
+        """
         if self.kernel.status == "restart_required":
             raise KernelRestartRequired()
+        gated = initiator != "user"
+        kind = MODEL_INITIATED_KIND if gated else "manual"
         operation_id = uuid4().hex
-        lease = self.documents.coordinator.acquire(operation_type="manual_execution", operation_id=operation_id)
+        lease = self.documents.coordinator.acquire(operation_type=f"{kind}_execution", operation_id=operation_id)
         try:
             snapshot = self.documents.get_snapshot()
             self.documents.check_snapshot_preconditions(snapshot, session_id, expected_revision)
-            operation = ExecutionOperation(operation_id, session_id, expected_revision, "manual", current_revision=expected_revision)
+            operation = ExecutionOperation(operation_id, session_id, expected_revision, kind, current_revision=expected_revision)
             with self._lock:
                 self._operations[operation_id] = operation
                 self._prune_history_locked()
@@ -74,10 +103,13 @@ class KernelExecutionService:
         except Exception:
             self.documents.coordinator.release(lease)
             raise
-        Thread(target=self._run_manual_guarded, args=(operation, lease, cell_id), daemon=True, name=f"execution-{operation_id[:8]}").start()
+        Thread(target=self._run_direct_guarded, args=(operation, lease, cell_id, gated), daemon=True, name=f"execution-{operation_id[:8]}").start()
         return created
 
-    def _run_manual_guarded(self, operation: ExecutionOperation, lease: MutationLease, cell_id: str | None) -> None:
+    def _run_direct_guarded(
+        self, operation: ExecutionOperation, lease: MutationLease,
+        cell_id: str | None, prompt_for_risk: bool = False,
+    ) -> None:
         try:
             snapshot = self.documents.get_snapshot()
             if cell_id is None:
@@ -87,7 +119,7 @@ class KernelExecutionService:
                 if index is None:
                     raise CellNotFound(cell_id)
                 indexes = [index]
-            self._run(operation, lease, indexes, prompt_for_risk=False)
+            self._run(operation, lease, indexes, prompt_for_risk=prompt_for_risk)
         except Exception as error:
             self._fail(operation, error)
         finally:
@@ -296,8 +328,14 @@ class KernelExecutionService:
 
     def decide(
         self, attempt_id: str, decision: str, *, session_id: str,
-        expected_revision: int, turn_id: str, cell_id: str,
+        expected_revision: int, turn_id: str | None, cell_id: str,
     ) -> ExecutionOperation:
+        """Record a person's answer to a paused cell.
+
+        ``turn_id`` is None for a run that no agent turn owns — a model-initiated
+        one. The equality check below already handles that: the operation's own
+        ``parent_turn_id`` is None too, so they match.
+        """
         with self._lock:
             pair = self._attempts.get(attempt_id)
             if pair is None:
@@ -345,9 +383,13 @@ class KernelExecutionService:
             if pair is None:
                 raise ExecutionDecisionConflict()
             operation, attempt = pair
+            # Keyed on whether a turn owns this operation, not on its kind: a
+            # model-initiated run has no parent turn either, and matching on
+            # kind would demand a turn id that cannot exist — leaving the run
+            # waiting on an approval nobody was able to give.
             turn_matches = (
                 turn_id is None
-                if operation.kind == "manual"
+                if operation.parent_turn_id is None
                 else turn_id is not None and operation.parent_turn_id == turn_id
             )
             if (

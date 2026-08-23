@@ -630,6 +630,65 @@ describe("remediation behaviors", () => {
     expect(outside).toHaveFocus();
     outside.remove();
   });
+
+  it("lets a person approve a model-initiated run, which has no parent turn", async () => {
+    // The gate exists so a run the model asked for stops for a person. If
+    // approve and skip stay turn-gated, the dialog appears with only Cancel
+    // enabled and the pause can never be resolved — the gate would block the
+    // run rather than hand the decision over.
+    const decide = vi.fn();
+    const risky = { ...operation, kind: "mcp", parentTurnId: null, state: "awaiting_approval", attempts: [{ ...operation.attempts[0], state: "awaiting_approval", risk: { level: "confirm", reasons: ["Starts another process"], matchedPatterns: ["process_execution"] } }] };
+    render(<RiskyExecutionDialog operation={risky} attempt={risky.attempts[0]} busy={false} onDecision={decide} />);
+
+    const approve = screen.getByRole("button", { name: "Approve and run" });
+    const skip = screen.getByRole("button", { name: "Skip cell" });
+    expect(approve).toBeEnabled();
+    expect(skip).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
+
+    await userEvent.click(approve);
+    expect(decide).toHaveBeenCalledWith("approve");
+  });
+
+  it("says a connected client asked for the run, not just that a cell paused", () => {
+    // The reason the browser tab exists. Reading identically to a run the
+    // person started themselves left them approving a cell with no idea the
+    // request came from a client they cannot see.
+    const decide = vi.fn();
+    const base = { ...operation.attempts[0], state: "awaiting_approval", risk: { level: "confirm", reasons: ["Risk"], matchedPatterns: ["pattern"] } };
+    const model = { ...operation, kind: "mcp", parentTurnId: null, state: "awaiting_approval", attempts: [base] };
+
+    const view = render(<RiskyExecutionDialog operation={model} attempt={base} busy={false} onDecision={decide} />);
+    expect(screen.getByRole("alertdialog")).toHaveAccessibleDescription(/A connected client asked to run cell 1/);
+
+    // A turn's downstream cell is not a client's request, and still reads as it did.
+    view.rerender(<RiskyExecutionDialog operation={{ ...model, kind: "agent_downstream", parentTurnId: "turn-1" }} attempt={base} busy={false} onDecision={decide} />);
+    expect(screen.getByRole("alertdialog")).toHaveAccessibleDescription("Cell 1 was paused before running.");
+  });
+
+  it("shows one Cancel run while a model-initiated run is parked, not two", () => {
+    // The standalone control and the approval panel's own Cancel are the same
+    // action on the same attempt. A manual run is never gated so the two could
+    // never coincide; a run a model asked for parks at awaiting_approval and
+    // they did.
+    const decide = vi.fn();
+    const base = { ...operation.attempts[0], state: "awaiting_approval", risk: { level: "confirm", reasons: ["Risk"], matchedPatterns: ["pattern"] } };
+    const parked = { ...operation, kind: "mcp", parentTurnId: null, state: "awaiting_approval", currentExecutionAttemptId: base.executionAttemptId, attempts: [base] };
+    render(<AgentChatPanel notebook={notebook} scope={scope} turn={null} activeTurn={null} history={[]} operation={parked} busy={false} mutationsDisabled={false} onSubmit={vi.fn()} onCancel={vi.fn()} onUndo={vi.fn()} onClearScope={vi.fn()} onDecision={decide} onSelectTurn={vi.fn()} onFocusCell={vi.fn()} onDropCell={vi.fn()} />);
+
+    expect(screen.getAllByRole("button", { name: "Cancel run" })).toHaveLength(1);
+    // And the one that survives is the one that says what it is cancelling.
+    expect(screen.getByRole("alertdialog")).toContainElement(screen.getByRole("button", { name: "Cancel run" }));
+  });
+
+  it("offers a cancel control for a model-initiated run in flight", () => {
+    // A run with no parent turn is one a person can stop directly, whether it
+    // was their click or a tool call that started it.
+    const decide = vi.fn();
+    const running = { ...operation, kind: "mcp", parentTurnId: null, state: "running" };
+    render(<AgentChatPanel notebook={notebook} scope={scope} turn={null} activeTurn={null} history={[]} operation={running} busy={false} mutationsDisabled={false} onSubmit={vi.fn()} onCancel={vi.fn()} onUndo={vi.fn()} onClearScope={vi.fn()} onDecision={decide} onSelectTurn={vi.fn()} onFocusCell={vi.fn()} onDropCell={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
+  });
   it("will not restart the kernel out from under a run parked for approval", () => {
     // The approval panel is deliberately not modal, so nothing else stops this
     // being pressed while a person is deciding — and a restart mid-decision

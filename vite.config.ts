@@ -10,9 +10,16 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./frontend/src/test/setup.ts"],
-    exclude: ["e2e/**", "node_modules/**", "dist/**"],
+    exclude: ["e2e/**", "node_modules/**", "dist/**", "backend/app/web/**"],
   },
   build: {
+    // Inside the Python package, not a sibling `dist/`, so the built frontend
+    // travels with the wheel: a `dist/` at the repo root is not part of any
+    // package and ships nowhere. `backend/app/web` is declared as package data
+    // in pyproject.toml, and it is where `backend/app/bundled.py` looks first.
+    // Only ever build output — emptied on each build.
+    outDir: "backend/app/web",
+    emptyOutDir: true,
     rollupOptions: {
       output: {
         manualChunks(id) {

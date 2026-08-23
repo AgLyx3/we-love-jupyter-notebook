@@ -136,3 +136,18 @@ class NotebookSnapshot:
 class NotebookCloseResult:
     closed_session_id: str
     cleanup_errors: tuple[str, ...] = ()
+
+
+class CellIndexError(NotebookDomainError):
+    code = "cell_index_out_of_range"
+    message = "Cell index is outside the notebook"
+    status_code = 400
+
+    def __init__(self, index: int, cell_count: int) -> None:
+        super().__init__(requestedIndex=index, cellCount=cell_count)
+
+
+class LastCellError(NotebookDomainError):
+    code = "last_cell"
+    message = "A notebook must keep at least one cell"
+    status_code = 409
