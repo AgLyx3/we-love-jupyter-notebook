@@ -1,0 +1,67 @@
+{
+  "note": "Evaluation corpus for the notebook overview map. Real notebooks are referenced, not vendored: fetch.py pulls each one at a pinned commit into .cache/, which is gitignored. That keeps third-party licensing out of this repo and keeps the corpus reproducible — a pinned sha is the same bytes forever, a branch name is not.",
+  "remote": [
+    {
+      "id": "madewithml",
+      "repo": "GokuMohandas/Made-With-ML",
+      "path": "notebooks/madewithml.ipynb",
+      "sha": "3361aeb8ddfc2affdba9f545c978c38c85cee764",
+      "license": "MIT",
+      "why": "Real end-to-end ML project, 243 cells. Headings exist but nowhere near one per section, so the segmenter has to do actual work between them."
+    },
+    {
+      "id": "handson-unsupervised",
+      "repo": "ageron/handson-ml3",
+      "path": "09_unsupervised_learning.ipynb",
+      "sha": "e707c2d659abafb9b1f9fd927907619a128db8d7",
+      "license": "Apache-2.0",
+      "why": "The heading-rich control: 286 cells, 142 of them markdown. If the deterministic pass ever looks good, it should look good here — and that is the point of having it in the set."
+    },
+    {
+      "id": "orie4741-eda",
+      "repo": "ORIE4741/demos",
+      "path": "eda.ipynb",
+      "sha": "1172fdf1fd6bb53998a300361473bf8f974f8d20",
+      "license": "NONE",
+      "why": "Real course EDA, 54 cells with only 6 headings. Heading-poor and mid-sized."
+    },
+    {
+      "id": "revenue-recovery-eda",
+      "repo": "MyNameisBram/Efficient-Revenue-Recovery",
+      "path": "EDA.ipynb",
+      "sha": "6b1b9eb7f88a912b87162fb0d540498a4127177a",
+      "license": "NOASSERTION",
+      "why": "Personal-project EDA, 87 cells. The most common shape on GitHub and the one the panel will actually meet."
+    },
+    {
+      "id": "fraud-eda",
+      "repo": "TomC333/ieee-cis-fraud-detection-ml",
+      "path": "eda.ipynb",
+      "sha": "2fae1894348616bfa2cc0f252a857af86bf90b48",
+      "license": "MIT",
+      "why": "Small end of the range, 21 cells. Guards against a segmenter that only behaves on long inputs."
+    }
+  ],
+  "local": [
+    {
+      "id": "messy-exploration",
+      "path": "../messy-exploration.ipynb",
+      "why": "The existing hard probe: 57 cells, one markdown cell, no defs, out-of-order execution."
+    },
+    {
+      "id": "simulation-sweep",
+      "path": "../simulation-sweep.ipynb",
+      "why": "The existing non-ML probe — a parameter sweep rather than a data pipeline."
+    },
+    {
+      "id": "messy-adspend",
+      "path": "synthetic/messy-adspend.ipynb",
+      "why": "Synthetic, deliberately nasty: 154 cells, 3 markdown cells, copy-paste-tweak runs, abandoned attempts interleaved rather than grouped, a topic resumed 40 cells later, re-runs and never-run cells scattered mid-file."
+    },
+    {
+      "id": "tidy-phased",
+      "path": "synthetic/tidy-phased.ipynb",
+      "why": "Synthetic control, and a cautionary tale: 122 cells written as 19 tidy phases each under its own markdown heading. Written by hand while demoing the panel, and the map looked excellent — because segment() puts a boundary on every heading, so the notebook had already been segmented by its author. Kept in the corpus precisely so that flattery is visible as a number next to the others."
+    }
+  ]
+}
