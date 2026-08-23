@@ -360,6 +360,26 @@ TASKS: list[Task] = [
 # --- running -----------------------------------------------------------------
 
 
+def _last_events(stdout: str, keep: int = 3) -> str:
+    """The tail of a stream-json transcript, for a run that exited non-zero.
+
+    Prefers whatever the client called an error; falls back to the last few
+    events so a failure at least says where it stopped.
+    """
+    events = []
+    for line in stdout.splitlines():
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            continue
+    errors = [
+        event for event in events
+        if event.get("is_error") or event.get("subtype", "").startswith("error")
+    ]
+    chosen = errors[-keep:] or events[-keep:]
+    return " | ".join(json.dumps(event)[:200] for event in chosen)
+
+
 def run_task(task: Task, keep: Path | None = None) -> Run:
     """One run of one task, in a workspace of its own.
 
@@ -424,7 +444,12 @@ def run_task(task: Task, keep: Path | None = None) -> Run:
             run.failed_to_run = f"no answer within {TASK_TIMEOUT_SECONDS}s"
             return run
         if completed.returncode != 0:
-            run.failed_to_run = (completed.stderr or "")[:300] or f"exit {completed.returncode}"
+            # stdout matters as much as stderr here: with --output-format
+            # stream-json the client reports its own failures as events on
+            # stdout and can exit non-zero having written nothing to stderr.
+            # A bare "exit 1" cost a diagnosis once already.
+            detail = (completed.stderr or "").strip() or _last_events(completed.stdout)
+            run.failed_to_run = (detail or f"exit {completed.returncode}")[:400]
             return run
 
         for line in completed.stdout.splitlines():
