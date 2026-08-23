@@ -33,6 +33,7 @@ button.primary, .primary { background: var(--blue); border-color: var(--blue); c
 .autosave-toggle.on { background: #dff2e8; border-color: #8fccac; color: var(--green); }
 .kernel-state { font-size: 12px; color: var(--muted); display: flex; align-items: center; white-space: nowrap; text-transform: capitalize; }
 .kernel-state i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #87939c; margin-right: 5px; }
+.kernel-paused { font-size: 12px; color: #8a5a00; background: #fdf3dd; border: 1px solid #e6c98a; border-radius: 10px; padding: 1px 8px; white-space: nowrap; }
 .kernel-state.state-idle i { background: #28a266; }.kernel-state.state-busy i { background: #d48112; }
 .workspace-layout { display: flex; height: calc(100vh - 52px); min-height: 0; }
 .editor-layout { flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 6px var(--agent-width, 350px); height: 100%; }

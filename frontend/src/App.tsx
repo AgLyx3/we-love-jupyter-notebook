@@ -447,6 +447,9 @@ export default function App() {
   const selectedTurn = history.find((item) => item.turn.turnId === selectedTurnId)?.turn ?? turn;
 
   const fileLocked = mutationsDisabled || busy || hasDirtyDrafts;
+  // Same test the agent panel uses to raise the approval dialog, so the toolbar
+  // and the dialog can never disagree about whether a decision is outstanding.
+  const awaitingApproval = Boolean(operation?.attempts.some((attempt) => attempt.state === "awaiting_approval" && !attempt.decision));
   // Which record the review bar is driving. A tuning Apply produces the same
   // per-hunk ledger an agent turn does, so it gets the same navigation rather
   // than a second bespoke surface — without it a multi-cell tune lands with no
@@ -494,7 +497,7 @@ export default function App() {
   return <div className="app-shell">
     <header className="topbar">
       <div className="brand">{workspaceFolder && sidebarHidden && <button className="sidebar-reveal" title="Show files" aria-label="Show file tree" onClick={() => setSidebarHidden(false)}><PanelLeft /></button>}<BookOpen /><strong>{notebook?.filename ?? "Workspace"}</strong>{notebook && <span className={notebook.dirty ? "dirty" : ""}>{notebook.dirty ? "Unsaved" : "Clean"}</span>}{notebook && <span>Revision {notebook.revision}</span>}</div>
-      <div className="toolbar-actions">{notebook && <button className={`autosave-toggle ${autoSave ? "on" : ""}`} role="switch" aria-checked={autoSave} aria-label="Auto-save" title={autoSave ? "Auto-save is on — click to turn off" : "Auto-save is off — click to turn on"} onClick={() => setAutoSave((value) => !value)}><Save /> Auto-save {autoSave ? "on" : "off"}</button>}{notebook && <KernelControls status={kernel} mutationDisabled={fileLocked} onRunAll={() => void mutate(() => api.runAll(notebook), { refreshAfter: false }, setOperation)} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} />}<FileToolbar notebook={notebook} saveDisabled={fileLocked || !notebook?.notebookPath || !notebook?.dirty} saveAsDisabled={fileLocked} closeDisabled={fileLocked} onBrowse={() => setPicking(true)} onSave={handleSave} onSaveAs={() => setSaving(true)} onClose={handleClose} /></div>
+      <div className="toolbar-actions">{notebook && <button className={`autosave-toggle ${autoSave ? "on" : ""}`} role="switch" aria-checked={autoSave} aria-label="Auto-save" title={autoSave ? "Auto-save is on — click to turn off" : "Auto-save is off — click to turn on"} onClick={() => setAutoSave((value) => !value)}><Save /> Auto-save {autoSave ? "on" : "off"}</button>}{notebook && <KernelControls status={kernel} mutationDisabled={fileLocked} runAwaitingApproval={awaitingApproval} onRunAll={() => void mutate(() => api.runAll(notebook), { refreshAfter: false }, setOperation)} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} />}<FileToolbar notebook={notebook} saveDisabled={fileLocked || !notebook?.notebookPath || !notebook?.dirty} saveAsDisabled={fileLocked} closeDisabled={fileLocked} onBrowse={() => setPicking(true)} onSave={handleSave} onSaveAs={() => setSaving(true)} onClose={handleClose} /></div>
     </header>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
     {openPicker}
