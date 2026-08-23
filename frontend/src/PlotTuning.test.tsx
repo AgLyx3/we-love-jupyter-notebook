@@ -126,7 +126,7 @@ describe("the Tune entry point, end to end", () => {
     expect(calls.find((call) => call.path.endsWith("/preview"))?.body).toEqual({ values: { BINS: 40 } });
 
     expect(await screen.findByText("You tuned this cell")).toBeInTheDocument();
-    expect(screen.queryByText("Agent changed this cell")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Undo tuned change to code cell 2")).toBeInTheDocument();
+    expect(screen.queryByText("Agent Suggestion")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Discard tuned change to code cell 2")).toBeInTheDocument();
   });
 });

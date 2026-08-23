@@ -116,7 +116,7 @@ class HunkWidget extends WidgetType {
       bar.appendChild(button);
     };
     make("Keep", "keep", "check", () => this.onKeep(this.overlay.operationId));
-    make("Undo", "undo", "undo", () => this.onUndo(this.overlay.operationId));
+    make("Discard", "undo", "undo", () => this.onUndo(this.overlay.operationId));
     wrap.appendChild(bar);
     return wrap;
   }

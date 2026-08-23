@@ -136,18 +136,18 @@ describe("who a change is attributed to", () => {
   it("says the user tuned the cell, never that the agent changed it", () => {
     render(view({ record: tuningRecord() }));
     expect(screen.getByText("You tuned this cell")).toBeInTheDocument();
-    expect(screen.queryByText("Agent changed this cell")).not.toBeInTheDocument();
+    expect(screen.queryByText("Agent Suggestion")).not.toBeInTheDocument();
     expect(screen.queryByText("Agent added this cell")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Keep tuned change to code cell 1")).toBeInTheDocument();
-    expect(screen.getByLabelText("Undo tuned change to code cell 1")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Revert agent change to code cell 1")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Discard tuned change to code cell 1")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Discard agent change to code cell 1")).not.toBeInTheDocument();
   });
 
   it("keeps the agent's wording for an agent turn", () => {
     render(view({ turn: agentTurn }));
     expect(screen.getByText("Agent added this cell")).toBeInTheDocument();
     expect(screen.queryByText("You tuned this cell")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Revert agent change to code cell 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("Discard agent change to code cell 1")).toBeInTheDocument();
   });
 
   it("explains a stale tuned change without blaming the agent", () => {
@@ -183,7 +183,7 @@ describe("reviewing a tuned cell", () => {
       }),
       onUndoTuned,
     }));
-    await userEvent.click(screen.getByLabelText("Undo tuned change to code cell 1"));
+    await userEvent.click(screen.getByLabelText("Discard tuned change to code cell 1"));
     expect(onUndoTuned).toHaveBeenCalledWith("rec-1", ["op-1"]);
   });
 });
@@ -224,7 +224,7 @@ describe("a settled tuning record releases the cell", () => {
       onDirtyChange={vi.fn()} onSave={vi.fn()} onRun={vi.fn()} onScope={vi.fn()} onScopeMany={vi.fn()}
       onRevert={onRevert} onKeepOperation={vi.fn()} onUndoOperation={vi.fn()} onKeepCell={vi.fn()}
       onKeepTuned={vi.fn()} onUndoTuned={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: "Revert agent change to code cell 1" }));
+    await userEvent.click(screen.getByRole("button", { name: "Discard agent change to code cell 1" }));
     // The agent's turn, not the finished tune.
     expect(onRevert).toHaveBeenCalledWith("turn-1", "cell-a");
   });
