@@ -1,11 +1,53 @@
-import { BookOpen, Bot, Check, MessageSquarePlus, Pencil, Play, RotateCcw, Save, Send, Wand2, X } from "lucide-react";
+import { BookOpen, Bot, Check, MessageSquarePlus, Pencil, Play, RotateCcw, Save, Send, SlidersHorizontal, Wand2, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import type { AgentChange, AgentOperation, NotebookCellData } from "../api/client";
+import type { AgentChange, AgentOperation, CellOutput, NotebookCellData, TuningPlan, TuningPreview, TuningRecord, TuningWarmResult } from "../api/client";
+import TuningPanel from "../plotTuning/TuningPanel";
+import type { KnobValues } from "../plotTuning/knobs";
 import CellEditor, { type HunkControls } from "./CellEditor";
 import { hunkOverlays } from "./cellDiff";
 import { useAutoSave } from "./useAutoSave";
 import type { CellSelection } from "./selectionEdit";
+
+/** Which edit a cell's review surface is describing. The tuning record reuses
+ *  the agent's per-hunk ledger deliberately (design D6), so the two arrive in
+ *  the same shape — but an edit the user dialled in themselves must never be
+ *  reported as the agent's, which is what this discriminates. */
+export type ReviewOrigin = "agent" | "tune";
+
+/** The review ledger from either origin. A tuning record serializes no line
+ *  ranges — its hunks are literal rewrites, not a proposed diff — so the ranges
+ *  are optional here and the in-editor hunk widgets simply do not appear for a
+ *  tune, leaving the header Keep/Undo pair to cover the review. */
+export type ReviewOperation =
+  Omit<AgentOperation, "previousRange" | "nextRange">
+  & Partial<Pick<AgentOperation, "previousRange" | "nextRange">>;
+
+/** Everything the cell needs to run a tuning panel, grouped rather than spread
+ *  over six props (the `hunkControls` precedent in CellEditor). App owns the
+ *  calls and the snapshot; the cell only owns whether the panel is open. */
+export interface CellTuningControls {
+  /** Live document revision — the panel re-scans rather than serving a preview
+   *  of source that has since changed. */
+  revision: number;
+  onScan: (cellId: string) => Promise<TuningPlan>;
+  onWarm: (cellId: string) => Promise<TuningWarmResult>;
+  onPreview: (shadowId: string, values: KnobValues) => Promise<TuningPreview>;
+  onApply: (shadowId: string, values: KnobValues) => Promise<TuningRecord>;
+  onDiscardShadow: (shadowId: string) => void;
+}
+
+const RASTER_MIMES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/** Whether a cell renders a picture. The Tune entry point is gated on this
+ *  (design §3.5: a cell with no image output never offers Tune), and the
+ *  renderer below decides the same question, so both read the one list. */
+export function hasImageOutput(outputs: CellOutput[]): boolean {
+  return outputs.some((output) => {
+    const data = output.data as Record<string, unknown> | undefined;
+    return Boolean(data) && (RASTER_MIMES.some((mime) => data?.[mime]) || Boolean(data?.["image/svg+xml"]));
+  });
+}
 
 function text(value: unknown): string {
   if (Array.isArray(value)) return value.join("");
@@ -97,24 +139,37 @@ function MarkdownPreview({ source, cellId, disabled, onAddSelectionToChat, onInl
   </div>;
 }
 
-export function Outputs({ outputs, disabled = false, onAddErrorToChat, onHoverChange }: { outputs: Record<string, unknown>[]; disabled?: boolean; onAddErrorToChat?: (text: string) => void; onHoverChange?: (hovered: boolean) => void }) {
+export function Outputs({ outputs, disabled = false, onAddErrorToChat, onHoverChange, onTune, tuneLabel = "Tune" }: { outputs: Record<string, unknown>[]; disabled?: boolean; onAddErrorToChat?: (text: string) => void; onHoverChange?: (hovered: boolean) => void; onTune?: () => void; tuneLabel?: string }) {
   if (!outputs.length) return null;
-  return <div className="cell-outputs" aria-label="Cell output" onMouseEnter={() => onHoverChange?.(true)} onMouseLeave={() => onHoverChange?.(false)}>{outputs.map((output, index) => {
+  return <div className="cell-outputs" aria-label="Cell output" onMouseEnter={() => onHoverChange?.(true)} onMouseLeave={() => onHoverChange?.(false)}>
+    {/* Entry point for plot tuning, following the labelled output-add-chat
+        precedent below rather than the .cell-actions cluster — the comment on
+        that cluster records that a control put there was "effectively
+        undiscoverable". Unlike add-chat this one is never hover-revealed: it is
+        the entry point for a whole feature, and hiding it until hover would
+        reintroduce exactly the objection it was placed here to avoid. */}
+    {onTune && <button type="button" className="output-tune" title="Tune the values this plot depends on" aria-label={tuneLabel} onClick={onTune}><SlidersHorizontal /> Tune</button>}
+    {outputs.map((output, index) => {
     const kind = String(output.output_type ?? "output");
     if (kind === "stream") return <pre key={index}>{text(output.text)}</pre>;
     if (kind === "error") return <ErrorOutput key={index} value={`${text(output.ename)}: ${text(output.evalue)}\n${text(output.traceback)}`} disabled={disabled} onAdd={onAddErrorToChat} />;
     const data = output.data as Record<string, unknown> | undefined;
-    const rasterMime = ["image/png", "image/jpeg", "image/gif", "image/webp"].find((mime) => data?.[mime]);
+    const rasterMime = RASTER_MIMES.find((mime) => data?.[mime]);
     if (rasterMime) return <img className="image-output" alt={`Cell output ${index + 1}`} src={`data:${rasterMime};base64,${text(data?.[rasterMime])}`} key={index} />;
     if (data?.["image/svg+xml"]) return <img className="image-output" alt={`SVG cell output ${index + 1}`} src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(text(data["image/svg+xml"]))}`} key={index} />;
     if (data?.["text/html"]) return <iframe className="html-output" title={`HTML output ${index + 1}`} sandbox="" srcDoc={text(data["text/html"])} key={index} />;
     return <pre key={index}>{text(data?.["text/plain"] ?? output)}</pre>;
-  })}</div>;
+  })}
+  </div>;
 }
 
-export default function NotebookCell({ cell, focused, selected, dragIds, editable, context, trusted = false, change, operations = [], retyped, revertable = true, disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onKeep, onKeepOperation, onUndoOperation, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
+export default function NotebookCell({ cell, focused, selected, dragIds, editable, context, trusted = false, change, operations = [], origin = "agent", retyped, revertable = true, tunable = false, tuning, disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onKeep, onKeepOperation, onUndoOperation, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
   cell: NotebookCellData; focused: boolean; selected: boolean; dragIds: string[]; editable: boolean; context: boolean; trusted?: boolean; change?: AgentChange; revertable?: boolean;
-  operations?: AgentOperation[];
+  operations?: ReviewOperation[];
+  origin?: ReviewOrigin;
+  /** The scan already found knobs for this cell; Tune is worth offering. */
+  tunable?: boolean;
+  tuning?: CellTuningControls;
   retyped?: { from: string; to: string };
   disabled: boolean; sourceActionsDisabled: boolean; autoSave: boolean; cellRef: (node: HTMLElement | null) => void;
   onFocus: () => void; onSelect: (event: MouseEvent) => void; onContextMenu: (event: MouseEvent) => void; onDirtyChange: (dirty: boolean) => void; onSave: (source: string) => void; onRun: () => void; onAddEditable: () => void; onAddContext: () => void; onRevert: () => void; onKeep?: () => void;
@@ -124,6 +179,23 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
   const [source, setSource] = useState(cell.source);
   const previousServerSource = useRef(cell.source);
   const [editingMarkdown, setEditingMarkdown] = useState(false);
+  // Panel visibility is the cell's own business and nothing above it needs to
+  // know. The cell key is `sessionId:cellId`, so this survives every SSE
+  // refresh and only resets when the notebook itself changes.
+  const [tuningOpen, setTuningOpen] = useState(false);
+  const outputRegionRef = useRef<HTMLDivElement | null>(null);
+  const tuningWasOpen = useRef(false);
+  useEffect(() => {
+    // Opening swaps the Tune button out for the panel, and closing swaps it
+    // back. Either gesture destroys the element that had focus, which would
+    // drop a keyboard user on <body> in the middle of the notebook — so focus
+    // follows the swap: into the panel, and back onto the button that opened it.
+    if (tuningOpen === tuningWasOpen.current) return;
+    tuningWasOpen.current = tuningOpen;
+    const region = outputRegionRef.current;
+    if (tuningOpen) region?.focus();
+    else region?.querySelector<HTMLElement>(".output-tune")?.focus();
+  }, [tuningOpen]);
   // Disable cell drag while the pointer is over selectable regions (outputs,
   // rendered markdown) so their text can be selected instead of starting a drag.
   const [suppressDrag, setSuppressDrag] = useState(false);
@@ -161,7 +233,11 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
   // reconfigures the editor of every cell under review on every keystroke.
   // Handlers go through refs for the same reason — their identity changes each
   // render and would otherwise defeat the memo.
-  const hunkOps = operations.filter((item) => item.kind === "source_hunk");
+  // Ranges are normalised to null here because a tuning record ships hunks
+  // without them; hunkOverlays skips a hunk it cannot place, which is what
+  // leaves a tuned cell with the header Keep/Undo pair instead.
+  const hunkOps = operations.filter((item) => item.kind === "source_hunk")
+    .map((item) => ({ ...item, previousRange: item.previousRange ?? null, nextRange: item.nextRange ?? null }));
   const hunkSignature = hunkOps
     .map((item) => `${item.operationId}:${item.state}:${item.previousRange?.join("-")}:${item.nextRange?.join("-")}`)
     .join("|");
@@ -198,10 +274,35 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
   if (!undone) undoneAt.current = undefined;
   else if (undoneAt.current === undefined) undoneAt.current = cell.executionCount;
   const outputsStale = undone && undoneAt.current === cell.executionCount;
+  // Every string on the review surface is keyed off the origin. The user reused
+  // the agent's ledger on purpose, but their own edit must never be attributed
+  // to the agent — so "Agent changed this cell" becomes "You tuned this cell",
+  // and so does everything around it.
+  const tuned = origin === "tune";
+  const reviewLabel = stale
+    ? tuned ? "Your tuned change can no longer be undone" : "Agent change can no longer be undone"
+    // A tune only rewrites literals in cells that already exist, so `added` is
+    // unreachable for it today. The branch is here so that a structural tune,
+    // if one ever lands, cannot silently fall through to the agent's wording.
+    : added ? tuned ? "You added this cell" : "Agent added this cell"
+    : tuned ? "You tuned this cell" : "Agent changed this cell";
+  const staleNote = tuned
+    ? "This cell changed after you tuned it — these values can no longer be undone individually; edit them by hand."
+    : "This cell changed after the agent edited it — undo the whole turn or edit it by hand.";
+  const keepLabel = tuned ? `Keep tuned change to ${description}` : `Keep agent change to ${description}`;
+  const undoLabel = tuned ? `Undo tuned change to ${description}` : `Revert agent change to ${description}`;
+  const keepTitle = tuned ? "Keep these tuned values" : added ? "Keep this cell" : "Keep this agent change";
+  const undoTitle = tuned ? "Undo these tuned values" : added ? "Remove this added cell" : "Undo this agent change";
+  // §3.5's gate: a picture to compare against, and knobs the scan actually
+  // found. Without the second half the button would promise a panel that opens
+  // on "nothing here can be tuned".
+  const canTune = Boolean(tuning) && tunable && cell.cellType === "code" && hasImageOutput(cell.outputs) && !dependentDisabled;
   return <article ref={cellRef} draggable={!dependentDisabled && !suppressDrag} onDragStart={(event) => {
     const target = event.target as HTMLElement;
-    // Never start a cell drag from selectable output text.
-    if (target.closest?.(".cell-outputs")) { event.preventDefault(); return; }
+    // Never start a cell drag from selectable output text, or from the tuning
+    // panel: its sliders and number fields are dragged, and without this a
+    // knob drag becomes a cell drag.
+    if (target.closest?.(".cell-outputs, .tuning-panel")) { event.preventDefault(); return; }
     // In a markdown block, allow dragging from blank space (the container/padding)
     // but let presses on the rendered text select instead of dragging the cell.
     const mdWrap = target.closest?.(".markdown-preview-wrap");
@@ -224,8 +325,8 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
           the hover-revealed action cluster above: the cluster is invisible until
           hover, unlabelled, and shared with scope/run actions, so the revert
           control was there but effectively undiscoverable. */}
-      {reviewable && <div className="cell-review">
-        <span className="cell-review-label"><Bot /> {stale ? "Agent change can no longer be undone" : added ? "Agent added this cell" : "Agent changed this cell"}</span>
+      {reviewable && <div className={`cell-review${tuned ? " tuned" : ""}`}>
+        <span className="cell-review-label">{tuned ? <SlidersHorizontal /> : <Bot />} {reviewLabel}</span>
         {!revertable
           // A Trusted turn rewrote the whole notebook, so this cell's change
           // cannot be separated from the adds, deletes and moves around it.
@@ -234,7 +335,7 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
           // Say why the controls went away. Silently removing them reads as a
           // bug; the change is still in the cell, it just can no longer be
           // separated from the edits made on top of it.
-          ? <span className="cell-review-stale" role="note">This cell changed after the agent edited it — undo the whole turn or edit it by hand.</span>
+          ? <span className="cell-review-stale" role="note">{staleNote}</span>
           // Header controls only when the in-editor hunk widgets cannot cover
           // the review. With them visible, a header pair would act on exactly
           // the same change and just duplicate the buttons a few lines below.
@@ -244,8 +345,8 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
           : hunksVisible
           ? null
           : <>
-            {onKeep && <button className="review-action keep" disabled={dependentDisabled} title={added ? "Keep this cell" : "Keep this agent change"} aria-label={`Keep agent change to ${description}`} onClick={onKeep}><Check /> Keep</button>}
-            <button className="review-action undo" disabled={dependentDisabled} title={added ? "Remove this added cell" : "Undo this agent change"} aria-label={`Revert agent change to ${description}`} onClick={onRevert}><RotateCcw /> Undo</button>
+            {onKeep && <button className="review-action keep" disabled={dependentDisabled} title={keepTitle} aria-label={keepLabel} onClick={onKeep}><Check /> Keep</button>}
+            <button className="review-action undo" disabled={dependentDisabled} title={undoTitle} aria-label={undoLabel} onClick={onRevert}><RotateCcw /> Undo</button>
           </>}
       </div>}
       {retypedTo && <p className="cell-retyped" role="note">
@@ -253,7 +354,22 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
       </p>}
       {outputsStale && cell.outputs.length > 0 && <p className="cell-stale-outputs" role="note">Outputs are from code you undid — re-run this cell.</p>}
       {cell.cellType === "code" || cell.cellType === "raw" || editingMarkdown ? <CellEditor value={source} label={`Source for ${description}`} disabled={disabled} language={cell.cellType} change={change} hunkControls={hunkControls} cellId={cell.cellId} interactionsDisabled={dependentDisabled} onChange={setSource} onSave={() => dirty && onSave(source)} onRun={onRun} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} /> : <MarkdownPreview source={source} cellId={cell.cellId} disabled={dependentDisabled} onAddSelectionToChat={onAddSelectionToChat} onInlineEdit={onInlineEdit} onHoverChange={setSuppressDrag} />}
-      <Outputs outputs={cell.outputs} disabled={dependentDisabled} onAddErrorToChat={onAddErrorToChat} onHoverChange={setSuppressDrag} />
+      {/* The output region. It stops being a single column once the panel is
+          open: the panel lays out preview-left / knob-rail-right, and this
+          wrapper is the CSS container that decides when that stacks — the pane
+          can be far narrower than the viewport, so a viewport media query
+          would miss it. */}
+      <div className="cell-output-region" ref={outputRegionRef} tabIndex={tuningOpen ? -1 : undefined}>
+        {/* The panel replaces the cell's own outputs rather than sitting under
+            them: it renders that same committed picture as its "before", and a
+            second copy of a tall plot would push the knob rail out of sight. */}
+        {tuningOpen && tuning
+          ? <TuningPanel cellId={cell.cellId} open revision={tuning.revision}
+            onScan={tuning.onScan} onWarm={tuning.onWarm} onPreview={tuning.onPreview} onApply={tuning.onApply}
+            onDiscardShadow={tuning.onDiscardShadow} onClose={() => setTuningOpen(false)} />
+          : <Outputs outputs={cell.outputs} disabled={dependentDisabled} onAddErrorToChat={onAddErrorToChat} onHoverChange={setSuppressDrag}
+            onTune={canTune ? () => setTuningOpen(true) : undefined} tuneLabel={`Tune ${description}`} />}
+      </div>
     </div>
   </article>;
 }

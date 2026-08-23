@@ -4,6 +4,7 @@ import os
 import stat
 from pathlib import Path
 
+from ..workspace_confinement import UNCONFINED, OutsideWorkspace, WorkspaceConfinement
 from .models import (
     DirectoryEntry,
     DirectoryListing,
@@ -34,17 +35,28 @@ _SEARCH_SCAN_CAP = 20_000
 _KIND_ORDER = {"directory": 0, "notebook": 1, "file": 2}
 
 
-def list_directory(path: str | None = None) -> DirectoryListing:
+def list_directory(
+    path: str | None = None,
+    *,
+    confinement: WorkspaceConfinement = UNCONFINED,
+) -> DirectoryListing:
     """Return the subfolders and files at a readable local directory.
 
     Folders and ``.ipynb`` notebooks are openable; every other regular file is
     tagged ``file`` and listed for visibility only (browse-for-context, never
-    openable through the selector). Defaults to the user's home directory.
-    Dotfiles are hidden and entries that fail to stat (unreadable) are skipped
-    rather than failing the whole listing.
+    openable through the selector). Defaults to the user's home directory, or
+    to the workspace root when one is configured. Dotfiles are hidden and
+    entries that fail to stat (unreadable) are skipped rather than failing the
+    whole listing.
     """
-    base = Path(path).expanduser() if path else Path.home()
-    resolved = base.resolve()
+    try:
+        resolved = (
+            confinement.require(Path(path).expanduser())
+            if path
+            else confinement.default_directory().resolve()
+        )
+    except OutsideWorkspace as error:
+        raise DirectoryListingError() from error
 
     if not resolved.is_dir():
         raise DirectoryListingError()
@@ -72,11 +84,20 @@ def list_directory(path: str | None = None) -> DirectoryListing:
 
     entries.sort(key=lambda entry: (_KIND_ORDER[entry.kind], entry.name.lower()))
 
-    parent = None if resolved.parent == resolved else str(resolved.parent)
-    return DirectoryListing(path=str(resolved), parent=parent, entries=tuple(entries))
+    return DirectoryListing(
+        path=str(resolved),
+        parent=confinement.visible_parent(resolved),
+        entries=tuple(entries),
+    )
 
 
-def search_files(root: str, query: str = "", limit: int = _SEARCH_LIMIT) -> FileSearchResult:
+def search_files(
+    root: str,
+    query: str = "",
+    limit: int = _SEARCH_LIMIT,
+    *,
+    confinement: WorkspaceConfinement = UNCONFINED,
+) -> FileSearchResult:
     """Recursively find files under ``root`` for the chat ``@``-mention.
 
     Walks the workspace root, pruning version-control, dependency, build, and
@@ -86,7 +107,10 @@ def search_files(root: str, query: str = "", limit: int = _SEARCH_LIMIT) -> File
     capped at ``limit``. Only file names/paths are returned — no contents — so
     the user can pick a path to reference; the agent still reads it itself.
     """
-    resolved = Path(root).expanduser().resolve()
+    try:
+        resolved = confinement.require(Path(root).expanduser())
+    except OutsideWorkspace as error:
+        raise FileSearchError() from error
     if not resolved.is_dir():
         raise FileSearchError()
 

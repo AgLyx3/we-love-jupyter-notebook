@@ -33,6 +33,7 @@ button.primary, .primary { background: var(--blue); border-color: var(--blue); c
 .autosave-toggle.on { background: #dff2e8; border-color: #8fccac; color: var(--green); }
 .kernel-state { font-size: 12px; color: var(--muted); display: flex; align-items: center; white-space: nowrap; text-transform: capitalize; }
 .kernel-state i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #87939c; margin-right: 5px; }
+.kernel-paused { font-size: 12px; color: #8a5a00; background: #fdf3dd; border: 1px solid #e6c98a; border-radius: 10px; padding: 1px 8px; white-space: nowrap; }
 .kernel-state.state-idle i { background: #28a266; }.kernel-state.state-busy i { background: #d48112; }
 .workspace-layout { display: flex; height: calc(100vh - 52px); min-height: 0; }
 .editor-layout { flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 6px var(--agent-width, 350px); height: 100%; }
@@ -81,7 +82,12 @@ body.marquee-active iframe { pointer-events: none; }
    drops — a shifting destructive control is how "undo all" gets mis-clicked. */
 .notebook-pane { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
 .review-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 8px 14px; background: #eef6fb; border-bottom: 1px solid #bfd7e7; }
-.review-bar-count { font-size: 12px; font-weight: 650; color: #0b6097; }
+/* The counter is a button now (it jumps to the first change), but it must not
+   read as one of the actions on the right — no border, no fill, just a target. */
+.review-bar-count { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: 5px; background: transparent; font-size: 12px; font-weight: 650; color: #0b6097; cursor: pointer; }
+.review-bar-count:hover:not(:disabled) { background: #e8f2f9; }
+.review-bar-count:disabled { cursor: default; color: var(--muted); }
+.review-bar-count svg { width: 13px; height: 13px; }
 .review-bar-actions, .review-bar-confirm { display: flex; align-items: center; gap: 8px; }
 .review-bar-confirm span { font-size: 12px; color: var(--red); font-weight: 600; }
 .review-bar button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; padding: 0 11px; font-size: 12px; font-weight: 600; min-width: 108px; }
@@ -121,6 +127,10 @@ body.marquee-active iframe { pointer-events: none; }
 .cell-review { display: flex; align-items: center; gap: 9px; padding: 6px 10px; background: #f2f7fb; border-bottom: 1px solid #d5e3ee; border-radius: 5px 5px 0 0; }
 .cell-review-label { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 650; color: #0b6097; }
 .cell-review-label svg { width: 14px; height: 14px; }
+/* The same bar, in the user's own colour rather than the agent's blue: the
+   ledger is shared, but who made the edit is the one thing it must not blur. */
+.cell-review.tuned { background: #f2faf5; border-bottom-color: #cbe5d6; }
+.cell-review.tuned .cell-review-label { color: var(--green); }
 .notebook-cell:has(.cell-review) .cell-actions { top: 40px; }
 .markdown-preview-wrap { position: relative; }
 .markdown-preview { padding: 14px 50px 14px 18px; min-height: 72px; line-height: 1.55; overflow-wrap: anywhere; user-select: text; }
@@ -163,6 +173,90 @@ body.marquee-active iframe { pointer-events: none; }
 .output-error-block .output-add-chat:hover { background: #33404c; color: #fff; border: 0; }
 .output-add-chat svg { width: 14px; height: 14px; }
 .output-error { user-select: text; }
+/* Entry point for plot tuning. Deliberately NOT the hover-revealed treatment
+   used by .output-add-chat above: this opens a whole feature, and 28px is the
+   minimum target this project enforces on every visible control. */
+.cell-outputs { position: relative; }
+.output-tune { position: absolute; top: 6px; right: 8px; z-index: 6; height: 28px; min-width: auto; gap: 6px; padding: 0 10px; font-size: 12px; font-weight: 650; color: #0b6097; background: #fff; border-color: #a9c8dd; box-shadow: 0 1px 3px #1a26301f; }
+.output-tune:hover:not(:disabled) { background: #eef6fb; border-color: #6aa5cc; }
+.output-tune svg { width: 14px; height: 14px; }
+
+/* ------------------------------------------------------------ plot tuning
+   The output region stops being a single column while the panel is open:
+   preview left, knob rail right. The stacking rule is a *container* query, not
+   a media query — the notebook pane is whatever is left after the agent panel
+   and the sidebar, so it can be 400px wide on a 1440px screen and a viewport
+   breakpoint would never fire. */
+.cell-output-region { container-type: inline-size; }
+.tuning-panel { border-top: 1px solid #e1e5e8; background: #fbfcfc; }
+.tuning-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px 6px 16px; border-bottom: 1px solid #e6eaed; font-size: 12px; color: #0b6097; }
+.tuning-close { width: 28px; min-width: 28px; height: 28px; border: 0; background: transparent; color: var(--muted); }
+.tuning-close svg { width: 15px; height: 15px; }
+/* The rail is sized in container units, not pixels: a fixed 280px stays
+   cramped on a wide pane while the preview takes everything, which is what made
+   values need scrolling to read. It grows with the pane and stops before it
+   starts crowding the picture. */
+.tuning-panel-body { display: grid; grid-template-columns: minmax(0, 1fr) clamp(250px, 30cqi, 400px); gap: 12px; padding: 10px 16px 12px; align-items: start; }
+@container (max-width: 620px) { .tuning-panel-body { grid-template-columns: minmax(0, 1fr); } }
+.tuning-preview-column { min-width: 0; }
+/* The band and the border are the same signal: while any knob differs, this
+   picture is not in the notebook. Both derive from one value in the panel. */
+.tuning-preview { border: 1px solid transparent; border-radius: 6px; }
+.tuning-preview.dirty { border-color: #d9822b; background: #fffaf2; }
+.tuning-preview-band { margin: 0; padding: 4px 9px; font-size: 11px; font-weight: 700; letter-spacing: .02em; color: #7a4610; background: #fdf2e2; border-radius: 5px 5px 0 0; }
+.tuning-preview-failed { margin: 0; padding: 4px 9px; font-size: 11px; font-weight: 650; color: var(--red); background: #fff3f2; }
+.tuning-preview-frame { position: relative; min-height: 60px; }
+.tuning-preview-frame .cell-outputs { border-top: 0; background: transparent; padding: 8px; }
+/* Over the last preview, never in place of it: losing the picture you are
+   comparing against is what the spinner must not do. */
+.tuning-preview-spinner { position: absolute; top: 8px; left: 8px; margin: 0; padding: 3px 9px; font-size: 11px; font-weight: 650; color: #0b6097; background: #ffffffe6; border: 1px solid #bfd7e7; border-radius: 999px; box-shadow: 0 1px 4px #1a263024; }
+.tuning-preview-blank { margin: 0; padding: 14px 8px; font-size: 12px; color: var(--muted); }
+/* A slim confirmation above the picture, not a card in place of it: the moment
+   after committing is when the plot most needs to be visible. */
+.tuning-applied-strip { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; padding: 5px 9px; font-size: 12px; font-weight: 650; color: #1d6b3f; background: #edf8f1; border: 1px solid #bfe3cd; border-radius: 5px; }
+.tuning-applied-strip svg { width: 14px; height: 14px; }
+.tuning-rail { min-width: 0; display: grid; gap: 10px; align-content: start; }
+/* Flow into as many columns as the rail can hold. Stacked under the preview on
+   a narrow pane the rail is full width, so the same rule turns one long scroll
+   into two or three readable columns. The cap is viewport-relative rather than
+   a fixed 420px so a tall window shows more instead of scrolling a short box. */
+.tuning-knobs { display: grid; gap: 10px 12px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); align-content: start; max-height: min(60vh, 560px); overflow-y: auto; }
+.tuning-apply, .tuning-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.tuning-apply button, .tuning-actions button { height: 30px; padding: 0 10px; font-size: 12px; font-weight: 650; }
+.tuning-message { margin: 0; padding: 8px 16px; font-size: 12px; color: var(--muted); }
+.tuning-message p { margin: 0 0 6px; }
+.tuning-rejections { margin: 4px 0 0; padding-left: 18px; font-size: 11px; }
+.tuning-rejections li { margin: 2px 0; }
+.tuning-blocked { color: var(--amber); font-weight: 650; }
+.tuning-risky { border-left: 3px solid #d9822b; background: #fffaf0; }
+.tuning-risky .risk-title { font-size: 12px; font-weight: 650; color: #7a4610; }
+.tuning-risky ul { margin: 4px 0 0; padding-left: 18px; font-size: 11px; }
+.tuning-error { border-left: 3px solid #d0483b; background: #fff5f4; color: #34404b; }
+.tuning-applied { border-left: 3px solid #2fa25f; background: #f3faf5; color: #34404b; }
+.tuning-rerun-note { color: var(--amber); font-weight: 650; }
+/* One knob. The bounds row is editable on both ends: the heuristic is a
+   starting point, and typing past an end widens it rather than clamping. */
+.knob { border: 1px solid #e0e5e8; border-radius: 6px; background: #fff; padding: 7px 9px; display: grid; gap: 6px; }
+.knob-head { display: flex; align-items: center; gap: 6px; }
+.knob-name { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 650; color: #34404b; overflow-wrap: anywhere; }
+.knob-origin { font-size: 10px; color: var(--muted); }
+.knob-reset { margin-left: auto; width: 28px; min-width: 28px; height: 28px; border: 0; background: transparent; color: var(--muted); }
+.knob-reset svg { width: 13px; height: 13px; }
+.knob-slider-row { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+/* Wraps instead of shrinking: below about 190px the number field drops under
+   the slider rather than both becoming unreadable. */
+.knob-slider-row input[type="range"] { flex: 1 1 120px; min-width: 0; height: 28px; }
+.knob-value { flex: 1 1 68px; min-width: 60px; max-width: 120px; }
+.knob-bounds { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.knob-bound { flex: 1; min-width: 0; }
+.knob-bounds-gap { font-size: 10px; color: var(--muted); }
+.knob input[type="number"], .knob-text { height: 28px; border: 1px solid #aeb8c0; border-radius: 5px; padding: 0 6px; font-size: 12px; }
+.knob-text { width: 100%; }
+.knob-toggle { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #34404b; min-height: 28px; }
+.knob-toggle input { width: 16px; height: 16px; }
+.knob-items { display: grid; grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); gap: 6px; }
+/* Very tight rail: give the slider its own line so the value stays legible. */
+@container (max-width: 400px) { .knob-slider-row input[type="range"] { flex-basis: 100%; } }
 .prompt-form { border-top: 1px solid #cdd4d9; padding: 12px; background: #fff; display: grid; gap: 7px; }.prompt-form label { font-size: 12px; font-weight: 650; }.prompt-form textarea { width: 100%; resize: vertical; min-height: 64px; max-height: 150px; border: 1px solid #aeb8c0; border-radius: 5px; padding: 9px; line-height: 1.4; }.prompt-form button { justify-self: end; padding: 0 12px; }.prompt-mode { font-size: 11px; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }.prompt-mode::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #6aa5cc; }
 .mention-anchor { position: relative; display: grid; }
 .mention-menu { position: absolute; left: 0; right: 0; bottom: calc(100% + 4px); margin: 0; padding: 4px; list-style: none; background: #fff; border: 1px solid #aeb8c0; border-radius: 7px; box-shadow: 0 8px 24px rgba(20, 40, 60, 0.18); max-height: 220px; overflow-y: auto; z-index: 20; }

@@ -114,6 +114,60 @@ export interface ExecutionOperation {
   completedAt: string | null;
 }
 
+// ----------------------------------------------------------- plot tuning
+// The three-way route split is the whole safety story, so it is worth stating
+// once here: `open` analyses and starts nothing, `warm` and `preview` cost a
+// shadow kernel but touch no document, and only `apply` mutates the notebook.
+
+export type TuningKnobKind = "int" | "float" | "bool" | "str" | "tuple" | "list";
+/** JSON has no tuple, so tuple *and* list knobs arrive as arrays; the knob's
+ *  own `kind` is what decides which literal gets written back. */
+export type TuningValue = number | boolean | string | number[];
+export interface TuningBounds { minimum: number; maximum: number; step: number }
+export interface TuningKnob {
+  name: string; cellId: string; cellIndex: number; kind: TuningKnobKind; value: TuningValue;
+  // null for every kind that gets no slider: bool, str, tuple, list.
+  bounds: TuningBounds | null;
+}
+/** A variable the scan refused. `detail` is the human sentence — it is what the
+ *  panel's empty state renders instead of "no tunable variables found". */
+export interface TuningRejection { name: string; reason: string; detail: string }
+export interface TuningRiskyCell { cellId: string; cellIndex: number; categories: string[]; reasons: string[] }
+export interface TuningPlan {
+  cellId: string; revision: number; knobs: TuningKnob[]; rejections: TuningRejection[];
+  // A non-null reason means the chain cannot be analysed at all (e.g. a %%bash cell).
+  blocked: string | null;
+  // Cells the warm-up would re-fire. Approved before anything executes.
+  risky: TuningRiskyCell[];
+}
+/** One replayed chain cell. `ordinal` is 1-based: the "2" and "7" of "cell 2 of 7". */
+export interface TuningTiming { cellId: string; ordinal: number; total: number; seconds: number; failed: boolean }
+export interface TuningWarmResult {
+  shadowId: string; knobs: TuningKnob[]; rejections: TuningRejection[];
+  // The target cell's committed "before" picture, in notebook output format.
+  outputs: CellOutput[];
+  timings: TuningTiming[]; totalSeconds: number; failed: boolean; failedCellId: string | null;
+}
+/** A failed preview is not an HTTP error: `outputs` carries the traceback and
+ *  the shadow stays alive, because trying a value that crashes is normal. */
+export interface TuningPreview {
+  outputs: CellOutput[]; values: Record<string, TuningValue>; executedCellIds: string[];
+  seconds: number; cached: boolean; failed: boolean; failedCellId: string | null;
+}
+export interface TuningShadowState { shadowId: string; state: string }
+/** The same per-hunk ledger an agent turn produces, minus the line ranges. */
+export interface TuningOperation { operationId: string; cellId: string; ordinal: number; kind: string; state: OperationState }
+export interface TuningRecord {
+  recordId: string; origin: "tune"; sessionId: string; state: string;
+  knobs: string[]; baseRevision: number; appliedRevision: number | null;
+  executionOperationId: string | null; executionStartIndex: number | null;
+  // The live kernel had not executed the prefix, so apply re-ran the whole
+  // notebook. That is a bigger bill than the Apply button quoted, so say so.
+  reRanFromTop: boolean;
+  changes: AgentChange[]; operations: TuningOperation[];
+  error: ApiErrorBody | null; createdAt: string;
+}
+
 export interface KernelStatus {
   kernelSessionId: string | null;
   state: string;
@@ -199,6 +253,34 @@ export const api = {
     request<AgentTurn>(`/agent-turns/${encodeURIComponent(turnId)}/operations/${operationIds?.length === 1 ? `${encodeURIComponent(operationIds[0])}/accept` : "accept-all"}`, { method: "POST", body: JSON.stringify({ sessionId: snapshot.sessionId, ...(operationIds?.length ? { operationIds } : {}) }) }),
   rejectOperations: (snapshot: NotebookSnapshot, turnId: string, operationId?: string) =>
     request<NotebookSnapshot>(`/agent-turns/${encodeURIComponent(turnId)}/operations/${operationId ? `${encodeURIComponent(operationId)}/reject` : "reject-all"}`, { method: "POST", body: JSON.stringify(mutation(snapshot)) }),
+  // Analysis only — this starts no kernel. That is what lets the user approve
+  // whatever comes back in `risky` *before* anything executes.
+  openTuning: (snapshot: NotebookSnapshot, cellId: string) =>
+    request<TuningPlan>("/tuning/open", { method: "POST", body: JSON.stringify({ ...mutation(snapshot), cellId }) }),
+  warmTuning: (snapshot: NotebookSnapshot, cellId: string) =>
+    request<TuningWarmResult>("/tuning/warm", { method: "POST", body: JSON.stringify({ ...mutation(snapshot), cellId }) }),
+  // Preview mutates nothing — no document, no live kernel — so like
+  // acceptOperations it carries no expected revision. The shadow is pinned to
+  // the revision it replayed, and 409s by itself once that moves.
+  previewTuning: (shadowId: string, values: Record<string, TuningValue>) =>
+    request<TuningPreview>(`/tuning/${encodeURIComponent(shadowId)}/preview`, { method: "POST", body: JSON.stringify({ values }) }),
+  cancelTuning: (shadowId: string) =>
+    request<TuningShadowState>(`/tuning/${encodeURIComponent(shadowId)}/cancel`, { method: "POST" }),
+  // Succeeds even when the shadow is already gone: the client calls this on
+  // unmount, which races the idle timeout and the revision check.
+  closeTuning: (shadowId: string) =>
+    request<TuningShadowState>(`/tuning/${encodeURIComponent(shadowId)}`, { method: "DELETE" }),
+  applyTuning: (snapshot: NotebookSnapshot, shadowId: string, values: Record<string, TuningValue>) =>
+    request<TuningRecord>(`/tuning/${encodeURIComponent(shadowId)}/apply`, { method: "POST", body: JSON.stringify({ ...mutation(snapshot), values }) }),
+  tuningRecord: (recordId: string) => request<TuningRecord>(`/tuning/records/${encodeURIComponent(recordId)}`),
+  undoTuning: (snapshot: NotebookSnapshot, recordId: string) =>
+    request<TuningRecord>(`/tuning/records/${encodeURIComponent(recordId)}/undo`, { method: "POST", body: JSON.stringify(mutation(snapshot)) }),
+  rejectTuningOperations: (snapshot: NotebookSnapshot, recordId: string, operationIds?: string[]) =>
+    request<TuningRecord>(`/tuning/records/${encodeURIComponent(recordId)}/reject`, { method: "POST", body: JSON.stringify({ ...mutation(snapshot), ...(operationIds?.length ? { operationIds } : {}) }) }),
+  // Keeping a hunk settles review state only, so — as with acceptOperations —
+  // it carries no expected revision.
+  acceptTuningOperations: (snapshot: NotebookSnapshot, recordId: string, operationIds?: string[]) =>
+    request<TuningRecord>(`/tuning/records/${encodeURIComponent(recordId)}/accept`, { method: "POST", body: JSON.stringify({ sessionId: snapshot.sessionId, ...(operationIds?.length ? { operationIds } : {}) }) }),
   decide: (operation: ExecutionOperation, attempt: ExecutionAttempt, decision: "approve" | "skip" | "cancel") => {
     if (operation.currentDocumentRevision == null) throw new Error("Execution correlation is incomplete");
     return request<ExecutionOperation>(`/execution/${encodeURIComponent(attempt.executionAttemptId)}/${decision}`, { method: "POST", body: JSON.stringify({ sessionId: operation.sessionId, expectedDocumentRevision: operation.currentDocumentRevision, turnId: operation.parentTurnId, cellId: attempt.cellId }) });

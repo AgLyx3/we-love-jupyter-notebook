@@ -13,6 +13,18 @@ from threading import Event
 
 ROOT = Path(__file__).resolve().parents[1]
 
+if str(ROOT) not in sys.path:  # running as a script, not an installed module
+    sys.path.insert(0, str(ROOT))
+
+# Re-exported so this module stays the launcher's single import surface; the
+# implementation moved into the package so installed code can use it too.
+from backend.app.process_group import (  # noqa: E402
+    _process_error,
+    _process_group_exists,
+    signal_process_groups,
+    terminate_process_groups,
+)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the notebook editor backend and frontend")
@@ -20,106 +32,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--backend-port", type=int, default=8000)
     parser.add_argument("--frontend-port", type=int, default=5173)
     return parser.parse_args()
-
-
-def _process_error(action: str, child: subprocess.Popen[bytes], error: BaseException) -> str:
-    return f"could not {action} process group {child.pid}: {error}"
-
-
-def signal_process_groups(
-    children: list[subprocess.Popen[bytes]], sig: int,
-) -> list[str]:
-    errors: list[str] = []
-    for child in children:
-        try:
-            os.killpg(child.pid, sig)
-        except ProcessLookupError:
-            pass
-        except OSError as error:
-            errors.append(_process_error(f"send signal {sig} to", child, error))
-    return errors
-
-
-def _process_group_exists(process_group_id: int) -> bool:
-    try:
-        os.killpg(process_group_id, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-def terminate_process_groups(
-    children: list[subprocess.Popen[bytes]], *, grace_period: float = 5,
-) -> list[str]:
-    errors: list[str] = []
-    uncertain_children: set[int] = set()
-    for child in children:
-        try:
-            os.killpg(child.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        except OSError as error:
-            errors.append(_process_error("terminate", child, error))
-            uncertain_children.add(id(child))
-
-    deadline = time.monotonic() + grace_period
-    for child in children:
-        uncertain = id(child) in uncertain_children
-        try:
-            exited = child.poll() is not None
-        except OSError as error:
-            errors.append(_process_error("poll", child, error))
-            uncertain = True
-            exited = False
-
-        if not exited:
-            try:
-                child.wait(timeout=max(0, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired:
-                uncertain = True
-            except (OSError, subprocess.SubprocessError) as error:
-                errors.append(_process_error("wait for", child, error))
-                uncertain = True
-
-        group_exists = False
-        try:
-            while not uncertain and _process_group_exists(child.pid):
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                time.sleep(min(0.02, remaining))
-            group_exists = _process_group_exists(child.pid)
-        except OSError as error:
-            errors.append(_process_error("inspect", child, error))
-            uncertain = True
-
-        if not uncertain and not group_exists:
-            continue
-
-        kill_succeeded = False
-        try:
-            os.killpg(child.pid, signal.SIGKILL)
-            kill_succeeded = True
-        except ProcessLookupError:
-            pass
-        except OSError as error:
-            errors.append(_process_error("kill", child, error))
-        try:
-            child.wait(timeout=1)
-        except (OSError, subprocess.SubprocessError) as error:
-            errors.append(_process_error("finally reap", child, error))
-        if kill_succeeded:
-            group_deadline = time.monotonic() + 1
-            try:
-                while _process_group_exists(child.pid) and time.monotonic() < group_deadline:
-                    time.sleep(0.02)
-                if _process_group_exists(child.pid):
-                    errors.append(
-                        f"process group {child.pid} still exists after SIGKILL"
-                    )
-            except OSError as error:
-                errors.append(_process_error("inspect after SIGKILL", child, error))
-    return errors
 
 
 def child_exit_code(

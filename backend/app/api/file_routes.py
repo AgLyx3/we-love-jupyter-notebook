@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request
 
 from ..file_browser.models import DirectoryListing, FileSearchResult
 from ..file_browser.service import list_directory, search_files
+from ..workspace_confinement import UNCONFINED, WorkspaceConfinement
 
 router = APIRouter()
 
@@ -38,11 +39,17 @@ def serialize_search(result: FileSearchResult) -> dict[str, Any]:
     }
 
 
+def _confinement(request: Request) -> WorkspaceConfinement:
+    return getattr(request.app.state, "workspace_confinement", UNCONFINED)
+
+
 @router.get("/files")
 def list_files(request: Request, path: str | None = None) -> dict[str, Any]:
-    return serialize_listing(list_directory(path))
+    return serialize_listing(list_directory(path, confinement=_confinement(request)))
 
 
 @router.get("/files/search")
 def search_workspace_files(request: Request, root: str, query: str = "") -> dict[str, Any]:
-    return serialize_search(search_files(root, query))
+    return serialize_search(
+        search_files(root, query, confinement=_confinement(request))
+    )

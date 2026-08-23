@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, MapPin, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import type { AgentOperation } from "../api/client";
 
@@ -15,10 +15,17 @@ import type { AgentOperation } from "../api/client";
 //   * undo-all asks for confirmation once anything has been kept, because that
 //     is the point where it starts discarding decisions rather than just
 //     undoing the agent.
-export default function ReviewBar({ total, reviewed, keptCount, undoableCount, disabled, onPrevious, onNext, onKeepAll, onUndoAll }: {
+export default function ReviewBar({ origin = "agent", total, reviewed, keptCount, undoableCount, disabled, onPrevious, onNext, onFirst, onKeepAll, onUndoAll }: {
+  // A tuning Apply produces the same ledger, so it reuses this bar — but it is
+  // the user's own edit and must never be described as the agent's.
+  origin?: "agent" | "tune";
   total: number; reviewed: number; keptCount: number; undoableCount: number; disabled: boolean;
   onPrevious: () => void; onNext: () => void; onKeepAll: () => void; onUndoAll: () => void;
+  /** Jump to the first change rather than advancing from the cursor. */
+  onFirst?: () => void;
 }) {
+  const tuned = origin === "tune";
+  const what = tuned ? "tuned change" : "change";
   const [confirming, setConfirming] = useState(false);
   if (total === 0) return null;
   const undoAll = () => {
@@ -27,14 +34,24 @@ export default function ReviewBar({ total, reviewed, keptCount, undoableCount, d
     setConfirming(false);
     onUndoAll();
   };
-  return <div className="review-bar" role="region" aria-label="Review agent changes">
-    <span className="review-bar-count">{reviewed} of {total} change{total === 1 ? "" : "s"} reviewed</span>
+  return <div className="review-bar" role="region" aria-label={tuned ? "Review tuned changes" : "Review agent changes"}>
+    {/* The counter doubles as the way in. "3 changes" is the first thing read
+        after an Apply, and the question it raises is "where?" — so it answers
+        that itself rather than making the ‹ › the only route to the first one. */}
+    <button
+      type="button" className="review-bar-count" disabled={disabled}
+      title={`Show the first of ${total} ${what}${total === 1 ? "" : "s"}`}
+      aria-label={`Go to the first ${what}`}
+      onClick={onFirst ?? onNext}
+    >
+      <MapPin /> {reviewed} of {total} {what}{total === 1 ? "" : "s"} reviewed
+    </button>
     {confirming
       ? <div className="review-bar-confirm" role="alertdialog" aria-label="Confirm undo all">
         {/* State what it actually does. Undo all rejects the changes still
             awaiting review; anything already kept stays, and reversing those
             too is what the separate whole-turn undo is for. */}
-        <span>Undo {undoableCount} unreviewed change{undoableCount === 1 ? "" : "s"}?{keptCount > 0 ? ` The ${keptCount} you kept stay.` : ""}</span>
+        <span>Undo {undoableCount} unreviewed {what}{undoableCount === 1 ? "" : "s"}?{keptCount > 0 ? ` The ${keptCount} you kept stay.` : ""}</span>
         <button type="button" onClick={() => setConfirming(false)}>Cancel</button>
         <button type="button" className="review-bar-danger" disabled={disabled} onClick={undoAll}>Undo them</button>
       </div>
@@ -45,8 +62,8 @@ export default function ReviewBar({ total, reviewed, keptCount, undoableCount, d
             allows — a paired ‹ › is self-describing and non-destructive — so
             they carry titles and accessible names instead of visible text. */}
         <span className="review-bar-nav">
-          <button type="button" disabled={disabled} title="Previous change" aria-label="Previous change" onClick={onPrevious}><ChevronLeft /></button>
-          <button type="button" disabled={disabled} title="Next change" aria-label="Next change" onClick={onNext}><ChevronRight /></button>
+          <button type="button" disabled={disabled} title={`Previous ${what}`} aria-label={`Previous ${what}`} onClick={onPrevious}><ChevronLeft /></button>
+          <button type="button" disabled={disabled} title={`Next ${what}`} aria-label={`Next ${what}`} onClick={onNext}><ChevronRight /></button>
         </span>
         <button type="button" disabled={disabled} onClick={onKeepAll}><Check /> Keep all</button>
         <button type="button" className="review-bar-danger" disabled={disabled || undoableCount === 0} onClick={undoAll}><RotateCcw /> Undo all</button>

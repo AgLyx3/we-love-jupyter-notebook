@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import Response
@@ -16,6 +16,21 @@ class CellSourceRequest(BaseModel):
     session_id: str = Field(alias="sessionId")
     expected_revision: int = Field(alias="expectedDocumentRevision")
     source: str
+
+
+class CellInsertRequest(BaseModel):
+    session_id: str = Field(alias="sessionId")
+    expected_revision: int = Field(alias="expectedDocumentRevision")
+    source: str = ""
+    cell_type: Literal["code", "markdown"] = Field(default="code", alias="cellType")
+    # Where the new cell lands. Omitted, it goes at the end — the common case,
+    # and the one that does not require the caller to have counted anything.
+    index: int | None = None
+
+
+class CellDeleteRequest(BaseModel):
+    session_id: str = Field(alias="sessionId")
+    expected_revision: int = Field(alias="expectedDocumentRevision")
 
 
 class NotebookCloseRequest(BaseModel):
@@ -166,6 +181,51 @@ def download_notebook(request: Request) -> Response:
         media_type="application/x-ipynb+json",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def _announce(request: Request, snapshot: NotebookSnapshot, owner: str) -> None:
+    """Tell the open tab the document moved.
+
+    Every other mutating route does this, and a structural change needs it
+    most: without it the tab still shows the old cell list, and the next edit a
+    person makes there is refused as a revision conflict over a change they
+    were never shown.
+    """
+    request.app.state.session_event_service.publish(
+        "notebook.updated",
+        {
+            "sessionId": snapshot.session_id,
+            "revision": snapshot.revision,
+            "ownerId": owner,
+        },
+    )
+
+
+@router.post("/cells", status_code=201)
+def insert_cell(body: CellInsertRequest, request: Request) -> dict[str, Any]:
+    """Add a cell. It is marked as agent-authored and is NOT executed."""
+    snapshot = _service(request).insert_cell(
+        source=body.source,
+        cell_type=body.cell_type,
+        index=body.index,
+        expected_session_id=body.session_id,
+        expected_revision=body.expected_revision,
+        owner="cell_insert",
+    )
+    _announce(request, snapshot, "cell_insert")
+    return serialize_snapshot(snapshot)
+
+
+@router.delete("/cells/{cell_id}")
+def delete_cell(cell_id: str, body: CellDeleteRequest, request: Request) -> dict[str, Any]:
+    snapshot = _service(request).delete_cell(
+        cell_id=cell_id,
+        expected_session_id=body.session_id,
+        expected_revision=body.expected_revision,
+        owner="cell_delete",
+    )
+    _announce(request, snapshot, "cell_delete")
+    return serialize_snapshot(snapshot)
 
 
 @router.post("/cells/{cell_id}/source")

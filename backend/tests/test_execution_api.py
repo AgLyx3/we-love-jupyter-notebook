@@ -378,9 +378,18 @@ def test_downstream_cancel_rejects_null_turn_id(client, notebook_payload):
 
 
 @pytest.mark.parametrize("decision", ["approve", "skip"])
-def test_downstream_approve_and_skip_reject_null_turn_schema(
+def test_downstream_approve_and_skip_reject_a_null_turn(
     client, notebook_payload, decision,
 ):
+    """A turn's paused cell still cannot be decided without that turn's id.
+
+    This used to be refused by the request schema, as a 422. It cannot be any
+    more: a model-initiated run pauses the same way and genuinely has no turn,
+    so `turnId` has to be nullable for the person looking at the dialog to be
+    able to approve at all. The invariant is unchanged and now enforced where
+    it can tell the two apart — the operation's own parent turn — so a null
+    turn against a turn-owned operation is a 409 correlation conflict instead.
+    """
     uploaded = client.post(
         "/notebooks/upload",
         files={"file": ("example.ipynb", notebook_payload(), "application/json")},
@@ -395,7 +404,8 @@ def test_downstream_approve_and_skip_reject_null_turn_schema(
         "turnId": None,
         "cellId": "editable",
     })
-    assert response.status_code == 422
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "execution_decision_conflict"
     service.skip(
         attempt.attempt_id, session_id=uploaded["sessionId"],
         expected_revision=revision, turn_id="turn-api", cell_id="editable",
