@@ -26,6 +26,10 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
   onRemoveAttachment?: (id: string) => void; onRemoveScopeCell?: (id: string) => void;
 }) {
   const keptCount = (turn?.operations ?? []).filter((item) => item.state === "accepted").length;
+  // B4. History is a tab and a placeholder: the design splits the rail in two,
+  // but nothing behind the split exists yet, so this deliberately reads no
+  // state and calls no endpoint. The turn list stays where it is, in Agent.
+  const [rail, setRail] = useState<"agent" | "history">("agent");
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState<AgentModel>("default");
   const [mode, setMode] = useState<AgentMode>("edit");
@@ -120,18 +124,19 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
   return <aside className="agent-panel" aria-label="Agent workspace" onDragOver={(event) => { if (!mutationsDisabled) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }} onDrop={(event) => { event.preventDefault(); if (mutationsDisabled) return; const many = event.dataTransfer.getData("application/x-notebook-cells"); if (many) { try { const ids = JSON.parse(many) as string[]; if (ids?.length) { if (onDropCells) onDropCells(ids); else ids.forEach(onDropCell); return; } } catch { /* fall through to single */ } } const id = event.dataTransfer.getData("application/x-notebook-cell"); if (id) onDropCell(id); }}>
     <header>
       <div className="agent-panel-title"><h1>Notebook Agent</h1><span>Scoped local edits</span></div>
-      <label className="prompt-select scope-header">
-        <span>Scope</span>
-        <select aria-label="Write scope" value={writeScope} disabled={busy || mode === "plan"}
-          title={mode === "plan" ? "Plan mode writes nothing, so write scope has no effect." : "Blocking: the agent may only edit cells you mark editable. Trusted: the agent may add, delete, reorder, and edit any cell in the notebook."}
-          onChange={(event) => updateWriteScope(event.target.value as WriteScope)}>
-          <option value="blocking">Blocking</option>
-          <option value="trusted">Trusted</option>
-        </select>
-      </label>
     </header>
-    <TurnScopePanel notebook={notebook} scope={scope} disabled={mutationsDisabled} trusted={trustedScope} onClear={onClearScope} onFocusCell={onFocusCell} onDropCell={onDropCell} onRemoveCell={onRemoveScopeCell} />
-    <section className="conversation" aria-live="polite">
+    <div className="agent-tabs" role="tablist" aria-label="Agent panel view">
+      <button type="button" role="tab" id="agent-tab-agent" aria-controls="agent-tabpanel-agent" aria-selected={rail === "agent"} className={rail === "agent" ? "active" : ""} onClick={() => setRail("agent")}><Icon name="smart_toy" /> Agent</button>
+      <button type="button" role="tab" id="agent-tab-history" aria-controls="agent-tabpanel-history" aria-selected={rail === "history"} className={rail === "history" ? "active" : ""} onClick={() => setRail("history")}><Icon name="history" /> History</button>
+    </div>
+    {rail === "history" && <section className="conversation agent-history-empty" role="tabpanel" id="agent-tabpanel-history" aria-labelledby="agent-tab-history">
+      <div className="empty-conversation">
+        <p>No saved history yet</p>
+        <span>Turns from earlier sessions will be listed here. This session's turns are on the Agent tab.</span>
+      </div>
+    </section>}
+    {rail === "agent" && <TurnScopePanel notebook={notebook} scope={scope} disabled={mutationsDisabled} trusted={trustedScope} onClear={onClearScope} onFocusCell={onFocusCell} onDropCell={onDropCell} onRemoveCell={onRemoveScopeCell} />}
+    {rail === "agent" && <section className="conversation" role="tabpanel" id="agent-tabpanel-agent" aria-labelledby="agent-tab-agent" aria-live="polite">
       {history.length > 0 && <div className="turn-history" aria-label="Turn history">{history.map((record) => <button className={record.turn.turnId === turn?.turnId ? "selected" : ""} key={record.turn.turnId} onClick={() => onSelectTurn(record.turn.turnId)}><span>{record.prompt}</span><small>{(record.turn.writeScope === "trusted" ? "all editable" : `${record.editableCellIds.length} editable`) + " · " + record.turn.state.replaceAll("_", " ")}</small></button>)}</div>}
       {activeTurn && activeTurn.turnId !== turn?.turnId && <button className="manual-cancel" onClick={onCancel}><Icon name="stop" /> Cancel active turn</button>}
       {!turn && <div className="empty-conversation"><p>No agent turn yet</p><span>Select cells to edit, or just ask a read-only question.</span></div>}
@@ -150,7 +155,7 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
       {operation && <div className={`execution-status ${operation.error ? "has-error" : ""}`}><span>Execution: {operation.state.replaceAll("_", " ")}</span>{operation.error && <p>{operation.error.message}</p>}{operation.attempts.filter((attempt) => attempt.error).map((attempt) => <p key={attempt.executionAttemptId}>Cell {attempt.cellIndex + 1}: {attempt.error!.message}</p>)}{operation.attempts.filter((attempt) => attempt.outputsTruncated).map((attempt) => <p key={`${attempt.executionAttemptId}-output-truncated`}>Cell {attempt.cellIndex + 1}: Retained execution output was truncated.</p>)}</div>}
       {operation && operation.kind === "manual" && !["completed", "failed", "cancelled", "validation_incomplete", "timed_out"].includes(operation.state) && manualAttempt && <button disabled={!manualCorrelated} className="manual-cancel" onClick={() => onDecision(manualAttempt, "cancel")}><Icon name="stop" /> Cancel run</button>}
       {operation && awaiting && <RiskyExecutionDialog operation={operation} attempt={awaiting} busy={busy} onDecision={(decision) => onDecision(awaiting, decision)} />}
-    </section>
+    </section>}
     <form className="prompt-form" onSubmit={(event) => { event.preventDefault(); submitPrompt(); }}>
       <label htmlFor="agent-prompt">Agent instruction</label>
       {attachments.length > 0 && <div className="chat-attachments" aria-label="Referenced selections">{attachments.map((attachment) => <span className={`attachment-chip ${attachment.kind}`} key={attachment.id}>
@@ -189,6 +194,21 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
       {trusted && <span className="prompt-mode trusted" role="note">Trusted turn — the agent may add, delete, reorder, and edit any cell. Review the diff before keeping.</span>}
       {mode === "plan" && <span className="prompt-mode" role="note">Plan mode — the agent proposes a plan and writes no changes.</span>}
       <div className="prompt-controls">
+        {/* D2, MODIFY: the write boundary lives with the other per-turn
+            choices now, but it is not one of them. It is first, wider, and
+            ruled off down its left — and if the three do not fit at the
+            panel's minimum width they wrap rather than shrink, because a
+            truncated "Blocking"/"Trusted" is the one label here that must
+            never be a guess. */}
+        <label className={`prompt-select write-scope ${trustedScope ? "trusted" : ""}`}>
+          <span>Write scope</span>
+          <select aria-label="Write scope" value={writeScope} disabled={busy || mode === "plan"}
+            title={mode === "plan" ? "Plan mode writes nothing, so write scope has no effect." : "Blocking: the agent may only edit cells you mark editable. Trusted: the agent may add, delete, reorder, and edit any cell in the notebook."}
+            onChange={(event) => updateWriteScope(event.target.value as WriteScope)}>
+            <option value="blocking">Blocking</option>
+            <option value="trusted">Trusted</option>
+          </select>
+        </label>
         <label className="prompt-select">
           <span>Model</span>
           <select aria-label="Agent model" value={model} disabled={busy} onChange={(event) => setModel(event.target.value as AgentModel)}>

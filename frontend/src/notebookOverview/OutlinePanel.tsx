@@ -8,11 +8,10 @@ import { api, ApiError, type NotebookSnapshot, type Overview, type OverviewBlock
 // name a correctable annoyance rather than a reason to distrust the panel — and
 // every block cites its cell range, so it is checkable in one click.
 
-const stateLabels: Record<string, { text: string; icon: string }> = {
-  "never-run": { text: "never run", icon: "radio_button_unchecked" },
-  "out-of-order": { text: "ran out of order", icon: "shuffle" },
-  risky: { text: "touches files, network or the shell", icon: "warning" },
-};
+// The never-run / out-of-order / risky chips are gone (stitch-diff D10,
+// accepted in §H). `block.state` still arrives from the backend and still
+// classes the row, so re-introducing a marker is a render change and not a
+// data one.
 
 const range = (block: OverviewBlock): string =>
   block.start === block.end ? `Cell ${block.start + 1}` : `Cells ${block.start + 1}–${block.end + 1}`;
@@ -24,7 +23,6 @@ function BlockRow({ block, expanded, onToggle, onJump, onHover }: {
   onJump: () => void;
   onHover: (hovering: boolean) => void;
 }) {
-  const state = stateLabels[block.state];
   // Progressive disclosure: blocks by default, details on expand, one level at
   // a time. A block with nothing computed to show gets no expander at all
   // rather than an expander onto an empty box.
@@ -66,12 +64,6 @@ function BlockRow({ block, expanded, onToggle, onJump, onHover }: {
             {/* The range stands in for the name in the fallback, so repeating it
                 here would just print it twice. */}
             {block.name ? range(block) : `${block.end - block.start + 1} cell${block.end === block.start ? "" : "s"}`}
-            {state && (
-              <span className={`outline-state ${block.state}`} title={state.text}>
-                {state.icon && <Icon name={state.icon} />}
-                {state.text}
-              </span>
-            )}
           </span>
         </button>
       </div>

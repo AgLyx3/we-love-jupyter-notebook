@@ -95,5 +95,10 @@ export default function WorkspaceSidebar({ root, activePath, notebook, tab, onTa
       : notebook
       ? <div className="workspace-tree" aria-label="Notebook outline"><OutlinePanel notebook={notebook} onJump={onJumpToCell} onHoverBlock={onHoverBlock} /></div>
       : <div className="tree-empty">Open a notebook to see its outline.</div>}
+    {/* B10. Pinned footer entry. There is no settings screen behind it, so it
+        is rendered disabled and says why rather than opening onto nothing. */}
+    <div className="sidebar-footer">
+      <button type="button" className="sidebar-settings" disabled title="Settings — not built yet"><Icon name="settings" /> Settings</button>
+    </div>
   </aside>;
 }

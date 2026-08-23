@@ -315,7 +315,7 @@ export default function NotebookCell({ cell, focused, selected, outlined = false
     event.dataTransfer.setData("application/x-notebook-cells", JSON.stringify(ids));
     event.dataTransfer.effectAllowed = "copy";
   }} className={`notebook-cell ${focused ? "is-focused" : ""} ${selected ? "is-selected" : ""} ${outlined ? "is-outlined" : ""}`} tabIndex={0} onFocus={onFocus} onContextMenu={onContextMenu} aria-label={description}>
-    <div className="cell-gutter" aria-label={`Select ${description}`} title="Click to select · Shift-click for a range · right-click for scope actions" onClick={onSelect}><span className="cell-number" title={`Cell ${cell.index + 1}`}>{cell.index + 1}</span><span className="execution-count">{cell.cellType === "code" ? `[${cell.executionCount ?? " "}]` : cell.cellType === "raw" ? "RAW" : "MD"}</span>{cell.metadata?.agent_authored ? <span className="agent-authored-badge" title="Added by the agent — review before running">AI</span> : null}</div>
+    <div className="cell-gutter" aria-label={`Select ${description}`} title="Click to select · Shift-click for a range · right-click for scope actions" onClick={onSelect}><span className="cell-number" title={`Cell ${cell.index + 1}`}>{cell.index + 1}</span><span className="execution-count">{cell.cellType === "code" ? `[${cell.executionCount ?? " "}]` : cell.cellType === "raw" ? "RAW" : "MD"}</span>{cell.metadata?.agent_authored ? <span className="agent-authored-badge" role="img" aria-label="Added by the agent" title="Added by the agent — review before running"><Icon name="smart_toy" filled /></span> : null}</div>
     <div className="cell-main">
       <div className="cell-actions">
         {!trusted && <button disabled={dependentDisabled || cell.cellType === "raw"} className={editable ? "selected" : ""} title="Allow agent edit" aria-label={`Allow agent edit ${description}`} onClick={(event) => { event.stopPropagation(); onAddEditable(); }}>{editable ? <Icon name="check" /> : <Icon name="smart_toy" />}</button>}
@@ -363,11 +363,13 @@ export default function NotebookCell({ cell, focused, selected, outlined = false
           can be far narrower than the viewport, so a viewport media query
           would miss it. */}
       <div className="cell-output-region" ref={outputRegionRef} tabIndex={tuningOpen ? -1 : undefined}>
-        {/* The panel replaces the cell's own outputs rather than sitting under
-            them: it renders that same committed picture as its "before", and a
-            second copy of a tall plot would push the knob rail out of sight. */}
+        {/* The panel stands in for the cell's own output region rather than
+            sitting under it: it renders that same picture as its "before", and
+            a second copy of a tall plot would just push the first off screen.
+            The knobs themselves float over the notebook (stitch-diff B6), so
+            the picture keeps the full width of the cell either way. */}
         {tuningOpen && tuning
-          ? <TuningPanel cellId={cell.cellId} open revision={tuning.revision}
+          ? <TuningPanel cellId={cell.cellId} open revision={tuning.revision} cellOutputs={cell.outputs}
             onScan={tuning.onScan} onWarm={tuning.onWarm} onPreview={tuning.onPreview} onApply={tuning.onApply}
             onDiscardShadow={tuning.onDiscardShadow} onClose={() => setTuningOpen(false)} />
           : <Outputs outputs={cell.outputs} disabled={dependentDisabled} onAddErrorToChat={onAddErrorToChat} onHoverChange={setSuppressDrag}

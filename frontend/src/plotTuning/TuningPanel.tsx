@@ -1,5 +1,5 @@
 import Icon from "../ui/Icon";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type {
   CellOutput, TuningBounds, TuningKnob, TuningPlan, TuningPreview, TuningRecord,
   TuningTiming, TuningWarmResult,
@@ -54,7 +54,22 @@ export interface TuningPanelProps {
   warmTimings?: TuningTiming[];
   /** Concurrent previews supersede each other; this is the debounce in front. */
   previewDebounceMs?: number;
+  /** The cell's committed outputs. The panel stands in for the cell's output
+   *  region while it is open, so without these the picture would vanish for
+   *  the length of a scan and a warm-up — which is the one thing §3.5 says the
+   *  preview surface must never do. */
+  cellOutputs?: CellOutput[];
 }
+
+/** Popover geometry. Fixed rather than absolute on purpose: an overlay that
+ *  widened `.notebook-cell`'s scroll box would break the layout invariant the
+ *  e2e suite enforces, and a fixed box contributes to no ancestor's
+ *  scrollWidth. */
+const POPOVER_WIDTH = 288;
+const clampPopover = (left: number, top: number) => ({
+  left: Math.max(8, Math.min(left, window.innerWidth - POPOVER_WIDTH - 8)),
+  top: Math.max(56, Math.min(top, window.innerHeight - 120)),
+});
 
 const boundsIndex = (knobs: TuningKnob[]): Record<string, TuningBounds> => {
   const index: Record<string, TuningBounds> = {};
@@ -90,6 +105,8 @@ export default function TuningPanel(props: TuningPanelProps) {
   const [failure, setFailure] = useState<Failure | null>(null);
   const [record, setRecord] = useState<TuningRecord | null>(null);
   const [nonce, setNonce] = useState(0);
+  const [popover, setPopover] = useState<{ left: number; top: number } | null>(null);
+  const rootRef = useRef<HTMLElement | null>(null);
 
   const shadowRef = useRef<string | null>(null);
   const warmToken = useRef(0);
@@ -304,6 +321,43 @@ export default function TuningPanel(props: TuningPanelProps) {
     });
   };
 
+  // Place the popover once, next to the cell it belongs to, then leave it
+  // where the user puts it. Deferred to a layout effect because the anchor is
+  // the panel's own box, which does not exist until after the first paint.
+  // Deliberately un-keyed: the anchor is the panel's own box, which does not
+  // exist on the render that opens the panel (it returns null while the scan
+  // has not started), so a dependency list would miss the render that first
+  // has something to measure. It self-arrests on `popover`.
+  useLayoutEffect(() => {
+    if (!open || popover) return;
+    const rect = rootRef.current?.getBoundingClientRect();
+    if (!rect || (!rect.width && !rect.height)) return;
+    setPopover(clampPopover(rect.right - POPOVER_WIDTH - 12, rect.top + 8));
+  });
+  useEffect(() => {
+    if (!popover) return;
+    const onResize = () => setPopover((current) => current && clampPopover(current.left, current.top));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [popover]);
+  const startDrag = (event: ReactPointerEvent) => {
+    if ((event.target as HTMLElement).closest("button")) return;
+    const origin = popover ?? { left: 0, top: 0 };
+    const fromX = event.clientX;
+    const fromY = event.clientY;
+    event.preventDefault();
+    const onMove = (move: globalThis.PointerEvent) =>
+      setPopover(clampPopover(origin.left + move.clientX - fromX, origin.top + move.clientY - fromY));
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.classList.remove("dragging-popover");
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    document.body.classList.add("dragging-popover");
+  };
+
   const close = () => { warmToken.current += 1; discardShadow(); setStage("closed"); callbacks.current.onClose(); };
   // Cancelling a warm-up leaves a request in flight; the token is what makes
   // its shadow get torn down on arrival instead of becoming this panel's.
@@ -312,7 +366,12 @@ export default function TuningPanel(props: TuningPanelProps) {
 
   if (state === "closed") return null;
 
-  const shown = dirty ? (previewOutputs ?? committedOutputs) : committedOutputs;
+  // The preview surface stands in for the cell's own output region, so it
+  // falls back to that cell's committed outputs: the picture is visible from
+  // the moment Tune is pressed, through the scan and the warm-up, rather than
+  // being replaced by a progress line (B7 — "you watch the cell's own output").
+  const committed = committedOutputs.length ? committedOutputs : (props.cellOutputs ?? []);
+  const shown = dirty ? (previewOutputs ?? committed) : committed;
   const knobsDisabled = stage !== "ready";
 
   const preview = <div className={`tuning-preview${dirty ? " dirty" : ""}`}>
@@ -329,87 +388,105 @@ export default function TuningPanel(props: TuningPanelProps) {
     </div>
   </div>;
 
-  const rail = <div className="tuning-rail">
-    <div className="tuning-knobs" role="group" aria-label="Knobs">
-      {knobs.map((knob) => <KnobControl
-        key={knob.name}
-        knob={knob}
-        value={values[knob.name]}
-        bounds={bounds[knob.name] ?? null}
-        disabled={knobsDisabled}
-        onChange={(value) => setValues((current) => ({ ...current, [knob.name]: value }))}
-        onBoundsChange={(next) => setBounds((current) => ({ ...current, [knob.name]: next }))}
-        onReset={() => setValues((current) => ({ ...current, [knob.name]: knob.value }))}
-      />)}
-    </div>
-    {/* Once applied, the shadow's source ranges no longer match the file it
-        just changed, so tuning on cannot reuse it — "Tune again" re-scans rather
-        than pretending the knobs are still live. */}
-    {stage === "applied"
-      ? <div className="tuning-apply">
-        <button type="button" className="primary" onClick={rescan}>Tune again</button>
-        <button type="button" onClick={close}>Close</button>
-      </div>
-      : <div className="tuning-apply">
-        <button type="button" className="primary" disabled={!dirty || stage !== "ready"} onClick={apply}>{applyLabel(changed.length)}</button>
-        <button type="button" disabled={!dirty || stage !== "ready"} onClick={resetAll}>Reset all</button>
-      </div>}
+  const knobRail = <div className="tuning-knobs" role="group" aria-label="Knobs">
+    {knobs.map((knob) => <KnobControl
+      key={knob.name}
+      knob={knob}
+      value={values[knob.name]}
+      bounds={bounds[knob.name] ?? null}
+      disabled={knobsDisabled}
+      onChange={(value) => setValues((current) => ({ ...current, [knob.name]: value }))}
+      onBoundsChange={(next) => setBounds((current) => ({ ...current, [knob.name]: next }))}
+      onReset={() => setValues((current) => ({ ...current, [knob.name]: knob.value }))}
+    />)}
   </div>;
 
-  return <section className="tuning-panel" data-state={state} aria-label="Plot tuning">
-    <header className="tuning-panel-head">
-      <strong>Tune</strong>
-      <button type="button" className="tuning-close" aria-label="Close tuning panel" onClick={close}><Icon name="close" /></button>
-    </header>
+  // Once applied, the shadow's source ranges no longer match the file it just
+  // changed, so tuning on cannot reuse it — "Tune again" re-scans rather than
+  // pretending the knobs are still live.
+  const actions = stage === "applied"
+    ? <div className="tuning-apply">
+      <button type="button" className="primary" onClick={rescan}>Tune again</button>
+      <button type="button" onClick={close}>Close</button>
+    </div>
+    : <div className="tuning-apply">
+      <button type="button" className="primary" disabled={!dirty || stage !== "ready"} onClick={apply}>{applyLabel(changed.length)}</button>
+      <button type="button" disabled={!dirty || stage !== "ready"} onClick={resetAll}>Reset</button>
+    </div>;
 
-    {state === "scanning" && <p className="tuning-message" role="status">Looking for values you can tune…</p>}
+  return <section className="tuning-panel" ref={rootRef} data-state={state} aria-label="Plot tuning">
+    {/* In flow, where the cell's outputs were. */}
+    <div className="tuning-preview-column">
+      {stage === "applied" && record && <p className="tuning-applied-strip" role="status">
+        <Icon name="check" /> Applied {record.knobs.length} {record.knobs.length === 1 ? "change" : "changes"}. This is your notebook now.
+      </p>}
+      {preview}
+      {/* A different bill from the one the Apply button quoted, so it is said
+          out loud rather than left to be noticed in the execution counts. */}
+      {stage === "applied" && record?.reRanFromTop && <p className="tuning-rerun-note">The kernel had not run the cells above this one, so the whole notebook was re-run.</p>}
+    </div>
 
-    {/* The empty state explains itself. "No tunable variables found" would read
-        as broken; the scan's own sentences read as honest. */}
-    {state === "empty" && <div className="tuning-message">
-      <p>Nothing in the cells above can be tuned safely.</p>
-      {plan?.blocked && <p className="tuning-blocked">{plan.blocked}</p>}
-      {plan && plan.rejections.length > 0 && <ul className="tuning-rejections">
-        {plan.rejections.map((rejection) => <li key={rejection.name}>{rejection.detail}</li>)}
-      </ul>}
-    </div>}
+    {/* The knobs float over the notebook (B6) rather than taking a column
+        beside the picture, so the plot keeps the full width of the cell. */}
+    {/* Until it has been placed the popover sits at the stylesheet's default
+        corner rather than being hidden: an invisible knob rail is one the user
+        cannot reach, and in a headless DOM (where every rect is zero) it would
+        never become visible at all. */}
+    <div className="tuning-popover" style={popover ? { left: popover.left, top: popover.top, right: "auto" } : undefined}>
+      <header className="tuning-panel-head" onPointerDown={startDrag}>
+        <strong>Tuning Controls</strong>
+        <button type="button" className="tuning-close" aria-label="Close tuning panel" onClick={close}><Icon name="close" /></button>
+      </header>
 
-    {state === "risky-confirm" && plan && <div className="tuning-message tuning-risky">
-      <p className="risk-title"><Icon name="gpp_maybe" /> Warming up re-runs {plan.risky.length} flagged {plan.risky.length === 1 ? "cell" : "cells"} above this one.</p>
-      <p>Nothing runs until you approve. Your notebook and its kernel are not touched either way.</p>
-      <ul>{plan.risky.map((cell) => <li key={cell.cellId}>Cell {cell.cellIndex + 1} — {cell.reasons.join(", ") || cell.categories.join(", ")}</li>)}</ul>
-      <div className="tuning-actions">
-        <button type="button" onClick={close}>Cancel</button>
-        <button type="button" className="primary" onClick={warmUp}>Approve and warm up</button>
-      </div>
-    </div>}
+      <div className="tuning-popover-body">
+        {state === "scanning" && <p className="tuning-message" role="status">Looking for values you can tune…</p>}
 
-    {state === "error" && failure && <div className="tuning-message tuning-error">
-      <p><strong>{failure.title}</strong></p>
-      <p>{failure.detail}</p>
-      {failure.outputs && failure.outputs.length > 0 && <Outputs outputs={failure.outputs} disabled />}
-      <div className="tuning-actions">
-        <button type="button" onClick={close}>Close</button>
-        {failure.retry && <button type="button" className="primary" onClick={rescan}>Try again</button>}
-      </div>
-    </div>}
+        {state === "warming" && <p className="tuning-message" role="status">{warmProgressLabel(props.warmTimings?.length ? props.warmTimings : timings, elapsed)}</p>}
 
-    {(state === "warming" || stage === "ready" || stage === "applying" || stage === "applied") && <div className="tuning-panel-body">
-      <div className="tuning-preview-column">
-        {stage === "applied" && record && <p className="tuning-applied-strip" role="status">
-          <Icon name="check" /> Applied {record.knobs.length} {record.knobs.length === 1 ? "change" : "changes"}. This is your notebook now.
-        </p>}
-        {state === "warming"
-          ? <p className="tuning-message" role="status">{warmProgressLabel(props.warmTimings?.length ? props.warmTimings : timings, elapsed)}</p>
-          : preview}
+        {/* The empty state explains itself. "No tunable variables found" would
+            read as broken; the scan's own sentences read as honest. */}
+        {state === "empty" && <div className="tuning-message">
+          <p>Nothing in the cells above can be tuned safely.</p>
+          {plan?.blocked && <p className="tuning-blocked">{plan.blocked}</p>}
+          {plan && plan.rejections.length > 0 && <ul className="tuning-rejections">
+            {plan.rejections.map((rejection) => <li key={rejection.name}>{rejection.detail}</li>)}
+          </ul>}
+        </div>}
+
+        {state === "risky-confirm" && plan && <div className="tuning-message tuning-risky">
+          <p className="risk-title"><Icon name="gpp_maybe" /> Warming up re-runs {plan.risky.length} flagged {plan.risky.length === 1 ? "cell" : "cells"} above this one.</p>
+          <p>Nothing runs until you approve. Your notebook and its kernel are not touched either way.</p>
+          <ul>{plan.risky.map((cell) => <li key={cell.cellId}>Cell {cell.cellIndex + 1} — {cell.reasons.join(", ") || cell.categories.join(", ")}</li>)}</ul>
+        </div>}
+
+        {state === "error" && failure && <div className="tuning-message tuning-error">
+          <p><strong>{failure.title}</strong></p>
+          <p>{failure.detail}</p>
+          {failure.outputs && failure.outputs.length > 0 && <Outputs outputs={failure.outputs} disabled />}
+        </div>}
+
         {state === "applying" && <p className="tuning-message" role="status">Applying and re-running…</p>}
-        {/* A different bill from the one the Apply button quoted, so it is said
-            out loud rather than left to be noticed in the execution counts. */}
-        {stage === "applied" && record?.reRanFromTop && <p className="tuning-rerun-note">The kernel had not run the cells above this one, so the whole notebook was re-run.</p>}
+
+        {(stage === "ready" || stage === "applying" || stage === "applied") && knobRail}
       </div>
-      {state === "warming"
-        ? <div className="tuning-rail"><div className="tuning-actions"><button type="button" onClick={cancelWarm}>Cancel</button></div></div>
-        : rail}
-    </div>}
+
+      <div className="tuning-popover-foot">
+        {state === "warming"
+          ? <div className="tuning-actions"><button type="button" onClick={cancelWarm}>Cancel</button></div>
+          : state === "risky-confirm"
+          ? <div className="tuning-actions">
+            <button type="button" onClick={close}>Cancel</button>
+            <button type="button" className="primary" onClick={warmUp}>Approve and warm up</button>
+          </div>
+          : state === "error"
+          ? <div className="tuning-actions">
+            <button type="button" onClick={close}>Close</button>
+            {failure?.retry && <button type="button" className="primary" onClick={rescan}>Try again</button>}
+          </div>
+          : state === "empty" || state === "scanning"
+          ? <div className="tuning-actions"><button type="button" onClick={close}>Close</button></div>
+          : actions}
+      </div>
+    </div>
   </section>;
 }

@@ -109,6 +109,10 @@ describe("the preview band", () => {
   });
 });
 
+// The min/max fields were dropped by stitch-diff B8 (accepted in §H), so a
+// bound can no longer be set on its own — but widening was never those fields'
+// job. Typing a value past an end is what moves the end, and that is what §3.3
+// actually rules on, so it is still covered here.
 describe("bounds", () => {
   it("widens the range around a value typed outside it, never clamping", async () => {
     mount();
@@ -120,18 +124,8 @@ describe("bounds", () => {
     expect(slider).toHaveAttribute("max", "900");
     expect(slider).toHaveValue("900");
     expect(field).toHaveValue(900);
-    expect(screen.getByRole("spinbutton", { name: "BINS maximum" })).toHaveValue(900);
-  });
-
-  it("takes an edited bound directly, since the heuristic cannot know an alpha channel", async () => {
-    mount();
-    await readyRail();
-
-    retype(screen.getByRole("spinbutton", { name: "ALPHA maximum" }), "1");
-
-    expect(screen.getByRole("slider", { name: "ALPHA slider" })).toHaveAttribute("max", "1");
-    // Editing a bound is not a change to the value, so nothing is dirty yet.
-    expect(band()).not.toBeInTheDocument();
+    // No standalone bound editor to check any more; the slider is the bound.
+    expect(screen.queryByRole("spinbutton", { name: "BINS maximum" })).not.toBeInTheDocument();
   });
 });
 
