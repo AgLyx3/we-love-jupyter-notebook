@@ -770,7 +770,13 @@ Editable cell files:
 - Names the editable files.
 - States that only listed editable files may be changed.
 - States that notebook structure, metadata, outputs, and cell types are out of scope.
-- States that the agent must not run shell commands in v1.
+- States the turn's shell rule, worded for how that adapter reaches files.
+  An adapter with dedicated file tools (Claude) is told flatly not to run
+  shell commands. An adapter whose only file API *is* its shell tool (Codex)
+  is told to use that tool solely to read and write files in the workspace and
+  to run no other commands — no installs, no network, no git. Either wording
+  carries the same prohibition on arbitrary commands; only the carve-out for
+  file access differs.
 - Carries a notebook-reasoning preamble (both edit and read-only turns) that frames
   the runtime for error diagnosis: cells share one kernel namespace and may run out
   of order, so an undefined-name/`NameError`/missing-import is often an unrun
@@ -799,12 +805,25 @@ Rules:
   with a read-only tool set (no edit or write tools) and writes no editable
   files. The boundary is then enforced at the tool level as well as by the
   workspace audit — the agent cannot attempt a write at all.
-- The app configures the supported adapter so terminal/tool execution requests
-  are denied and never approved by the app in v1.
-- If the adapter reports a terminal request or loses the configured denial
-  capability, the app aborts the turn.
+- Adapters differ in how they reach files, so the shell boundary is set per
+  adapter rather than globally. Claude is configured with a per-tool
+  allow-list and no shell: a terminal request is denied and never approved
+  by the app, and if the adapter reports a terminal request or loses the
+  configured denial capability, the app aborts the turn. Codex has no
+  non-shell file API — its shell/exec tool is the only way it can open
+  `notebook.ipynb` — so it runs with a shell that the OS sandbox confines to
+  its own workspace directory.
+- What holds the boundary for a shell-using adapter is therefore the sandbox
+  plus the post-run workspace audit, not the absence of a shell. The sandbox
+  denies network access and, because `workspace-write` otherwise grants
+  `$TMPDIR` and `/tmp` alongside the working directory, both
+  `sandbox_workspace_write.exclude_tmpdir_env_var` and
+  `sandbox_workspace_write.exclude_slash_tmp` are set so the writable set
+  matches the directory the audit actually inspects.
 - Notebook execution is owned by the app after validated changes are applied.
-- Shell command output from the CLI agent should not be part of the v1 workflow.
+  A CLI agent's shell is not an execution path for notebook code: nothing it
+  runs touches the live document or the kernel, and its shell output is not
+  surfaced in the chat transcript — only the agent's final message is.
 
 This separates agent editing from notebook validation. The agent proposes source
 changes; the app applies valid changes and runs notebook cells under the risky
@@ -814,10 +833,12 @@ Two production adapters exist: the Claude CLI and the Codex CLI. Each turn
 request selects one. The Codex adapter runs `codex exec` with `--ephemeral
 --ignore-user-config --skip-git-repo-check`, sets `--sandbox workspace-write`
 for editable turns and `--sandbox read-only` for read-only or plan turns, and
-disables network access for the sandboxed process. The agent's final message is
+disables network access for the sandboxed process. It also excludes `$TMPDIR`
+and `/tmp` from the write grant, which `workspace-write` would otherwise
+include, so the writable set is the workspace directory the audit inspects. The agent's final message is
 captured through `--output-last-message` into a temp file outside the
 workspace rather than parsed from stdout. Supported Codex CLI versions are
-fail-closed at `>=0.133.0,<0.134.0`, checked before every turn, mirroring the
+fail-closed at `>=0.133.0,<1.0.0`, checked before every turn, mirroring the
 Claude CLI version gate. Codex's write boundary is scoped to the sandbox
 directory rather than per tool, so unlike the tool-level denial described
 above for empty-editable-set turns, within-workspace protection on a Codex
@@ -2256,6 +2277,41 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
   wrong altitude. This is guidance only: no change to tool grants, the edit
   boundary, or turn scope — the agent still edits only the listed cells and only
   describes fixes that belong elsewhere.
+
+### Sandboxed Shell For Adapters With No Other File API
+
+- Decision: Allow a CLI agent to run shell commands when that is the only way it
+  can reach files, instead of holding the earlier blanket rule "V1 CLI agents must
+  not run shell commands." Claude keeps a per-tool allow-list with no shell. Codex
+  runs `codex exec` with an OS sandbox scoped to its own workspace directory, and
+  its `INSTRUCTIONS.md` tells it to use the shell/exec tool only to read and write
+  files in that workspace and to run no other commands.
+- Alternatives: (a) keep the blanket ban and drop the Codex adapter — Codex
+  exposes no non-shell file API, so under the flat wording it cannot open
+  `notebook.ipynb` and every turn is a no-op; (b) keep the ban and synthesize a
+  file API via MCP or a wrapper — real, but it is a whole subsystem to build and
+  audit for one adapter, and the sandbox still has to be trusted underneath it;
+  (c) allow the shell with no sandbox and rely on the workspace audit alone —
+  the audit runs after the CLI exits and only inspects the workspace root, so
+  anything written elsewhere is never seen at all.
+- Rationale: The blanket ban was a proxy for the property actually wanted — an
+  agent turn must not reach outside its workspace or run arbitrary commands. For
+  an agent whose file access *is* its shell, the proxy and the property come
+  apart, and enforcing the proxy costs the adapter entirely while buying no extra
+  safety. Enforcing the property directly is both stricter and honest about where
+  the boundary lives.
+- What still constrains it: the sandbox is `workspace-write` only on editable
+  turns and `read-only` on read-only and plan turns; network access is disabled;
+  `sandbox_workspace_write.exclude_tmpdir_env_var` and
+  `exclude_slash_tmp` are both set, so the writable set is the workspace
+  directory rather than the workspace plus `$TMPDIR` plus `/tmp` that
+  `workspace-write` grants by default, and therefore matches what the audit
+  inspects; the post-run workspace audit still rejects out-of-scope and
+  protected-file changes; candidate cell sources still go through the same
+  validate-and-apply pipeline, so the agent still does not own notebook mutation;
+  and the fail-closed CLI version gate covers the flags this rests on.
+- Governance: this weakens the "V1 CLI agents must not run shell commands"
+  guarantee in AGENTS.md and was made with explicit user approval, per AGENTS.md.
 
 ## Open Follow-Up Decisions
 

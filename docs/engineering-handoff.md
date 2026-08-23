@@ -165,7 +165,16 @@ fail-closed at `>=2.1.203,<2.2.0`, and the version is checked before every turn.
 The Codex adapter runs `codex exec <prompt>` with `--ephemeral
 --ignore-user-config --skip-git-repo-check --color never -C <workspace root>`,
 `--output-last-message <path>` writing the final response to a temp file
-outside the workspace, and `-c sandbox_workspace_write.network_access=false`.
+outside the workspace, and three `-c` overrides:
+`sandbox_workspace_write.network_access=false`,
+`sandbox_workspace_write.exclude_tmpdir_env_var=true`, and
+`sandbox_workspace_write.exclude_slash_tmp=true`. The last two matter
+because `workspace-write` grants the working directory *plus* `$TMPDIR`
+plus `/tmp` by default, while the audit only ever inspects the workspace
+root — excluding them makes the writable set and the audited set the same.
+The `--output-last-message` file still lands in a temp dir because Codex's
+own process writes it; the sandbox binds the commands the model runs, not
+the CLI that spawns them.
 It maps the turn's permission mode to `--sandbox`: `workspace-write` when the
 turn is editable, `read-only` for read-only and plan turns. Unlike the Claude
 adapter's per-tool `Read,Edit,Write` allow-list, Codex's sandbox scopes writes
@@ -173,7 +182,7 @@ to the workspace directory as a whole rather than per tool, so the
 within-workspace boundary on an editable Codex turn is enforced by the
 post-exit workspace audit (rejecting out-of-scope or protected-file changes)
 rather than by denying the write call itself. Supported Codex CLI versions are
-fail-closed at `>=0.133.0,<0.134.0`, checked before every turn, the same
+fail-closed at `>=0.133.0,<1.0.0`, checked before every turn, the same
 pattern as the Claude version gate. Codex model requests are restricted to an
 allow-list (`gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`); any other requested value is
 dropped and the CLI's own default model is used.
@@ -304,7 +313,7 @@ before changing behavior.
    upgrade to 2.2 or later will stop Claude turns as unsupported until adapter
    capability tests and the version range are updated. The same applies to
    Codex: an automatic upgrade past 0.133.x will stop Codex turns (the other
-   agent, if selectable, is unaffected) until the `>=0.133.0,<0.134.0` gate is
+   agent, if selectable, is unaffected) until the `>=0.133.0,<1.0.0` gate is
    re-verified against the new version and updated. Do not widen either range
    without verifying every required safety flag. `scripts/codex_smoke.py` is
    the manual smoke path for exercising the real Codex CLI adapter outside
