@@ -6,14 +6,14 @@ of endpoints are left out on purpose:
 * **Agent turns.** They shell out to the `claude` CLI, so exposing them would
   put a second agent underneath the one already calling these tools — separately
   billed, with its own workspace and scope rules, doing work the caller can do
-  directly with `notebook_set_cell_source`. A person can still send a turn from
+  directly with `set_cell_source`. A person can still send a turn from
   the browser tab; only the tool surface omits it.
 * **File listing and search.** The tab has a file picker, and a person browsing
   their own machine is a different thing from a model enumerating it.
 * **Plot tuning.** Its value is a live preview loop; called through tools it is
   a slower way to edit a literal.
 
-Execution is the interesting one. `notebook_run_cell` and `notebook_run_all`
+Execution is the interesting one. `run_cell` and `run_all`
 declare themselves as model-initiated, which routes them through the risky-cell
 gate: a cell the classifier flags stops and waits for a person to approve it in
 the tab. That pause is the point of running a browser at all.
@@ -40,7 +40,7 @@ REQUEST_TIMEOUT_SECONDS = 30.0
 # long a person might take to approve a paused one: holding a tool call open
 # for minutes gives the caller nothing to act on and invites the client's own
 # timeout to fire instead. The eval showed the model reaching for
-# notebook_status of its own accord after a pause, so returning promptly with
+# status of its own accord after a pause, so returning promptly with
 # what it is waiting for fits how it already behaves. The run continues in the
 # background either way.
 EXECUTION_POLL_TIMEOUT_SECONDS = 45.0
@@ -81,8 +81,8 @@ class EditorSession:
         with self._lock:
             if self.session_id is None or self.revision is None:
                 raise ToolFailure(
-                    "No notebook has been read yet. Call notebook_open or "
-                    "notebook_read first, so this edit is checked against the "
+                    "No notebook has been read yet. Call open or "
+                    "read first, so this edit is checked against the "
                     "version you actually looked at."
                 )
             return {
@@ -161,12 +161,12 @@ def _explain(status: int, body: dict[str, Any] | None, *, what: str) -> str:
     message = error.get("message") or f"HTTP {status}"
 
     if code == "notebook_not_loaded":
-        return "No notebook is open. Call notebook_open with a path first."
+        return "No notebook is open. Call open with a path first."
     if code == "cell_not_found":
         missing = (error.get("details") or {}).get("cellId")
         named = f" {missing!r}" if missing else ""
         return (
-            f"There is no cell{named} in the open notebook. Call notebook_read "
+            f"There is no cell{named} in the open notebook. Call read "
             "for the current cell ids — they change when cells are added or "
             "removed."
         )
@@ -182,24 +182,24 @@ def _explain(status: int, body: dict[str, Any] | None, *, what: str) -> str:
     if code in {"revision_conflict", "session_conflict"}:
         return (
             f"The notebook changed since you last read it ({message}). Someone "
-            "may have edited it in the editor tab. Call notebook_read to see "
+            "may have edited it in the editor tab. Call read to see "
             "the current state, then decide whether this edit still applies — "
             "it has not been made."
         )
     if code == "external_modification_conflict":
         return (
-            f"{message}. Re-open it with notebook_open to pick up what is on "
+            f"{message}. Re-open it with open to pick up what is on "
             "disk; the edit has not been made."
         )
     if code == "replacement_precondition_required":
         return (
-            "A notebook is already open. Call notebook_read first so the "
+            "A notebook is already open. Call read first so the "
             "replacement is checked against the version you looked at."
         )
     if code == "mutation_conflict":
         return (
             f"Another operation is holding the notebook ({message}). Call "
-            "notebook_status to see what is running, then try again once it "
+            "status to see what is running, then try again once it "
             "finishes."
         )
     if code == "kernel_restart_required":
@@ -263,7 +263,7 @@ def build_server(
     """Wire the tools onto a server. Returns both so a caller can shut down."""
     tools = NotebookTools(EditorProcess(workspace_root=workspace_root))
     server = MCPServer(
-        name="notebook-editor",
+        name="agent-notebook",
         version="0.1.0",
         instructions=(
             "A local Jupyter notebook editor with a live browser tab. Tool calls "
@@ -278,13 +278,13 @@ def build_server(
     read_only = ToolAnnotations(read_only_hint=True)
 
     @server.tool(
-        name="notebook_open",
+        name="open",
         description=(
             "Open a local .ipynb notebook in the editor and show it in a browser "
             "tab. Starts the editor if it is not already running. `path` may be "
             "absolute, or relative to the workspace root this editor was started "
             "for. Returns the session and a summary of the notebook. Use this "
-            "once per notebook; to re-read one already open, use notebook_read. "
+            "once per notebook; to re-read one already open, use read. "
             "The returned editorUrl is where a person can watch and intervene — "
             "tell them, especially if the tab did not open by itself."
         ),
@@ -314,7 +314,7 @@ def build_server(
         return shaped
 
     @server.tool(
-        name="notebook_read",
+        name="read",
         description=(
             "Read the open notebook: cells, their source, and a summary of their "
             "outputs. Images are described rather than returned — their bytes are "
@@ -342,7 +342,7 @@ def build_server(
         return shaped
 
     @server.tool(
-        name="notebook_status",
+        name="status",
         description=(
             "What the editor is doing now: the current revision, any run in "
             "progress, and whether one is paused waiting for a person to approve "
@@ -366,11 +366,12 @@ def build_server(
         return summary
 
     @server.tool(
-        name="notebook_set_cell_source",
+        name="set_cell_source",
         description=(
             "Replace the source of one cell. Checked against the version you last "
             "read: if the notebook changed in the meantime the edit is refused, "
-            "not applied — re-read and decide again. This does not run anything."
+            "not applied — re-read and decide again. This does not run anything, "
+            "and does not write the file: call save when you are done."
         ),
     )
     def notebook_set_cell_source(cell_id: str, source: str) -> dict[str, Any]:
@@ -387,14 +388,15 @@ def build_server(
         }
 
     @server.tool(
-        name="notebook_insert_cell",
+        name="insert_cell",
         description=(
             "Add a new cell to the open notebook. Goes at the end unless you "
             "give `index` (0 is the top). The cell is marked as agent-authored, "
             "which the editor shows as a badge, and it is NOT run — call "
-            "notebook_run_cell with the id this returns when you want it to. "
+            "run_cell with the id this returns when you want it to. "
             "To change a cell that already exists, use "
-            "notebook_set_cell_source instead."
+            "set_cell_source instead. The cell goes into the editor session, "
+            "not the file — call save when you are done."
         ),
     )
     def notebook_insert_cell(
@@ -417,15 +419,20 @@ def build_server(
             "index": added.get("index") if added else None,
             "cellCount": len(snapshot.get("cells") or []),
             "revision": snapshot.get("revision"),
-            "note": "Added but not run — it has no output until you run it.",
+            "dirty": snapshot.get("dirty"),
+            "note": (
+                "Added but not run — it has no output until you run it — and not "
+                "saved: the file is unchanged until you call save."
+            ),
         }
 
     @server.tool(
-        name="notebook_delete_cell",
+        name="delete_cell",
         description=(
             "Remove a cell from the open notebook by id. A notebook must keep at "
             "least one cell, so deleting the last one is refused. This cannot be "
-            "undone through these tools."
+            "undone through these tools, and the file is not rewritten until "
+            "you call save."
         ),
     )
     def notebook_delete_cell(cell_id: str) -> dict[str, Any]:
@@ -438,10 +445,11 @@ def build_server(
             "deletedCellId": cell_id,
             "cellCount": len(snapshot.get("cells") or []),
             "revision": snapshot.get("revision"),
+            "dirty": snapshot.get("dirty"),
         }
 
     @server.tool(
-        name="notebook_run_cell",
+        name="run_cell",
         description=(
             "Run one cell against the live kernel and wait for it to finish. A "
             "cell the risk classifier flags — running a shell command, starting a "
@@ -453,11 +461,11 @@ def build_server(
         return _run(tools, f"/execution/cells/{cell_id}/run", what=f"Running cell {cell_id!r}")
 
     @server.tool(
-        name="notebook_run_all",
+        name="run_all",
         description=(
-            "Run every code cell in order and wait. Like notebook_run_cell, any "
+            "Run every code cell in order and wait. Like run_cell, any "
             "cell the classifier flags pauses for a person to approve. Prefer "
-            "notebook_run_cell when you only need one."
+            "run_cell when you only need one."
         ),
     )
     def notebook_run_all() -> dict[str, Any]:
@@ -467,7 +475,7 @@ def build_server(
         )
 
     @server.tool(
-        name="notebook_cancel_run",
+        name="cancel_run",
         description=(
             "Cancel the run in progress, including one paused waiting for a "
             "person to approve a risky cell. Until it is cancelled or approved "
@@ -500,8 +508,13 @@ def build_server(
         return {"cancelled": True, "cellId": attempt.get("cellId")}
 
     @server.tool(
-        name="notebook_save",
-        description="Write the open notebook back to its file on disk.",
+        name="save",
+        description=(
+            "Write the open notebook back to its file on disk. Every other tool "
+            "changes only the editor session, so until this is called the file "
+            "still holds what it held before — an edit, an added cell and a run "
+            "are all lost if nobody saves."
+        ),
     )
     def notebook_save() -> dict[str, Any]:
         result = tools.request(
@@ -516,7 +529,7 @@ def build_server(
         }
 
     @server.tool(
-        name="notebook_show",
+        name="show",
         description=(
             "Open or re-open the editor tab in a browser. Use it to point a person "
             "at something — a plot you cannot see, or a cell waiting on approval."
@@ -606,7 +619,7 @@ def main() -> None:  # pragma: no cover - process entry point
     )
     parser.add_argument(
         "--no-browser", action="store_true",
-        help="Do not open a browser tab automatically (notebook_show still does)",
+        help="Do not open a browser tab automatically (show still does)",
     )
     args = parser.parse_args()
 

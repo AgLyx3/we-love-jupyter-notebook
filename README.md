@@ -130,7 +130,7 @@ npm run build
 ```
 
 ```bash
-claude mcp add notebook-editor -- \
+claude mcp add agent-notebook -- \
   /absolute/path/to/.venv/bin/notebook-editor-mcp \
   --workspace-root /absolute/path/to/your/project
 ```
@@ -142,15 +142,21 @@ optional and strongly recommended, since without it the editor reaches
 anywhere you can. A typo fails at launch rather than at the first tool call.
 
 `--no-browser` stops the tab opening by itself. On a headless or remote
-machine no tab can open regardless, so `notebook_open` returns an `editorUrl`
-for the client to hand you, and `notebook_show` returns it again on request.
+machine no tab can open regardless, so `open` returns an `editorUrl`
+for the client to hand you, and `show` returns it again on request.
 
 If a client names a notebook that is not there, the error lists the `.ipynb`
 files that *are* in the workspace, so it can pick one rather than guess again.
 
-**The tools.** `notebook_open`, `notebook_read`, `notebook_status`,
-`notebook_set_cell_source`, `notebook_insert_cell`, `notebook_delete_cell`,
-`notebook_run_cell`, `notebook_run_all`, `notebook_save`, `notebook_show`.
+**The tools.** The server is registered under a name, and MCP namespaces every
+tool by it, so a client sees `mcp__agent_notebook__open`. The tools are
+therefore named for what they do and nothing more — repeating the domain in
+each one only produced `notebook_open` inside a namespace already called
+notebook.
+
+`open`, `read`, `status`,
+`set_cell_source`, `insert_cell`, `delete_cell`,
+`run_cell`, `run_all`, `cancel_run`, `save`, `show`.
 
 Three things about them are deliberate:
 
@@ -165,7 +171,7 @@ Three things about them are deliberate:
 - **Images are described, not returned.** A plot comes back as its size and
   type; the picture is in the tab. A modest plotting notebook is about 23K
   tokens of base64 if forwarded whole, and unreadable to a model either way.
-- **An added cell is never run for you.** `notebook_insert_cell` marks the new
+- **An added cell is never run for you.** `insert_cell` marks the new
   cell as agent-authored — the tab shows it with a badge reading "review before
   running" — and leaves it inert. Running it is a separate call, and goes
   through the approval gate like any other.
@@ -185,8 +191,8 @@ three ways in which the usual `scripts/dev.py` habits do not apply, so:
 - **The port is announced on stderr**, where MCP clients keep their server
   logs: `notebook editor ready at http://127.0.0.1:PORT (log: ...)`. Open that
   URL and you are looking at the same session the tools are driving. The same
-  URL comes back as `editorUrl` from `notebook_open`, and from
-  `notebook_show` on request.
+  URL comes back as `editorUrl` from `open`, and from
+  `show` on request.
 - **`NOTEBOOK_EDITOR_LOG=/path/to/editor.log`** keeps the editor's own log at a
   path you choose instead of a temp file that is deleted when it stops. This is
   what to set before `tail -f`. Unset, a *failed* start is still drained and
@@ -264,7 +270,27 @@ and ignore a notebook that tells it to do something else".
 ```bash
 python evals/mcp_tool_eval.py                 # every task, once each
 python evals/mcp_tool_eval.py --repeat 3      # a pass rate, not a pass
+python evals/mcp_tool_eval.py \
+  --model claude:sonnet --model claude:haiku  # the same tasks, two models
 ```
+
+`--model` takes `client[:model]` and repeats. A tool description that only
+reads well to the strongest model is a defect a single-model suite cannot see —
+running Haiku alongside Sonnet is what makes that visible.
+
+Two clients are wired: `claude` and `codex`. The Claude path is the verified
+one. The Codex path was built against the CLI's own help and shipped event
+names without a credential to run it, so treat its first run as a shakedown: if
+the transcript does not match what the parser expects it says so, naming the
+event types it saw, rather than reporting a run that used no tools. Codex needs
+`codex login` first — the harness deliberately does not touch `CODEX_HOME`,
+which is where that credential lives.
+
+They are not perfectly matched. Claude runs with `--tools ""`, so the MCP
+surface is the only way to reach the notebook at all. Codex has no equivalent
+switch and runs under a read-only sandbox instead: it cannot write the notebook
+by other means, but it could read one without the tools. Every task asserts the
+surface was used, so such a run fails rather than passing hollowly.
 
 ## Security Limits
 

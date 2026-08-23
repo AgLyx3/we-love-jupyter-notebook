@@ -27,7 +27,7 @@ def test_a_write_before_any_read_is_refused_with_the_reason():
     """Not defaulted to "latest": an edit has to be checked against a version
     the caller actually looked at."""
     session = EditorSession()
-    with pytest.raises(ToolFailure, match="notebook_open or notebook_read"):
+    with pytest.raises(ToolFailure, match="open or read"):
         session.mutation()
 
 
@@ -75,7 +75,7 @@ def test_a_conflict_says_the_edit_was_not_made():
     )
     assert "changed since you last read it" in message
     assert "has not been made" in message
-    assert "notebook_read" in message
+    assert "read" in message
 
 
 def test_no_notebook_open_says_which_tool_to_call():
@@ -83,7 +83,7 @@ def test_no_notebook_open_says_which_tool_to_call():
         404, {"error": {"code": "notebook_not_loaded", "message": "No notebook"}},
         what="Reading",
     )
-    assert "notebook_open" in message
+    assert "open" in message
 
 
 def test_a_busy_notebook_points_at_status_rather_than_a_retry():
@@ -91,7 +91,7 @@ def test_a_busy_notebook_points_at_status_rather_than_a_retry():
         409, {"error": {"code": "mutation_conflict", "message": "turn in progress"}},
         what="Editing",
     )
-    assert "notebook_status" in message
+    assert "status" in message
 
 
 def test_a_rejected_path_explains_the_workspace_boundary():
@@ -126,7 +126,7 @@ def test_a_missing_cell_points_at_a_fresh_read():
     message = _explain(
         404, {"error": {"code": "cell_not_found", "message": "gone"}}, what="Editing",
     )
-    assert "notebook_read" in message
+    assert "read" in message
 
 
 def test_an_unmapped_error_still_carries_its_message():
@@ -281,7 +281,7 @@ def test_a_failed_run_all_says_the_later_cells_did_not_run():
 
 
 def test_a_single_failing_cell_does_not_claim_anything_about_later_cells():
-    """notebook_run_cell ran one cell on purpose. Saying "later cells did not
+    """run_cell ran one cell on purpose. Saying "later cells did not
     run" there would invent a truncation that never happened."""
     assert "did not run" not in finished(failed_run())["note"]
 
@@ -350,17 +350,17 @@ def test_the_surface_is_the_intended_tools(built):
     server, _ = built
     names = {tool.name for tool in asyncio.run(server.list_tools())}
     assert names == {
-        "notebook_open",
-        "notebook_read",
-        "notebook_status",
-        "notebook_set_cell_source",
-        "notebook_insert_cell",
-        "notebook_delete_cell",
-        "notebook_run_cell",
-        "notebook_run_all",
-        "notebook_cancel_run",
-        "notebook_save",
-        "notebook_show",
+        "open",
+        "read",
+        "status",
+        "set_cell_source",
+        "insert_cell",
+        "delete_cell",
+        "run_cell",
+        "run_all",
+        "cancel_run",
+        "save",
+        "show",
     }
 
 
@@ -371,16 +371,16 @@ def test_insert_says_the_cell_is_not_run_and_points_at_the_editing_tool(built):
     server, _ = built
     description = {
         tool.name: tool.description for tool in asyncio.run(server.list_tools())
-    }["notebook_insert_cell"]
+    }["insert_cell"]
     assert "NOT run" in description
-    assert "notebook_set_cell_source" in description
+    assert "set_cell_source" in description
 
 
 def test_delete_says_a_notebook_keeps_one_cell(built):
     server, _ = built
     description = {
         tool.name: tool.description for tool in asyncio.run(server.list_tools())
-    }["notebook_delete_cell"]
+    }["delete_cell"]
     assert "at least one cell" in description
 
 
@@ -400,10 +400,10 @@ def test_reads_are_marked_read_only_and_writes_are_not(built):
         tool.name: getattr(tool.annotations, "read_only_hint", None)
         for tool in asyncio.run(server.list_tools())
     }
-    assert hints["notebook_read"] is True
-    assert hints["notebook_status"] is True
-    assert hints["notebook_set_cell_source"] is not True
-    assert hints["notebook_run_cell"] is not True
+    assert hints["read"] is True
+    assert hints["status"] is True
+    assert hints["set_cell_source"] is not True
+    assert hints["run_cell"] is not True
 
 
 def test_every_tool_describes_itself(built):
@@ -416,14 +416,14 @@ def test_the_run_tools_warn_that_they_can_block_on_a_person(built):
     """Published guidance: say when a tool is slow and when not to reach for it."""
     server, _ = built
     descriptions = {tool.name: tool.description for tool in asyncio.run(server.list_tools())}
-    assert "approve" in descriptions["notebook_run_cell"]
-    assert "approve" in descriptions["notebook_run_all"]
-    assert "notebook_run_cell" in descriptions["notebook_run_all"]
+    assert "approve" in descriptions["run_cell"]
+    assert "approve" in descriptions["run_all"]
+    assert "run_cell" in descriptions["run_all"]
 
 
 def test_the_read_tool_says_images_are_not_returned(built):
     server, _ = built
-    description = {t.name: t.description for t in asyncio.run(server.list_tools())}["notebook_read"]
+    description = {t.name: t.description for t in asyncio.run(server.list_tools())}["read"]
     assert "Images" in description
     assert "cells" in description
 
@@ -526,7 +526,7 @@ def test_open_tells_the_caller_where_a_person_can_watch(built):
     server, _ = built
     description = {
         tool.name: tool.description for tool in asyncio.run(server.list_tools())
-    }["notebook_open"]
+    }["open"]
     assert "editorUrl" in description
 
 
@@ -534,7 +534,7 @@ def test_open_tells_the_caller_where_a_person_can_watch(built):
 
 
 def test_status_does_not_become_a_write_baseline():
-    """`notebook_status` is read-only and shows no cell content.
+    """`status` is read-only and shows no cell content.
 
     If it adopted the server's revision, this sequence would silently clobber:
     read at r5 → a person edits in the tab (r6) → status → write. The write
@@ -586,5 +586,54 @@ def test_a_stuck_run_can_be_cancelled(built):
     nobody to approve, there has to be a way out that is not a restart."""
     server, _ = built
     tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
-    assert "notebook_cancel_run" in tools
-    assert "holds the notebook" in tools["notebook_cancel_run"].description
+    assert "cancel_run" in tools
+    assert "holds the notebook" in tools["cancel_run"].description
+
+
+def test_the_readme_lists_every_tool_that_exists(built):
+    """The README's tool list had ten of the eleven — `cancel_run`, the one a
+    reader most needs to know exists, because without it a run parked on
+    approval holds the notebook with no way out.
+
+    A list maintained by hand beside a surface that changes is a list that goes
+    stale, so it is checked rather than trusted.
+    """
+    import re
+    from pathlib import Path
+
+    server, _ = built
+    names = {tool.name for tool in asyncio.run(server.list_tools())}
+    readme = Path(__file__).resolve().parents[2] / "README.md"
+    section = readme.read_text().split("**The tools.**", 1)[1].split("\n\n")[1]
+    listed = set(re.findall(r"`([a-z_]+)`", section))
+    assert listed == names, f"README missing {names - listed}, extra {listed - names}"
+
+
+def test_every_mutating_tool_says_the_file_is_not_written_yet(built):
+    """Found by running the suite against a second model.
+
+    Haiku inserted a cell, ran it, announced success and never called save — in
+    2 of 4 runs. Nothing in the surface said it had to: `save` was described as
+    "write the notebook back to its file" with no hint that it was the only
+    thing that did, and the mutating tools said nothing at all. A model that
+    assumes an editor autosaves is not being unreasonable; this one does not,
+    headless, because autosave lives in the browser tab.
+    """
+    server, _ = built
+    described = {tool.name: tool.description for tool in asyncio.run(server.list_tools())}
+    for name in ("set_cell_source", "insert_cell", "delete_cell"):
+        assert "save" in described[name], f"{name} does not mention saving"
+    assert "lost if nobody saves" in described["save"]
+
+
+def test_a_structural_change_reports_the_notebook_as_unsaved(built):
+    """The description is advice; `dirty` is the fact, and a caller checking
+    its work should not have to call status to learn it."""
+    server, _ = built
+    import inspect
+    from backend.app.mcp import server as module
+
+    source = inspect.getsource(module)
+    for marker in ("def notebook_insert_cell", "def notebook_delete_cell"):
+        body = source[source.index(marker):][:1200]
+        assert '"dirty"' in body, f"{marker} does not report dirty"

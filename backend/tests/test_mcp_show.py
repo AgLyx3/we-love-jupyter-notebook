@@ -1,6 +1,6 @@
 """Pointing a person at the browser tab.
 
-`notebook_show` had no behavioural test at all — it appeared once in the list
+`show` had no behavioural test at all — it appeared once in the list
 of expected tool names and nowhere else. It is the one tool whose entire job is
 a side effect on the person's machine, which is exactly the kind of thing that
 breaks quietly: a headless host, a second call that does nothing, a URL for an
@@ -64,7 +64,7 @@ def call(server, name, **arguments):
 
 def test_show_hands_back_the_url_of_the_running_editor(shown):
     server, tools, opened = shown
-    assert call(server, "notebook_show")["url"] == tools.editor.base_url
+    assert call(server, "show")["url"] == tools.editor.base_url
     assert opened == [tools.editor.base_url]
 
 
@@ -72,7 +72,7 @@ def test_show_starts_the_editor_when_nothing_else_has(shown):
     """A caller may reach for the tab before opening a notebook — to check the
     editor is alive, or because it was told to show its work first."""
     server, tools, _ = shown
-    call(server, "notebook_show")
+    call(server, "show")
     assert tools.editor.starts == 1
 
 
@@ -81,7 +81,7 @@ def test_show_opens_a_tab_every_time_it_is_asked(shown):
     pointed at a second thing, asked for a tab and must get one."""
     server, _, opened = shown
     for _ in range(3):
-        call(server, "notebook_show")
+        call(server, "show")
     assert len(opened) == 3
 
 
@@ -99,7 +99,7 @@ def test_a_host_with_no_browser_still_answers(monkeypatch):
     """The first-run path on a server, a container, or over SSH.
 
     `webbrowser.open` raises when there is nothing to open. Failing the tool
-    there would break every notebook_open too, since that opens the tab as a
+    there would break every open too, since that opens the tab as a
     side effect — the notebook would be open and the call would still report an
     error.
     """
@@ -110,14 +110,14 @@ def test_a_host_with_no_browser_still_answers(monkeypatch):
     server, tools = build_server(open_browser=False)
     tools.editor = StubEditor()
     try:
-        assert call(server, "notebook_show")["url"] == tools.editor.base_url
+        assert call(server, "show")["url"] == tools.editor.base_url
     finally:
         tools.close()
 
 
 def test_a_headless_host_is_retried_rather_than_written_off(monkeypatch):
     """A failed open still marks the tab as raised, so the automatic open does
-    not nag. An explicit notebook_show is a fresh request and must try again —
+    not nag. An explicit show is a fresh request and must try again —
     the display may have arrived since, and either way the caller is entitled
     to know it was attempted."""
     attempts: list[str] = []
@@ -130,8 +130,8 @@ def test_a_headless_host_is_retried_rather_than_written_off(monkeypatch):
     server, tools = build_server(open_browser=False)
     tools.editor = StubEditor()
     try:
-        call(server, "notebook_show")
-        call(server, "notebook_show")
+        call(server, "show")
+        call(server, "show")
     finally:
         tools.close()
     assert len(attempts) == 2

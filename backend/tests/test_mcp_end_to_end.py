@@ -80,20 +80,20 @@ def test_the_tools_drive_a_real_notebook_end_to_end(editor, workspace):
     server, tools = editor
     root, _ = workspace
 
-    opened = call(server, "notebook_open", path=str(root / "work.ipynb"))
+    opened = call(server, "open", path=str(root / "work.ipynb"))
     assert opened["filename"] == "work.ipynb"
     assert opened["cellCount"] == 2
 
-    read = call(server, "notebook_read")
+    read = call(server, "read")
     assert [cell["cellId"] for cell in read["cells"]] == ["cell0", "cell1"]
 
     edited = call(
-        server, "notebook_set_cell_source",
+        server, "set_cell_source",
         cell_id="cell0", source="values = [10, 20]\ntotal = sum(values)\nprint(f'Total: {total}')\n",
     )
     assert edited["dirty"] is True
 
-    ran = call(server, "notebook_run_cell", cell_id="cell0")
+    ran = call(server, "run_cell", cell_id="cell0")
     assert ran["state"] == "completed"
     printed = "".join(
         output.get("text", "")
@@ -101,7 +101,7 @@ def test_the_tools_drive_a_real_notebook_end_to_end(editor, workspace):
     )
     assert "Total: 30" in printed
 
-    saved = call(server, "notebook_save")
+    saved = call(server, "save")
     assert saved["dirty"] is False
     assert b"[10, 20]" in (root / "work.ipynb").read_bytes()
 
@@ -114,12 +114,12 @@ def test_a_risky_cell_waits_for_a_person_and_runs_once_approved(editor, workspac
     """
     server, tools = editor
     root, _ = workspace
-    call(server, "notebook_open", path=str(root / "work.ipynb"))
+    call(server, "open", path=str(root / "work.ipynb"))
 
     started: dict = {}
 
     def run_in_background():
-        started["result"] = call(server, "notebook_run_cell", cell_id="cell1")
+        started["result"] = call(server, "run_cell", cell_id="cell1")
 
     import threading
 
@@ -130,7 +130,7 @@ def test_a_risky_cell_waits_for_a_person_and_runs_once_approved(editor, workspac
     deadline = time.monotonic() + 60
     awaiting = None
     while time.monotonic() < deadline:
-        status = call(server, "notebook_status")
+        status = call(server, "status")
         execution = status.get("activeExecution") or {}
         if execution.get("awaitingApproval"):
             awaiting = execution
@@ -170,7 +170,7 @@ def test_a_notebook_outside_the_workspace_is_refused(editor, workspace):
     server, _ = editor
     _, outside = workspace
     with pytest.raises(ToolError, match="workspace"):
-        call(server, "notebook_open", path=str(outside))
+        call(server, "open", path=str(outside))
 
 
 def test_an_edit_against_a_stale_revision_is_refused_not_retried(editor, workspace):
@@ -181,7 +181,7 @@ def test_an_edit_against_a_stale_revision_is_refused_not_retried(editor, workspa
     """
     server, tools = editor
     root, _ = workspace
-    opened = call(server, "notebook_open", path=str(root / "work.ipynb"))
+    opened = call(server, "open", path=str(root / "work.ipynb"))
 
     # A change made in the tab, which the tool has not seen.
     typed_in_the_tab = httpx.post(
@@ -195,7 +195,7 @@ def test_an_edit_against_a_stale_revision_is_refused_not_retried(editor, workspa
     assert typed_in_the_tab.status_code == 200
 
     with pytest.raises(ToolError) as raised:
-        call(server, "notebook_set_cell_source", cell_id="cell0", source="# the model's edit\n")
+        call(server, "set_cell_source", cell_id="cell0", source="# the model's edit\n")
     message = str(raised.value)
     assert "changed since you last read it" in message
     assert "has not been made" in message
@@ -205,8 +205,8 @@ def test_an_edit_against_a_stale_revision_is_refused_not_retried(editor, workspa
     assert source == "# a person typed this\n", "the person's edit was overwritten"
 
     # Re-reading is what unblocks it, which is what the error told the caller.
-    call(server, "notebook_read")
-    call(server, "notebook_set_cell_source", cell_id="cell0", source="# the model's edit\n")
+    call(server, "read")
+    call(server, "set_cell_source", cell_id="cell0", source="# the model's edit\n")
 
 
 def test_reading_a_plot_notebook_does_not_return_image_bytes(editor, workspace):
@@ -223,11 +223,11 @@ def test_reading_a_plot_notebook_does_not_return_image_bytes(editor, workspace):
             "fig, ax = plt.subplots()\nax.plot([1, 2, 3])\nplt.show()\n",
         )
     )
-    call(server, "notebook_open", path=str(plot))
-    ran = call(server, "notebook_run_all")
+    call(server, "open", path=str(plot))
+    ran = call(server, "run_all")
     assert ran["state"] == "completed"
 
-    read = call(server, "notebook_read")
+    read = call(server, "read")
     serialized = json.dumps(read)
     assert "iVBORw0KGgo" not in serialized, "a base64 PNG reached the tool result"
     images = [
@@ -250,11 +250,11 @@ def test_a_cell_can_be_added_and_run_through_the_tools(editor, workspace):
     """
     server, _ = editor
     root, _ = workspace
-    opened = call(server, "notebook_open", path=str(root / "work.ipynb"))
+    opened = call(server, "open", path=str(root / "work.ipynb"))
     assert opened["cellCount"] == 2
 
     added = call(
-        server, "notebook_insert_cell",
+        server, "insert_cell",
         source="print('added by a tool')\n", cell_type="code",
     )
     assert added["cellCount"] == 3
@@ -262,21 +262,21 @@ def test_a_cell_can_be_added_and_run_through_the_tools(editor, workspace):
     assert "not run" in added["note"]
 
     # It exists but has produced nothing until it is run.
-    read = call(server, "notebook_read")
+    read = call(server, "read")
     new_cell = next(c for c in read["cells"] if c["cellId"] == added["cellId"])
     assert new_cell.get("outputs") in (None, [])
 
-    ran = call(server, "notebook_run_cell", cell_id=added["cellId"])
+    ran = call(server, "run_cell", cell_id=added["cellId"])
     assert ran["state"] == "completed"
     assert "added by a tool" in "".join(
         output.get("text", "")
         for cell in ran["cells"] for output in cell.get("outputs", [])
     )
 
-    removed = call(server, "notebook_delete_cell", cell_id=added["cellId"])
+    removed = call(server, "delete_cell", cell_id=added["cellId"])
     assert removed["cellCount"] == 2
     assert added["cellId"] not in [
-        cell["cellId"] for cell in call(server, "notebook_read")["cells"]
+        cell["cellId"] for cell in call(server, "read")["cells"]
     ]
 
 
@@ -284,8 +284,8 @@ def test_an_inserted_cell_carries_its_provenance_to_the_editor(editor, workspace
     """What the browser tab renders as "review before running"."""
     server, tools = editor
     root, _ = workspace
-    call(server, "notebook_open", path=str(root / "work.ipynb"))
-    added = call(server, "notebook_insert_cell", source="x = 1\n")
+    call(server, "open", path=str(root / "work.ipynb"))
+    added = call(server, "insert_cell", source="x = 1\n")
 
     current = httpx.get(f"{tools.editor.api_url}/notebooks/current").json()
     cell = next(c for c in current["cells"] if c["cellId"] == added["cellId"])
@@ -297,10 +297,10 @@ def test_deleting_the_last_remaining_cell_is_refused(editor, workspace, tmp_path
     root, _ = workspace
     only = root / "single.ipynb"
     only.write_bytes(notebook(SAFE))
-    call(server, "notebook_open", path=str(only))
-    read = call(server, "notebook_read")
+    call(server, "open", path=str(only))
+    read = call(server, "read")
     with pytest.raises(ToolError, match="at least one cell"):
-        call(server, "notebook_delete_cell", cell_id=read["cells"][0]["cellId"])
+        call(server, "delete_cell", cell_id=read["cells"][0]["cellId"])
 
 
 def test_run_all_stops_at_a_failing_cell_and_leaves_the_rest_unrun(editor, workspace):
@@ -321,9 +321,9 @@ def test_run_all_stops_at_a_failing_cell_and_leaves_the_rest_unrun(editor, works
     broken.write_bytes(
         notebook("print('first ok')\n", "raise ValueError('boom')\n", "marker = 1\n")
     )
-    call(server, "notebook_open", path=str(broken))
+    call(server, "open", path=str(broken))
 
-    result = call(server, "notebook_run_all")
+    result = call(server, "run_all")
     assert result["state"] == "failed"
 
     failure = next(
@@ -356,9 +356,9 @@ def test_a_cell_deleted_through_the_tools_is_gone_from_the_document(editor, work
     root, _ = workspace
     three = root / "three.ipynb"
     three.write_bytes(notebook("a = 1\n", "b = 2\n", "c = 3\n"))
-    call(server, "notebook_open", path=str(three))
+    call(server, "open", path=str(three))
 
-    after = call(server, "notebook_delete_cell", cell_id="cell1")
+    after = call(server, "delete_cell", cell_id="cell1")
     assert after["deletedCellId"] == "cell1"
     assert after["cellCount"] == 2
 
@@ -375,7 +375,7 @@ def test_a_delete_moves_the_revision_so_a_stale_edit_is_refused(editor, workspac
     root, _ = workspace
     three = root / "revision.ipynb"
     three.write_bytes(notebook("a = 1\n", "b = 2\n", "c = 3\n"))
-    opened = call(server, "notebook_open", path=str(three))
+    opened = call(server, "open", path=str(three))
 
-    after = call(server, "notebook_delete_cell", cell_id="cell1")
+    after = call(server, "delete_cell", cell_id="cell1")
     assert after["revision"] > opened["revision"]

@@ -240,8 +240,7 @@ MCP already namespaces by server, so the `notebook_` prefix repeats it. The
 guidance to prefix tools by domain was written for a flat tool list, and MCP is
 not one. Renaming to `open` / `read` / `run_cell` would read better in a
 client, at the cost of being ambiguous in any context that flattens the names.
-Not changed yet — it is a rename with no behavioural content, and worth doing
-once rather than twice.
+**Done, in §8.7.**
 
 **Coverage is thin.** Five tasks, two runs, one model. Nothing here
 measures cost, and a single pass cannot separate a good tool description from a
@@ -364,9 +363,9 @@ waste seen in `add-a-cell` (which still reports `ran_all=True` every run,
 without gating on it) appears only when nothing signals that running is
 expensive.
 
-**Still one model.** Repeats separate a lucky sample from a stable one; they do
-not say whether a tool description survives a smaller model. That remains the
-next real gap.
+**Model coverage — see §8.7.** Repeats separate a lucky sample from a stable
+one; they say nothing about whether a description survives a different model.
+That is now addressed for Claude models and wired but unverified for Codex.
 
 ### 8.6 The failures that are not this branch's
 
@@ -384,3 +383,116 @@ not do promptly under load.
 Recorded because "known flaky" is a claim that decays into cover for real
 breakage unless someone has actually checked. This is what checking it looked
 like.
+
+## 9. The rename, and more than one model
+
+### 9.1 The names no longer stammer
+
+A client saw `mcp__agent_notebook__open` written as
+`mcp__notebook__notebook_open`. MCP namespaces every tool by the server it came
+from, so a `notebook_` prefix on each tool repeated a word the client had
+already said. The tools are now named for what they do — `open`, `read`,
+`status`, `set_cell_source`, `insert_cell`, `delete_cell`, `run_cell`,
+`run_all`, `cancel_run`, `save`, `show` — and the server presents itself as
+`agent-notebook`, which is the half that carries the domain.
+
+Two things were deliberately *not* renamed. The Python functions behind the
+tools keep their prefix, because `def open(...)` and `def read(...)` shadow
+builtins in the scope that builds the server. And
+`notebook_document/service.py` has an `operation_type="notebook_open"` that is
+an internal event name, not a tool.
+
+A trace now reads `open -> set_cell_source -> run_all -> save`.
+
+Two things the rename shook out. The eval matched tool names by suffix, which
+was tolerable for `notebook_open` and a coincidence waiting to happen for
+`open`; it now compares the last namespace segment exactly. And the README
+listed ten of the eleven tools — the missing one being `cancel_run`, which is
+precisely the one a reader needs to know exists, since without it a run parked
+on approval holds the notebook with no way out. That list is now checked
+against the live surface by a test rather than maintained by hand.
+
+### 9.2 More than one model, and more than one client
+
+`--model` takes `client[:model]` and repeats, so the same tasks run against
+several models and the summary reports each combination separately.
+
+The first two-model run was immediately worth it. On `add-a-cell`, Sonnet used
+`open, insert_cell, run_cell, run_all, save` and Haiku used
+`open, insert_cell, save` — both passed, but Haiku never ran the cell it added
+and so never confirmed its own work, while Sonnet ran the notebook twice. The
+frugal one and the careful one are different models, and neither is simply
+better. One model would have shown one of those and called it the behaviour of
+the tools.
+
+### 9.3 Codex is wired, and honestly labelled
+
+`codex` is a second client: configured entirely on the command line so a
+developer's own `~/.codex/config.toml` cannot change a run, under a read-only
+sandbox, with its JSONL event stream parsed for `item.completed` items of type
+`mcp_tool_call`.
+
+**It has not been run.** There is no OpenAI credential in the environment this
+was built in; `codex exec` hangs on interactive login. The command construction
+and event names come from the CLI's own help and the strings shipped in its
+binary, not from an observed transcript.
+
+That is a bad position to write a parser from, so the parser is built to fail
+loudly. If a transcript parses as JSON but contains nothing it recognises, the
+run is reported as a harness error naming the event types it did see — not as a
+model that used no tools. An empty trace scoring as "used no tools" is exactly
+how this suite fooled itself once before, and it would be a worse mistake the
+second time, when the whole point is to compare clients.
+
+Everything about the Codex path that can be checked without a credential is
+checked in `test_eval_clients.py`: the flags passed, the flags deliberately
+absent, the field-name variations tolerated, and the loud failure.
+
+One design bug was caught this way, by reading the help rather than running
+anything: the runner originally pointed `CODEX_HOME` at a scratch directory to
+isolate config. Codex's help is explicit that `--ignore-user-config` skips the
+config file but auth still comes from `CODEX_HOME` — so that isolation would
+have left every run unauthenticated, hanging on a login prompt, for a reason
+nobody would have guessed from the symptom.
+
+The two clients are not perfectly matched, and the asymmetry is worth stating:
+Claude runs with `--tools ""` and genuinely cannot reach the notebook except
+through the surface under test; Codex has no equivalent switch and runs
+read-only, so it could read a notebook without the tools. Every task asserts
+the surface was used, so such a run fails rather than passing hollowly — but it
+would fail for a reason about the harness, not about the model.
+
+### 9.4 What the second model found on its first full run
+
+`frugal-verification` failed on Haiku and passed on Sonnet. The detail line
+said `added=0`, which was true and misleading: Haiku *had* called `insert_cell`
+and run the cell. What it never called was `save`, so the file on disk held
+nothing — and it announced success regardless:
+
+> Done! I've added a cell at the end that prints `sum(values)` and verified it
+> works.
+
+Measured over four runs, Haiku dropped the save in **two of them**. Sonnet
+saved every time.
+
+The first fix was to the eval, not the editor: `added=0` points at the wrong
+bug. The check now reports `inserted=` and `saved=` separately, so "it never
+added the cell" and "it added the cell and lost it" cannot be confused.
+
+The second fix was the actual defect, and it was in the tool surface. `save`
+was described as "Write the open notebook back to its file on disk" — accurate,
+and silent on the one thing that matters, which is that it is the *only* thing
+that writes. None of the mutating tools mentioned saving at all. A model that
+assumes a notebook editor autosaves is not being unreasonable; this one does
+autosave, but in the browser tab, which does not exist headless.
+
+So every mutating tool now says the file is not written yet, `save` says what
+is lost if it is not called, and `insert_cell` and `delete_cell` return `dirty`
+so the state is a fact in the response rather than advice in a description.
+
+Re-measured on the same task and model: **12 of 12**, against 2 of 4 before.
+
+This is the argument for more than one model in one result. Sonnet never
+exhibited the behaviour, so a Sonnet-only suite would have called the surface
+finished. The description was not wrong for the strongest model — it was
+underspecified, and only a model that leaned on it harder showed that.

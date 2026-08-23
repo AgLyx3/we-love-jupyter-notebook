@@ -2,7 +2,7 @@
 
 `POST /execution/...` answers 202 and the work happens on a background thread,
 so a tool that returns immediately would tell the caller nothing about whether
-the cell ran. Polling to a terminal state is what makes `notebook_run_cell`
+the cell ran. Polling to a terminal state is what makes `run_cell`
 behave like a function call.
 
 The pause is the part worth care. A flagged cell sits in `awaiting_approval`
@@ -89,13 +89,13 @@ def _timed_out(operation: dict[str, Any], timeout: float) -> dict[str, Any]:
             "note": (
                 f"Still waiting after {timeout:.0f}s for a person to approve this "
                 "cell in the editor tab. Nothing has run. Ask them to look, or "
-                "call notebook_status later."
+                "call status later."
             ),
         }
     return {
         "state": operation.get("state"),
         "operationId": operation.get("operationId"),
-        "note": f"The run had not finished after {timeout:.0f}s. Call notebook_status.",
+        "note": f"The run had not finished after {timeout:.0f}s. Call status.",
     }
 
 
