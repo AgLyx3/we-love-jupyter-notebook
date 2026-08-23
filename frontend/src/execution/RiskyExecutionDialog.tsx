@@ -14,16 +14,20 @@ export default function RiskyExecutionDialog({ operation, attempt, busy, onDecis
     target?.focus();
     return () => previous?.focus();
   }, []);
+  // Escape only. This panel is not modal and must not pretend to be: it renders
+  // inline in the agent sidebar with no backdrop, and the rest of the editor
+  // stays live behind it. Trapping Tab inside it therefore left the keyboard
+  // with no non-destructive way out (WCAG 2.1.2), while `aria-modal` told a
+  // screen reader the notebook was inert when a sighted person could still
+  // click any of it. Both are gone.
+  //
+  // Modality was the wrong half to keep. The cell under judgement lives in
+  // that notebook, so marking it inert would leave an assistive-technology
+  // user with *less* context to decide with than everyone else has.
   const handleKeyDown = (event: React.KeyboardEvent) => {
-    if (event.key === "Escape" && correlated && !busy) { event.preventDefault(); onDecision("cancel"); return; }
-    if (event.key !== "Tab") return;
-    const controls = Array.from(dialogRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? []);
-    if (!controls.length) return;
-    const first = controls[0]; const last = controls[controls.length - 1];
-    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    if (event.key === "Escape" && correlated && !busy) { event.preventDefault(); onDecision("cancel"); }
   };
-  return <section ref={dialogRef} tabIndex={-1} className="risk-dialog" role="alertdialog" aria-modal="true" aria-labelledby="risk-title" aria-describedby="risk-description" onKeyDown={handleKeyDown}>
+  return <section ref={dialogRef} tabIndex={-1} className="risk-dialog" role="alertdialog" aria-labelledby="risk-title" aria-describedby="risk-description" onKeyDown={handleKeyDown}>
     <div className="risk-title"><ShieldAlert /><div><h3 id="risk-title">Execution needs approval</h3><p id="risk-description">Cell {attempt.cellIndex + 1} was paused before running.</p></div></div>
     <ul>{attempt.risk.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
     <pre className="risk-source" aria-label={`Source preview for cell ${attempt.cellIndex + 1}`}>{attempt.sourcePreview || "Source preview unavailable"}</pre>

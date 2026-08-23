@@ -615,7 +615,7 @@ describe("remediation behaviors", () => {
     expect(screen.queryByText("Cell 1: Retained execution output was truncated.")).not.toBeInTheDocument();
   });
 
-  it("focuses and contains the approval dialog and cancels on Escape", async () => {
+  it("focuses the approval dialog, cancels on Escape, and gives focus back", async () => {
     const decide = vi.fn();
     const risky = { ...operation, kind: "agent_downstream", parentTurnId: "turn-1", state: "awaiting_approval", attempts: [{ ...operation.attempts[0], state: "awaiting_approval", risk: { level: "confirm", reasons: ["Risk"], matchedPatterns: ["pattern"] } }] };
     const outside = document.createElement("button"); document.body.append(outside); outside.focus();
@@ -623,12 +623,32 @@ describe("remediation behaviors", () => {
     const approve = screen.getByRole("button", { name: "Approve and run" });
     expect(approve).toHaveFocus();
     expect(screen.getByLabelText("Source preview for cell 1")).toHaveTextContent("print('preview')");
-    fireEvent.keyDown(approve, { key: "Tab" });
-    expect(screen.getByRole("button", { name: "Cancel run" })).toHaveFocus();
     fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" });
     expect(decide).toHaveBeenCalledWith("cancel");
     unmount();
     expect(outside).toHaveFocus();
     outside.remove();
+  });
+
+  it("does not claim a modality it does not have, or trap the keyboard in it", () => {
+    // Driving the editor in a real browser showed it fully live behind this
+    // panel: it renders inline in the agent sidebar with no backdrop, and
+    // thirteen controls stayed reachable outside it — Restart kernel and Open
+    // a notebook among them — while a run sat parked awaiting a decision. The
+    // agent instruction box accepted typing throughout. `aria-modal` told a
+    // screen reader the opposite, and paired with a Tab trap the only way out
+    // by keyboard was Escape, which cancels the run: a destructive-only exit.
+    const decide = vi.fn();
+    const risky = { ...operation, kind: "agent_downstream", parentTurnId: "turn-1", state: "awaiting_approval", attempts: [{ ...operation.attempts[0], state: "awaiting_approval", risk: { level: "confirm", reasons: ["Risk"], matchedPatterns: ["pattern"] } }] };
+    render(<RiskyExecutionDialog operation={risky} attempt={risky.attempts[0]} busy={false} onDecision={decide} />);
+
+    expect(screen.getByRole("alertdialog")).not.toHaveAttribute("aria-modal");
+
+    // Tab is left to the browser, so focus can leave the dialog and come back.
+    const approve = screen.getByRole("button", { name: "Approve and run" });
+    const notPrevented = fireEvent.keyDown(approve, { key: "Tab" });
+    expect(notPrevented).toBe(true);
+    expect(decide).not.toHaveBeenCalled();
+    expect(approve).toHaveFocus();
   });
 });
