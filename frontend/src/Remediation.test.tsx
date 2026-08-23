@@ -6,6 +6,7 @@ import AgentChatPanel, { type TurnRecord } from "./agentChat/AgentChatPanel";
 import NotebookView from "./notebook/NotebookView";
 import { Outputs } from "./notebook/NotebookCell";
 import RiskyExecutionDialog from "./execution/RiskyExecutionDialog";
+import KernelControls from "./execution/KernelControls";
 import type { AgentTurn, ExecutionOperation, NotebookSnapshot, TurnScope } from "./api/client";
 import { EventSourceMock } from "./test/setup";
 
@@ -615,7 +616,7 @@ describe("remediation behaviors", () => {
     expect(screen.queryByText("Cell 1: Retained execution output was truncated.")).not.toBeInTheDocument();
   });
 
-  it("focuses and contains the approval dialog and cancels on Escape", async () => {
+  it("focuses the approval dialog, cancels on Escape, and gives focus back", async () => {
     const decide = vi.fn();
     const risky = { ...operation, kind: "agent_downstream", parentTurnId: "turn-1", state: "awaiting_approval", attempts: [{ ...operation.attempts[0], state: "awaiting_approval", risk: { level: "confirm", reasons: ["Risk"], matchedPatterns: ["pattern"] } }] };
     const outside = document.createElement("button"); document.body.append(outside); outside.focus();
@@ -623,8 +624,6 @@ describe("remediation behaviors", () => {
     const approve = screen.getByRole("button", { name: "Approve and run" });
     expect(approve).toHaveFocus();
     expect(screen.getByLabelText("Source preview for cell 1")).toHaveTextContent("print('preview')");
-    fireEvent.keyDown(approve, { key: "Tab" });
-    expect(screen.getByRole("button", { name: "Cancel run" })).toHaveFocus();
     fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" });
     expect(decide).toHaveBeenCalledWith("cancel");
     unmount();
@@ -689,5 +688,58 @@ describe("remediation behaviors", () => {
     const running = { ...operation, kind: "mcp", parentTurnId: null, state: "running" };
     render(<AgentChatPanel notebook={notebook} scope={scope} turn={null} activeTurn={null} history={[]} operation={running} busy={false} mutationsDisabled={false} onSubmit={vi.fn()} onCancel={vi.fn()} onUndo={vi.fn()} onClearScope={vi.fn()} onDecision={decide} onSelectTurn={vi.fn()} onFocusCell={vi.fn()} onDropCell={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
+  });
+  it("will not restart the kernel out from under a run parked for approval", () => {
+    // The approval panel is deliberately not modal, so nothing else stops this
+    // being pressed while a person is deciding — and a restart mid-decision
+    // strands the operation the approval was meant to resolve.
+    const restart = vi.fn();
+    const live = { state: "idle", kernelSessionId: "kernel-1" } as never;
+    const view = render(<KernelControls status={live} mutationDisabled={false} runAwaitingApproval={false} onRunAll={vi.fn()} onInterrupt={vi.fn()} onRestart={restart} />);
+    expect(screen.getByLabelText("Restart kernel")).toBeEnabled();
+
+    view.rerender(<KernelControls status={live} mutationDisabled={false} runAwaitingApproval onRunAll={vi.fn()} onInterrupt={vi.fn()} onRestart={restart} />);
+    const button = screen.getByLabelText("Restart kernel");
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", "A run is paused for approval — decide or cancel it first");
+
+    // Cancelling the pause is the way out, so the control comes straight back.
+    view.rerender(<KernelControls status={live} mutationDisabled={false} runAwaitingApproval={false} onRunAll={vi.fn()} onInterrupt={vi.fn()} onRestart={restart} />);
+    expect(screen.getByLabelText("Restart kernel")).toBeEnabled();
+  });
+
+  it("says a run is paused for approval, which the kernel state alone does not", () => {
+    // A cell awaiting approval has not started a kernel, so the chip reads
+    // "Kernel not started" while a run is outstanding — true, and on its own
+    // it reads as though nothing is happening.
+    const cold = { state: "not_started", kernelSessionId: null } as never;
+    const view = render(<KernelControls status={cold} mutationDisabled={false} runAwaitingApproval onRunAll={vi.fn()} onInterrupt={vi.fn()} onRestart={vi.fn()} />);
+    expect(screen.getByText("Kernel not started")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Run paused for approval");
+
+    view.rerender(<KernelControls status={cold} mutationDisabled={false} runAwaitingApproval={false} onRunAll={vi.fn()} onInterrupt={vi.fn()} onRestart={vi.fn()} />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("does not claim a modality it does not have, or trap the keyboard in it", () => {
+    // Driving the editor in a real browser showed it fully live behind this
+    // panel: it renders inline in the agent sidebar with no backdrop, and
+    // thirteen controls stayed reachable outside it — Restart kernel and Open
+    // a notebook among them — while a run sat parked awaiting a decision. The
+    // agent instruction box accepted typing throughout. `aria-modal` told a
+    // screen reader the opposite, and paired with a Tab trap the only way out
+    // by keyboard was Escape, which cancels the run: a destructive-only exit.
+    const decide = vi.fn();
+    const risky = { ...operation, kind: "agent_downstream", parentTurnId: "turn-1", state: "awaiting_approval", attempts: [{ ...operation.attempts[0], state: "awaiting_approval", risk: { level: "confirm", reasons: ["Risk"], matchedPatterns: ["pattern"] } }] };
+    render(<RiskyExecutionDialog operation={risky} attempt={risky.attempts[0]} busy={false} onDecision={decide} />);
+
+    expect(screen.getByRole("alertdialog")).not.toHaveAttribute("aria-modal");
+
+    // Tab is left to the browser, so focus can leave the dialog and come back.
+    const approve = screen.getByRole("button", { name: "Approve and run" });
+    const notPrevented = fireEvent.keyDown(approve, { key: "Tab" });
+    expect(notPrevented).toBe(true);
+    expect(decide).not.toHaveBeenCalled();
+    expect(approve).toHaveFocus();
   });
 });
