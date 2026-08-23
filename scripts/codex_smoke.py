@@ -63,12 +63,22 @@ def main() -> int:
         })
         started.raise_for_status()
         turn_id = started.json()["turnId"]
+        # Poll at least once regardless of the deadline, so --timeout 0 reports a
+        # timeout instead of falling through with `turn` unbound.
         deadline = time.monotonic() + args.timeout
-        while time.monotonic() < deadline:
+        settled = False
+        while True:
             turn = client.get(f"/agent-turns/{turn_id}").json()
-            if turn["state"] in TERMINAL:
+            settled = turn["state"] in TERMINAL
+            if settled or time.monotonic() >= deadline:
                 break
             time.sleep(2)
+        if not settled:
+            # Without this the last non-terminal poll prints as if it were the
+            # result, and a turn still running looks like one that finished badly.
+            print(f"TIMED OUT after {args.timeout}s waiting for turn {turn_id}")
+            print(f"last observed state: {turn['state']}")
+            return 1
         print(f"agent: {turn['agent']}  state: {turn['state']}  attempts: {turn['attempts']}")
         print(f"changes: {[c['cellId'] for c in turn['changes']]}")
         print(f"structural ops: {[(o['op'], o.get('cellId')) for o in turn.get('structuralOps') or []]}")

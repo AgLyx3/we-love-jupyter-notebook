@@ -30,7 +30,7 @@ def _hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _shell_rule(file_access_via_shell: bool) -> str:
+def _shell_rule(file_access_via_shell: bool, *, writable: bool = True) -> str:
     """The turn's shell rule, worded for how the agent actually reaches files.
 
     The point of the rule is that a turn runs no arbitrary commands — no
@@ -38,10 +38,16 @@ def _shell_rule(file_access_via_shell: bool) -> str:
     that flatly. An agent whose *only* file API is its shell tool (Codex) reads
     nothing at all under the flat wording, so it gets the same prohibition
     scoped to everything except file access.
+
+    ``writable`` narrows that scope to reading alone. A read-only turn that
+    still granted "read and write" here would contradict its own opening line
+    one paragraph later, which is the kind of mixed instruction an agent is
+    entitled to resolve the wrong way.
     """
     if file_access_via_shell:
+        access = "read and write" if writable else "read"
         return (
-            "Use your shell/exec tool only to read and write files in this "
+            f"Use your shell/exec tool only to {access} files in this "
             "workspace; run no other commands."
         )
     return "Do not run shell commands."
@@ -135,7 +141,7 @@ class AgentWorkspaceBuilder:
                 instructions = [scope.prompt, "", *notebook_context,
                                 "This is a read-only turn. Do not modify any file.",
                                 "Answer in your final message.",
-                                _shell_rule(file_access_via_shell), ""]
+                                _shell_rule(file_access_via_shell, writable=False), ""]
             if context:
                 instructions.extend([
                     "",

@@ -1234,7 +1234,11 @@ def test_shell_file_access_reaches_instructions_on_every_turn_shape(notebook_pay
     assert len(seen) == 3
     for instructions in seen:
         assert "Do not run shell commands." not in instructions
-        assert "shell/exec tool only to read and write files" in instructions
+        assert "shell/exec tool only to" in instructions
+        # A read-only turn opens by forbidding modification, so the shell rule
+        # one line later must not turn around and grant writes.
+        if "This is a read-only turn" in instructions:
+            assert "read and write" not in instructions
 
 
 def test_service_requires_at_least_one_adapter():

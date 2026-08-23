@@ -2310,6 +2310,15 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
   protected-file changes; candidate cell sources still go through the same
   validate-and-apply pipeline, so the agent still does not own notebook mutation;
   and the fail-closed CLI version gate covers the flags this rests on.
+- Where this is thinner than Claude: the read-only mode bits on
+  `notebook.ipynb` are not a barrier to a shell. Verified against codex-cli
+  0.135.0 on an editable turn — the agent ran `chmod` on the protected file and
+  rewrote it, and only the post-run audit stopped the change reaching the
+  document (`workspace_boundary_violation: protected path modified:
+  notebook.ipynb`, all three attempts, zero changes applied). Claude cannot do
+  this: it has no shell and `--tools` gates Write. So for Codex the audit is a
+  single load-bearing layer rather than the second of two, and weakening it
+  weakens the boundary outright.
 - Governance: this weakens the "V1 CLI agents must not run shell commands"
   guarantee in AGENTS.md and was made with explicit user approval, per AGENTS.md.
 

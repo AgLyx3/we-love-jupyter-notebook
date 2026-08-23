@@ -546,10 +546,12 @@ def test_shell_rule_is_adapter_aware_across_every_workspace_shape(notebook_paylo
     documents = NotebookDocumentService()
     snapshot = documents.import_notebook(notebook_payload())
     builder = AgentWorkspaceBuilder()
-    for selection, kwargs in (
-        (ScopeSelection(("editable",), ("intro",)), {}),
-        (ScopeSelection((), ("intro",)), {}),
-        (ScopeSelection((), ("intro",)), {"write_scope": "trusted"}),
+    # The third element is the file access the shell rule should grant: a turn
+    # that may not write must not be told it may write.
+    for selection, kwargs, access in (
+        (ScopeSelection(("editable",), ("intro",)), {}, "read and write"),
+        (ScopeSelection((), ("intro",)), {}, "read"),
+        (ScopeSelection((), ("intro",)), {"write_scope": "trusted"}, "read and write"),
     ):
         scope = FrozenTurnScope.create(
             turn_id="turn", session_id=snapshot.session_id,
@@ -561,7 +563,9 @@ def test_shell_rule_is_adapter_aware_across_every_workspace_shape(notebook_paylo
         try:
             instructions = (workspace.root / "INSTRUCTIONS.md").read_text()
             assert "Do not run shell commands." not in instructions
-            assert "shell/exec tool only to read and write files" in instructions
+            assert f"shell/exec tool only to {access} files" in instructions
+            if "This is a read-only turn" in instructions:
+                assert "read and write" not in instructions
         finally:
             builder.destroy(workspace)
 
