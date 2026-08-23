@@ -30,6 +30,27 @@ describe("locating changes from the review bar", () => {
   });
 });
 
+// E2. A counter says how much is left to decide; it does not say what it is
+// left over *from*. With several turns in the history that is the difference
+// between a readable bar and a bare number.
+describe("naming the turn under review", () => {
+  it("says which agent task the changes came from", () => {
+    render(bar({ taskLabel: "Clean the dataset" }));
+    expect(screen.getByText(/Reviewing changes from agent task/)).toHaveTextContent("Clean the dataset");
+  });
+
+  it("says nothing when the turn has no label rather than quoting an empty one", () => {
+    render(bar());
+    expect(screen.queryByText(/Reviewing changes from agent task/)).not.toBeInTheDocument();
+  });
+
+  it("attributes a tuned record to the user, never to an agent task", () => {
+    render(bar({ origin: "tune", taskLabel: "Clean the dataset" }));
+    expect(screen.getByText("Reviewing values you tuned")).toBeInTheDocument();
+    expect(screen.queryByText(/agent task/)).not.toBeInTheDocument();
+  });
+});
+
 describe("a tuned record reuses the bar without borrowing the agent's wording", () => {
   it("describes the changes as tuned", () => {
     render(bar({ origin: "tune" }));

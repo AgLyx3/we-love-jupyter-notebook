@@ -539,6 +539,11 @@ export default function App() {
       {(reviewingTune ? Boolean(tuningRecord) : Boolean(selectedTurn)) && reviewUnsettled.length > 0 && <ReviewBar
         key={reviewingTune ? tuningRecord!.recordId : selectedTurn!.turnId}
         origin={reviewOrigin}
+        // What the turn was asked to do. The history record's prompt is the
+        // label the composer submitted under (it covers an attachment-only
+        // turn, which has no typed prompt); the turn's own is the fallback for
+        // a turn recovered from the backend.
+        taskLabel={reviewingTune ? undefined : (history.find((item) => item.turn.turnId === selectedTurn!.turnId)?.prompt ?? selectedTurn!.prompt)}
         total={reviewOperations.length} reviewed={reviewOperations.length - reviewUnsettled.length} keptCount={reviewKept}
         undoableCount={reviewUnsettled.filter((item) => item.state === "pending").length}
         disabled={mutationsDisabled || busy || hasDirtyDrafts}

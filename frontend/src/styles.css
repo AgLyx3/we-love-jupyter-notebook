@@ -347,7 +347,17 @@ body.marquee-active iframe { pointer-events: none; }
 .review-bar-count:hover:not(:disabled) { background: var(--surface-container-highest); border-color: transparent; }
 .review-bar-count:disabled { cursor: default; color: var(--on-surface-variant); }
 .review-bar-count .material-symbols-outlined { font-size: 16px; }
-.review-bar-actions, .review-bar-confirm { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* `flex-basis: 240px`, not `auto`. With `auto` the lead's base size is the full
+   untruncated task label, which is wider than the bar — so the browser wrapped
+   the action group to a second row *before* any shrinking happened, and whether
+   it did depended on how long that turn's prompt was. A fixed basis keeps the
+   two groups on one line and lets the label truncate into whatever is left. */
+.review-bar-lead { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 240px; }
+/* Truncates rather than reflowing the group beside it — constraint 3 is that
+   the actions never move as the counter changes, and a long prompt is just
+   another way to move them. */
+.review-bar-task { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-small); color: var(--on-surface-variant); }
+.review-bar-actions, .review-bar-confirm { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 0 0 auto; }
 .review-bar-confirm span { font-size: var(--text-small); color: var(--error); font-weight: 500; }
 .review-bar button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; width: auto; flex: 0 0 auto; padding: 0 12px; font-size: var(--text-small); font-weight: 500; min-width: 108px; background: var(--surface-container-lowest); }
 /* Paired ‹ › navigation: square and joined, so it reads as one control and
