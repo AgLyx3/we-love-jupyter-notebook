@@ -66,10 +66,16 @@ export interface TuningPanelProps {
  *  e2e suite enforces, and a fixed box contributes to no ancestor's
  *  scrollWidth. */
 const POPOVER_WIDTH = 288;
+const POPOVER_MAX_HEIGHT = 620;
+/** Keep the whole popover on screen, footer included. Clamping only the top
+ *  left the Apply button below the fold on a short window — the panel is a
+ *  flex column whose body scrolls, so its height has to be bounded by the
+ *  space actually below it rather than by a constant. */
 const clampPopover = (left: number, top: number) => ({
   left: Math.max(8, Math.min(left, window.innerWidth - POPOVER_WIDTH - 8)),
-  top: Math.max(56, Math.min(top, window.innerHeight - 120)),
+  top: Math.max(56, Math.min(top, Math.max(56, window.innerHeight - 260))),
 });
+const popoverHeight = (top: number) => Math.max(180, Math.min(POPOVER_MAX_HEIGHT, window.innerHeight - top - 16));
 
 const boundsIndex = (knobs: TuningKnob[]): Record<string, TuningBounds> => {
   const index: Record<string, TuningBounds> = {};
@@ -432,7 +438,7 @@ export default function TuningPanel(props: TuningPanelProps) {
         corner rather than being hidden: an invisible knob rail is one the user
         cannot reach, and in a headless DOM (where every rect is zero) it would
         never become visible at all. */}
-    <div className="tuning-popover" style={popover ? { left: popover.left, top: popover.top, right: "auto" } : undefined}>
+    <div className="tuning-popover" style={popover ? { left: popover.left, top: popover.top, right: "auto", maxHeight: popoverHeight(popover.top) } : undefined}>
       <header className="tuning-panel-head" onPointerDown={startDrag}>
         <strong>Tuning Controls</strong>
         <button type="button" className="tuning-close" aria-label="Close tuning panel" onClick={close}><Icon name="close" /></button>

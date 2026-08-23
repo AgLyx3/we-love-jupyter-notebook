@@ -188,6 +188,16 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   page.on("requestfailed", (request) => {
     const failure = request.failure()?.errorText ?? "unknown failure";
     const url = new URL(request.url());
+    // The redesign loads Inter, JetBrains Mono and Material Symbols from Google
+    // Fonts (stitch-diff A8, accepted in §H). openSample() reloads the page
+    // mid-load, which aborts whichever font files are still in flight — a
+    // consequence of the reload, not of the app. Narrow on purpose: only the
+    // two font origins, only GET, only ERR_ABORTED. Anything the app itself
+    // requests still fails this test.
+    const expectedFontAbort = (url.origin === "https://fonts.gstatic.com" || url.origin === "https://fonts.googleapis.com")
+      && request.method() === "GET"
+      && failure === "net::ERR_ABORTED";
+    if (expectedFontAbort) return;
     const expectedEventTeardown = replacedSessionId !== null
       && url.origin === frontendUrl
       && url.pathname === "/api/events"
