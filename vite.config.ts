@@ -10,7 +10,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./frontend/src/test/setup.ts"],
-    exclude: ["e2e/**", "node_modules/**", "dist/**", "backend/app/web/**"],
+    exclude: ["e2e/**", "node_modules/**", "dist/**", "backend/app/web/**", ".claude/**"],
   },
   build: {
     // Inside the Python package, not a sibling `dist/`, so the built frontend
