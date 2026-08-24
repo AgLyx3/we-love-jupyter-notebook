@@ -1,5 +1,5 @@
 import Icon from "../ui/Icon";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError, type NotebookSnapshot, type Overview, type OverviewBlock } from "../api/client";
 
 // One generated field, five computed ones, and the panel has to say which is
@@ -79,8 +79,10 @@ function BlockRow({ block, expanded, onToggle, onJump, onHover }: {
               {block.produces.join(", ")}
             </p>
           )}
-          {block.defines.map((def) => (
-            <p key={def.name}>
+          {block.defines.map((def, index) => (
+            // #33: `key={def.name}` collided when a block redefines a
+            // function, which annotate() happily emits twice.
+            <p key={`${def.name}-${index}`}>
               <span className="outline-label">defines</span>
               <code>{def.name}()</code>
               {def.callSites.length
@@ -102,8 +104,17 @@ function BlockRow({ block, expanded, onToggle, onJump, onHover }: {
   );
 }
 
-export default function OutlinePanel({ notebook, onJump, onHoverBlock }: {
+export default function OutlinePanel({ notebook, active = true, onJump, onHoverBlock }: {
   notebook: NotebookSnapshot;
+  /** Whether the rail is actually showing this pane.
+   *
+   *  The panel stays mounted while the Files tab is selected so that an
+   *  in-flight Build map survives the switch (#33) — but staying mounted must
+   *  not mean staying busy. The free overview fetch is skipped while hidden and
+   *  runs on the first render after the tab comes back. A build already in
+   *  flight is unaffected: it is user-initiated, not driven by this effect.
+   */
+  active?: boolean;
   onJump: (cellId: string) => void;
   onHoverBlock?: (cellIds: string[] | null) => void;
 }) {
@@ -119,6 +130,7 @@ export default function OutlinePanel({ notebook, onJump, onHoverBlock }: {
   // touching the generated map. App drives revisions off the /events stream, so
   // nothing here polls.
   useEffect(() => {
+    if (!active) return;
     let live = true;
     setLoading(true);
     api
@@ -133,18 +145,40 @@ export default function OutlinePanel({ notebook, onJump, onHoverBlock }: {
       })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, [notebook.sessionId, notebook.revision]);
+  }, [notebook.sessionId, notebook.revision, active]);
 
   // Collapse every expander when the notebook itself changes — indices from the
   // previous file mean nothing here.
   useEffect(() => { setExpanded(new Set()); }, [notebook.sessionId]);
 
+  // Which notebook is on screen *now*. The build takes minutes, so the user can
+  // switch notebooks while it is in flight — and the fetch effect below has
+  // carried a liveness guard since it was written, while this one did not:
+  // A's map would land under B, or B's revision conflict would surface as a
+  // user-facing error.
+  //
+  // It has to track the current notebook, not the one the build started for.
+  // A ref pinned at build time compares equal to itself for ever and guards
+  // nothing; that was the first version of this fix, and the test below caught
+  // it. A ref rather than state because the check runs in a promise callback,
+  // where a captured state value is the stale one.
+  const showing = useRef(notebook.sessionId);
+  useEffect(() => { showing.current = notebook.sessionId; }, [notebook.sessionId]);
+
   const generate = async () => {
+    const owner = notebook.sessionId;
     setGenerating(true);
     setFailure(null);
     try {
-      setOverview(await api.generateOverview(notebook));
+      const built = await api.generateOverview(notebook);
+      if (showing.current !== owner) return;
+      setOverview(built);
     } catch (error) {
+      if (showing.current !== owner) return;
+      // A revision conflict just means the snapshot moved under the build; the
+      // next render carries the newer one. Same reasoning as the fetch effect,
+      // and it was the one case that reached the user as raw error text.
+      if (error instanceof ApiError && error.isConflict) return;
       setFailure(error instanceof Error ? error.message : "Could not build the outline");
     } finally {
       setGenerating(false);

@@ -90,11 +90,24 @@ export default function WorkspaceSidebar({ root, activePath, notebook, tab, onTa
         : <span>Outline</span>}
       <button title="Hide sidebar" aria-label="Hide sidebar" onClick={onCollapse}><Icon name="keyboard_tab_rtl" /></button>
     </header>
-    {active === "files" && root
-      ? <div className="workspace-tree" aria-label="File tree"><TreeChildren path={root} depth={0} activePath={activePath} onOpenNotebook={onOpenNotebook} /></div>
-      : notebook
-      ? <div className="workspace-tree" aria-label="Notebook outline"><OutlinePanel notebook={notebook} onJump={onJumpToCell} onHoverBlock={onHoverBlock} /></div>
-      : <div className="tree-empty">Open a notebook to see its outline.</div>}
+    {/* #33: this was a ternary, so switching to Files unmounted OutlinePanel
+        and took its `generating` flag with it. Coming back mid-build showed
+        "Build map" rather than "Building…", the request was unobservable, and
+        pressing the button spent a second model call.
+
+        Both panes stay mounted and the inactive one is hidden, so a build
+        survives a tab switch. `hidden` rather than `display: none` in CSS
+        because it also takes the pane out of the accessibility tree — a file
+        tree a screen reader can still walk while the Outline tab is selected
+        is the same bug in a different sense. */}
+    {root && <div className="workspace-tree" aria-label="File tree" hidden={active !== "files"}>
+      <TreeChildren path={root} depth={0} activePath={activePath} onOpenNotebook={onOpenNotebook} />
+    </div>}
+    {notebook
+      ? <div className="workspace-tree" aria-label="Notebook outline" hidden={active !== "outline"}>
+          <OutlinePanel notebook={notebook} active={active === "outline"} onJump={onJumpToCell} onHoverBlock={onHoverBlock} />
+        </div>
+      : active === "outline" && <div className="tree-empty">Open a notebook to see its outline.</div>}
     {/* B10. Pinned footer entry. There is no settings screen behind it, so it
         is rendered disabled and says why rather than opening onto nothing. */}
     <div className="sidebar-footer">

@@ -403,3 +403,30 @@ def test_generated_blocks_always_partition_the_notebook():
         assert covered == list(range(count)), name
         assert all(block.name.strip() for block in overview.blocks), name
         assert 1 <= len(overview.blocks) <= count, name
+
+
+def test_generate_composes_against_the_document_as_it_stands(loaded):
+    """#33: the call takes minutes and the notebook can move under it. The map
+    is built for the snapshot taken before; what comes back must describe the
+    document now, or the client writes a stale answer over a fresher one."""
+    session, revision = current(loaded)
+    edited: dict = {}
+
+    class EditsDuringTheCall(CountingAdapter):
+        def run_prompt(self, prompt, *, timeout, cancel_event, model=None):
+            # The user edits a cell while the model is thinking.
+            cell_id = loaded.get_snapshot().notebook["cells"][2]["id"]
+            edited["snapshot"] = loaded.update_cell_source(
+                cell_id=cell_id, source="N = 42\n", owner="user",
+                expected_session_id=session, expected_revision=revision,
+            )
+            return super().run_prompt(prompt, timeout=timeout, cancel_event=cancel_event, model=model)
+
+    service = make(loaded, EditsDuringTheCall([names(blocks_for(loaded))]))
+    overview = service.generate(session_id=session, expected_revision=revision)
+
+    assert edited, "the stub was supposed to edit mid-call"
+    # The map was generated for the pre-edit source, so it is stale — and says
+    # so, rather than reporting a document it never saw as fresh.
+    assert overview.stale is True
+    assert overview.cell_count == len(edited["snapshot"].notebook["cells"])

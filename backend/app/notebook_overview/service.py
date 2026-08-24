@@ -112,9 +112,16 @@ class NotebookOverviewService:
     ) -> Overview:
         """The costly path: one model call, always explicitly requested.
 
-        A response that is not a valid partition is discarded rather than
-        rendered (spec §4.3) — the previous map, if any, stays in the cache and
-        the caller gets the fallback with the reason attached.
+        A response that is not usable is discarded rather than rendered (spec
+        §4.3) — the previous map, if any, stays in the cache and the caller gets
+        the fallback with the reason attached.
+
+        The map is generated *for* the snapshot taken before the call, so that
+        is what its fingerprint records. What comes back is composed against the
+        document as it stands **now** (#33): the call takes minutes, the
+        notebook can move under it, and rendering the pre-call snapshot reported
+        `stale: false` and computed fields for a document that had already
+        changed — which the client then wrote over the fresher answer it had.
         """
         snapshot = self._snapshot(session_id, expected_revision)
         cells = self._cells(snapshot)
@@ -126,16 +133,19 @@ class NotebookOverviewService:
         except (SegmentationRejected, AgentAdapterError) as error:
             with self._lock:
                 self._errors[key] = str(error)
-            return self._compose(snapshot, cells)
+            return self._compose_current(fallback=snapshot)
         with self._lock:
             self._errors.pop(key, None)
             self._cache[key] = _CacheEntry(
+                # The snapshot the map was generated *for*, not the current one:
+                # staleness is "has the source moved since the map was built",
+                # and fingerprinting the newer source would claim it had not.
                 fingerprint=source_fingerprint(cells),
                 ranges=result.ranges,
                 names=result.names,
                 cell_count=len(cells),
             )
-        return self._compose(snapshot, cells)
+        return self._compose_current(fallback=snapshot)
 
     # ---------------------------------------------------------------- internals
 
@@ -152,6 +162,23 @@ class NotebookOverviewService:
     @staticmethod
     def _key(snapshot: NotebookSnapshot) -> str:
         return snapshot.notebook_path or f"session:{snapshot.session_id}"
+
+    def _compose_current(self, *, fallback: NotebookSnapshot) -> Overview:
+        """Compose against the document as it stands, not as it stood.
+
+        Deliberately re-read without the revision precondition: the generate
+        succeeded, and a notebook that moved during the call is a reason to
+        render fresh computed fields, not to raise a conflict at someone who
+        did nothing wrong. If the session itself changed underneath — a
+        different notebook is open now — the cache key no longer matches and
+        `_compose` serves that notebook's own map or its fallback, which is the
+        correct answer for the panel that is on screen.
+        """
+        try:
+            current = self.documents.get_snapshot()
+        except Exception:
+            current = fallback
+        return self._compose(current, self._cells(current))
 
     def _compose(self, snapshot: NotebookSnapshot, cells: list[Cell]) -> Overview:
         """Cached boundaries if they still fit, else the deterministic fallback.

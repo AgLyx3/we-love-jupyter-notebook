@@ -1,7 +1,7 @@
 import { configure, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, type NotebookCellData, type NotebookSnapshot, type Overview, type OverviewBlock } from "../api/client";
+import { api, ApiError, type NotebookCellData, type NotebookSnapshot, type Overview, type OverviewBlock } from "../api/client";
 import OutlinePanel from "./OutlinePanel";
 
 configure({ asyncUtilTimeout: 5000 });
@@ -152,5 +152,57 @@ describe("OutlinePanel", () => {
     mount({ blocks: [block()] });
     await screen.findByText("Revenue by region");
     expect(screen.queryByRole("button", { name: /Show block details/ })).not.toBeInTheDocument();
+  });
+
+  // ------------------------------------------------------------------- #33
+
+  it("does not render a build that finished after the notebook changed", async () => {
+    // A's map must not land under B. The fetch effect has carried this guard
+    // since it was written; generate() did not.
+    const first = snapshot();
+    const second = { ...first, sessionId: "s2" };
+    vi.spyOn(api, "overview").mockImplementation(async (nb) =>
+      overview({ generated: false, blocks: [block({ name: nb.sessionId === "s2" ? "Second notebook" : "" })] }));
+    let finish: (value: Overview) => void = () => undefined;
+    vi.spyOn(api, "generateOverview").mockReturnValue(
+      new Promise<Overview>((resolve) => { finish = resolve; }),
+    );
+    const view = render(<OutlinePanel notebook={first} onJump={() => undefined} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Build map/ }));
+
+    // The user opens a different notebook while the build is in flight, and
+    // its own fetch settles first — otherwise this races itself and passes
+    // whether or not the guard is there.
+    view.rerender(<OutlinePanel notebook={second} onJump={() => undefined} />);
+    await screen.findByText("Second notebook");
+
+    finish(overview({ blocks: [block({ name: "From the other notebook" })] }));
+    await waitFor(() => expect(screen.getByText("Second notebook")).toBeInTheDocument());
+    expect(screen.queryByText("From the other notebook")).not.toBeInTheDocument();
+  });
+
+  it("keeps a revision conflict out of the user's face", async () => {
+    // Same reasoning as the fetch effect: the snapshot moved under the build
+    // and the next render carries the newer one. It was the one path that
+    // reached the user as raw error text.
+    vi.spyOn(api, "overview").mockResolvedValue(overview({ generated: false, blocks: [block({ name: "" })] }));
+    const conflict = new ApiError(409, { code: "revision_conflict", message: "Notebook changed", details: {} });
+    vi.spyOn(api, "generateOverview").mockRejectedValue(conflict);
+    render(<OutlinePanel notebook={snapshot()} onJump={() => undefined} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Build map/ }));
+    await waitFor(() => expect(screen.queryByText(/Notebook changed/)).not.toBeInTheDocument());
+  });
+
+  it("renders a block that redefines a function without a duplicate key", async () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args) => { errors.push(String(args[0])); });
+    mount({ blocks: [block({
+      defines: [{ name: "load", callSites: [4] }, { name: "load", callSites: [9] }],
+    })] });
+    await screen.findByText("Revenue by region");
+    await userEvent.click(screen.getByRole("button", { name: /Show block details/ }));
+    expect(errors.filter((e) => e.includes("same key"))).toEqual([]);
+    spy.mockRestore();
   });
 });

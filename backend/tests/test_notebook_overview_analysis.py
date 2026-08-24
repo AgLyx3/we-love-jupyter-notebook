@@ -444,3 +444,32 @@ def test_a_function_that_rebinds_an_outer_name_does_not_read_it():
         "execution_count": None,
     }]})
     assert "df" not in cell.reads
+
+
+def test_out_of_order_outranks_risky_as_models_declares():
+    """#33: the upgrade was gated on `state == "ok"`, so a risky block that
+    also ran out of order reported only `risky` — the inverse of the
+    precedence BLOCK_STATES states in its own comment."""
+    notebook = {"cells": [
+        # Ran late.
+        {"cell_type": "code", "source": ["a = 1\n"], "execution_count": 9},
+        {"cell_type": "code", "source": ["b = a + 1\n"], "execution_count": 10},
+        # Ran earlier *and* touches the shell: risky, and out of order.
+        {"cell_type": "code", "source": ["import os\n", "os.system('ls')\n"], "execution_count": 2},
+        {"cell_type": "code", "source": ["c = 3\n"], "execution_count": 3},
+    ]}
+    cells = analysis.read_cells(notebook)
+    blocks = analysis.annotate(cells, [(0, 1), (2, 3)], ["first", "second"])
+    assert blocks[1].state == "out-of-order"
+
+
+def test_never_run_still_outranks_out_of_order():
+    """The other side of the same ranking: never-run is above out-of-order, so
+    an unrun block is not relabelled by the ordering check."""
+    notebook = {"cells": [
+        {"cell_type": "code", "source": ["a = 1\n"], "execution_count": 9},
+        {"cell_type": "code", "source": ["b = 2\n"], "execution_count": None},
+    ]}
+    cells = analysis.read_cells(notebook)
+    blocks = analysis.annotate(cells, [(0, 0), (1, 1)], ["first", "second"])
+    assert blocks[1].state == "never-run"

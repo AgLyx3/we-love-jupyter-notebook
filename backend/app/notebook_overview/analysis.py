@@ -33,7 +33,7 @@ from typing import Any, Iterable, Sequence
 
 from ..kernel_execution.risky_cell_classifier import RiskyCellClassifier
 from ..plot_tuning.discovery import parse_cell
-from .models import Block, Def
+from .models import BLOCK_STATES, Block, Def
 
 #: Milestone calls, per stage. Deliberately small, and deliberately only used by
 #: the deterministic fallback: research §13.1 measured this segmenting the hard
@@ -357,7 +357,14 @@ def annotate(
         counts = [c.execution_count for c in member_code if c.execution_count is not None]
         # The cross-block half of the out-of-order check: this block ran before
         # the one above it finished. `_spans_a_regression` cannot see that.
-        if state == "ok" and previous_max is not None and counts \
+        # #33: gated on `state == "ok"` before, which silently inverted the
+        # precedence BLOCK_STATES declares. out-of-order outranks risky, so a
+        # risky block that also ran before the block above it reported only
+        # `risky` and the ordering problem was never surfaced. Ranked against
+        # the declared order rather than against one hardcoded state, so this
+        # cannot drift out of step with it again.
+        outranked = BLOCK_STATES.index(state) > BLOCK_STATES.index("out-of-order")
+        if outranked and previous_max is not None and counts \
                 and min(counts) < previous_max:
             state = "out-of-order"
         if counts:

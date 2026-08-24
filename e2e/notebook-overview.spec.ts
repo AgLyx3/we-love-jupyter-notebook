@@ -153,7 +153,11 @@ test.describe("notebook overview panel", () => {
 
     await page.getByRole("tab", { name: "Outline" }).click();
     await expect(page.locator(".outline-panel")).toBeVisible();
-    await expect(page.getByLabel("File tree")).toHaveCount(0);
+    // Hidden, not unmounted (#33). Both panes stay mounted so a Build map in
+    // flight survives a tab switch; `hidden` keeps the inactive one out of the
+    // accessibility tree, which is what "not showing" has to mean for a screen
+    // reader as well as an eye.
+    await expect(page.getByLabel("File tree")).toBeHidden();
 
     await page.getByRole("tab", { name: "Files" }).click();
     await expect(page.getByLabel("File tree")).toBeVisible();
