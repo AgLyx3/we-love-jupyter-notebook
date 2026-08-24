@@ -17,6 +17,52 @@ directly — and every change is reviewable as a diff and undoable.
 Everything runs on your machine and binds to loopback only. Read
 [Security Limits](#security-limits) before using it with untrusted notebooks.
 
+## The interface
+
+The editor at rest: files and the notebook map on the left, the notebook in the
+middle, the agent on the right. Nothing is scoped yet, so the composer says so —
+a turn sent now is read-only.
+
+![The editor with a notebook open: file tree, notebook, and agent panel](docs/screenshots/01-app-shell.png)
+
+After a turn, changed cells become reviewable in place — an inline diff on the
+cell it belongs to, accepted or rejected per hunk, not a patch file you read
+somewhere else. The review bar counts what is pending and names the turn it came
+from; the agent's answer stays beside the diff, so what it claims to have done
+and what it actually changed are on screen together. Here two of the three
+scoped cells were rewritten, and the panel explains why the third was left
+alone.
+
+![The same view mid-review: pending-review bar, an inline diff on a cell, and the agent transcript](docs/screenshots/02-app-shell-reviewing.png)
+
+<table>
+<tr>
+<td width="30%"><img src="docs/screenshots/06-outline-panel.png" alt="The Outline tab listing four named blocks of cells"></td>
+<td>
+
+**The notebook map.** The Outline tab segments the notebook into blocks and
+asks the model to name each one, so a long notebook has a table of contents it
+never had. Names are generated — they carry a dotted underline to say so —
+while the cell ranges under them are computed. **Rebuild map** re-derives it
+after the notebook moves on.
+
+</td>
+</tr>
+</table>
+
+Plots get knobs. **Tune** scans the cells above a figure for values it can vary
+safely — sizes, counts, colours, flags — and puts each on a control, floating
+over the notebook so the picture keeps the full width of the cell. Moving one
+re-runs the cell into a preview labelled *not in your notebook yet*; **Apply and
+re-run** is what writes the values back. Nothing is committed until you press it.
+
+![The Tuning Controls popover open over a histogram, with sliders for N_POINTS, NOISE, BINS and ALPHA](docs/screenshots/07-tuning-panel.png)
+
+Screenshots are captured from a live session against the notebooks in
+`examples/`, with a real kernel and the real Claude CLI. See
+[`docs/screenshots/`](docs/screenshots/) for the full set and how to re-capture
+them.
+
 ## Prerequisites
 
 - **Python** 3.11+

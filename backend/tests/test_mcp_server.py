@@ -6,6 +6,8 @@ import asyncio
 import json
 
 import pytest
+from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from backend.app.mcp.polling import await_execution
 from backend.app.mcp.server import (
@@ -18,6 +20,7 @@ from backend.app.mcp.server import (
     build_server,
     resolve_requested_path,
 )
+from backend.app.mcp.supervisor import EditorStartupError
 
 
 # --- the revision contract ---------------------------------------------------
@@ -136,6 +139,29 @@ def test_an_unmapped_error_still_carries_its_message():
 
 def test_a_body_that_is_not_json_does_not_break_the_explanation():
     assert "503" in _explain(503, None, what="Reading")
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [ToolFailure("phrased as a next step"), EditorStartupError("phrased as a next step")],
+    ids=["tool-failure", "startup-failure"],
+)
+def test_a_failure_the_caller_should_read_survives_the_sdk(failure):
+    """Every sentence above is wasted if the SDK replaces it on the way out.
+
+    The SDK forwards the message of a `ToolError` and drops the message of
+    anything else, so the two failure types raised out of these tools have to
+    be that one. When they were plain `RuntimeError`s the caller saw only
+    "Error executing tool <name>" and had nothing to act on.
+    """
+    server = MCPServer(name="probe", version="0")
+
+    @server.tool(name="probe", description="Raises the failure under test.")
+    def probe() -> str:
+        raise failure
+
+    with pytest.raises(ToolError, match="phrased as a next step"):
+        asyncio.run(server.call_tool("probe", {}))
 
 
 # --- waiting on a run --------------------------------------------------------
