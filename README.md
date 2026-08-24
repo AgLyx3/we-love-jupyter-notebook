@@ -120,26 +120,47 @@ scope are one server-side session, so a cell the client edits updates in front
 of you, and a cell you edit is a cell the client is then refused for editing
 against a stale read.
 
-Install the extra and build the frontend — **both**, in this order. The tab is
-served from the built frontend, so skipping `npm run build` leaves the editor
-unable to start and the first tool call fails with exactly that message:
+### Install it
+
+The published wheel carries the browser tab with it, so there is nothing to
+clone and no Node toolchain to install. With [uv](https://docs.astral.sh/uv/):
+
+```bash
+claude mcp add agent-notebook -- \
+  uvx --from notebook-editor-mcp notebook-editor-mcp \
+  --workspace-root /absolute/path/to/your/project
+```
+
+`uvx` fetches the package into a throwaway environment on first run, so the
+version stays pinned to the release rather than to whatever a shared
+environment drifted to. If you would rather install it once and keep it:
+
+```bash
+pipx install notebook-editor-mcp
+claude mcp add agent-notebook -- \
+  notebook-editor-mcp --workspace-root /absolute/path/to/your/project
+```
+
+**From a checkout instead** — for working on the editor itself. Install the
+extra and build the frontend, **both**, in this order: the tab is served from
+the built frontend, and skipping `npm run build` leaves the editor unable to
+start, with the first tool call failing with exactly that message.
 
 ```bash
 .venv/bin/pip install -e '.[mcp]'
 npm run build
-```
 
-```bash
 claude mcp add agent-notebook -- \
   /absolute/path/to/.venv/bin/notebook-editor-mcp \
   --workspace-root /absolute/path/to/your/project
 ```
 
-Use absolute paths in both places — the client decides what directory the
-server starts in, so a relative one is ambiguous. `--workspace-root` confines
-every path the editor will open, list, or write to that directory; it is
-optional and strongly recommended, since without it the editor reaches
-anywhere you can. A typo fails at launch rather than at the first tool call.
+Use an absolute path for `--workspace-root`, and for the executable if you name
+one — the client decides what directory the server starts in, so a relative one
+is ambiguous. `--workspace-root` confines every path the editor will open,
+list, or write to that directory; it is optional and strongly recommended,
+since without it the editor reaches anywhere you can. A typo fails at launch
+rather than at the first tool call.
 
 `--no-browser` stops the tab opening by itself. On a headless or remote
 machine no tab can open regardless, so `open` returns an `editorUrl`

@@ -39,3 +39,31 @@ jobs:
         run: npm run build
       - name: Test
         run: npx vitest run
+
+  # The wheel is the thing users actually install, and two of its failure modes
+  # are invisible to the jobs above: a wheel built before `npm run build` ships
+  # without a frontend and still builds clean, and a package that only imports
+  # correctly beside its own checkout looks fine to every test run from one.
+  # `scripts/smoke_wheel.py` installs the wheel into a throwaway venv and drives
+  # it over stdio like a real client.
+  wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Build the frontend into the package
+        run: |
+          npm ci
+          npm run build
+      - name: Build the wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+      - name: Smoke-test the wheel
+        run: python scripts/smoke_wheel.py dist/*.whl
