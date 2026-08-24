@@ -25,18 +25,15 @@ a turn sent now is read-only.
 
 ![The editor with a notebook open: file tree, notebook, and agent panel](docs/screenshots/01-app-shell.png)
 
-After a turn, changed cells become reviewable in place. The review bar counts
-what is pending and names the turn it came from; the agent's answer stays beside
-the diff, so what it claims to have done and what it actually changed are on
-screen together. Here two of the three scoped cells were rewritten, and the
-panel explains why the third was left alone.
+After a turn, changed cells become reviewable in place — an inline diff on the
+cell it belongs to, accepted or rejected per hunk, not a patch file you read
+somewhere else. The review bar counts what is pending and names the turn it came
+from; the agent's answer stays beside the diff, so what it claims to have done
+and what it actually changed are on screen together. Here two of the three
+scoped cells were rewritten, and the panel explains why the third was left
+alone.
 
 ![The same view mid-review: pending-review bar, an inline diff on a cell, and the agent transcript](docs/screenshots/02-app-shell-reviewing.png)
-
-Each change is an inline diff on the cell it belongs to, accepted or rejected
-per hunk — not a patch file you read somewhere else.
-
-![A single cell under review, showing an added line as a green diff hunk with Keep and Discard buttons](docs/screenshots/04-cell-under-review.png)
 
 <table>
 <tr>
