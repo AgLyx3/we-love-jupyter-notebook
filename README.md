@@ -293,7 +293,8 @@ you would not run yourself.
    see the security note). Sending a prompt with no editable cells is a valid
    read-only turn: the agent answers but writes nothing.
 4. **Pick a scope, model, and mode** in the agent composer:
-   - **Scope** (top of the panel) — **Blocking** (default) lets the agent edit
+   - **Write scope** (composer footer, beside Model and Mode) — **Blocking**
+     (default) lets the agent edit
      only the cells you marked editable; **Trusted** makes the whole notebook
      editable and lets it add/delete/reorder/retype cells. In Trusted the
      per-cell "allow agent edit" control is hidden and every pin is a Focus hint.
@@ -306,6 +307,64 @@ you would not run yourself.
    reordered / retyped) and marks agent-added cells with a provenance badge;
    Trusted turns apply structure only and do **not** auto-run cells — you run
    them after reviewing. You can undo an applied turn (whole-turn undo).
+
+## The outline panel
+
+The sidebar's **Outline** tab is a map of the open notebook: contiguous ranges
+of cells, each with a name and a cell range. Click a block to jump to its first
+cell; hover to highlight everything it covers in the gutter. It is navigation
+only — **nothing it shows is ever written to the `.ipynb`**.
+
+One field is generated and the rest are computed, and the panel renders them
+differently on purpose:
+
+- **The name** is written by a model, and carries a dotted underline to say so.
+  Every block cites its own cell range, so a name you disagree with is checkable
+  in one click rather than something you have to trust.
+- **Everything else is computed from the AST**, with no model involved: the cell
+  range, the variables the block **produces** that later cells read, the
+  functions it **defines** and which cells call them (including ones never
+  called), and any **markdown headings** inside the range. Expand a block to see
+  the last three.
+
+**The boundaries are computed too.** They fall where the notebook's vocabulary
+changes — comparing the identifiers used either side of each seam and cutting at
+the valleys. Markdown headings are not consulted at all, which is the point: the
+notebooks that most need a map are the ones without them. An earlier version cut
+at every heading, and measuring it against nine real notebooks
+(`docs/plans/probes/corpus/`) showed why that had to change — it cost a reader
+21.5 cells to find what they were looking for, against 9.3 for this, and lost
+even to cutting blindly every eight cells.
+
+**So the model call is spent on naming, not on segmenting.** The same
+measurement found a model-drawn partition indistinguishable from the computed
+one, so **Build map** hands the model the blocks and asks only what to call
+them. Three things follow: the map cannot come back malformed, because the
+boundaries were never the model's to return; the same notebook always segments
+the same way, where an earlier version's block count moved 12% between identical
+runs; and the free map you see before pressing anything is a real map rather
+than a placeholder.
+
+**Opening a notebook costs nothing.** The computed fields are an AST parse and
+refresh on every document revision, so running a cell updates the panel without
+touching the names. Only **Build map** spends anything, and only when you press
+it.
+
+**Build map** is one `claude` call: cell *source* only — never outputs, at any
+size — with no tools, no MCP servers, and a throwaway working directory, so the
+pass can read, write and run nothing. It defaults to Haiku. The result is cached
+per notebook path and survives cell runs; editing a cell marks the map **stale**
+but leaves it on screen until you rebuild.
+
+Three ways it declines to guess, all visible in the panel:
+
+- **No model pass yet** (or one that failed) shows the computed blocks with the
+  cell range where the name would be, and says names need a model. It does not
+  invent one.
+- **An answer that is not one name per block** is discarded rather than
+  rendered, and the reason is shown. The previous map, if any, stays.
+- **Above ~500 cells** it refuses outright instead of segmenting a prefix and
+  presenting it as the whole map.
 
 ## Verify
 

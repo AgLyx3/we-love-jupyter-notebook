@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +31,9 @@ class FakeAgentAdapter:
     def __init__(self, attempts: list[FakeAttempt] | None = None) -> None:
         self.attempts = list(attempts or [FakeAttempt()])
         self.call_count = 0
+        #: Prompts passed to run_prompt, in order. Lets a test assert that no
+        #: cell *output* ever reached the model (spec §4.1).
+        self.prompts: list[str] = []
 
     def run(
         self, workspace: AgentWorkspace, *, timeout: float, cancel_event: Event,
@@ -56,6 +61,22 @@ class FakeAgentAdapter:
                 path.write_bytes(content)
             else:
                 path.write_text(content, encoding="utf-8")
+        return AdapterResult(attempt.final_output)
+
+    def run_prompt(
+        self, prompt: str, *, timeout: float, cancel_event: Event,
+        model: str | None = None,
+    ) -> AdapterResult:
+        index = min(self.call_count, len(self.attempts) - 1)
+        attempt = self.attempts[index]
+        self.call_count += 1
+        self.prompts.append(prompt)
+        if cancel_event.is_set():
+            raise AgentCancelled()
+        if attempt.delay > timeout:
+            raise AgentTimedOut()
+        if attempt.error:
+            raise attempt.error
         return AdapterResult(attempt.final_output)
 
 
@@ -86,6 +107,34 @@ class DevelopmentFakeAgentAdapter:
             output = "Updated the selected values deterministically."
         target.write_text(source, encoding="utf-8")
         return AdapterResult(output)
+
+    def run_prompt(
+        self, prompt: str, *, timeout: float, cancel_event: Event,
+        model: str | None = None,
+    ) -> AdapterResult:
+        """One name per block the prompt lists.
+
+        The overview's model pass is the only thing that calls this, and the
+        e2e suite runs against this adapter, so returning a well-formed answer
+        is what lets generation be exercised end to end without a model.
+
+        It used to return a partition — `{"start", "end", "name"}` triples
+        parsed out of "every index from 0 to N". The model no longer draws
+        boundaries, so there is no partition to fake: the prompt states how
+        many blocks it wants named, and the answer is that many strings. The
+        names echo the ranges so a wrong-order answer would be visible; the
+        tests assert the shape, never the names (spec §8).
+        """
+        if cancel_event.is_set():
+            raise AgentCancelled()
+        count_match = re.search(r"JSON array of (\d+) strings", prompt)
+        spans = re.findall(r"^\s*\d+\. (cells? [\d-]+)$", prompt, re.M)
+        count = int(count_match.group(1)) if count_match else len(spans)
+        names = [
+            spans[i] if i < len(spans) else f"Block {i + 1}"
+            for i in range(count)
+        ]
+        return AdapterResult(json.dumps(names))
 
 
 class ClaudeAgentAdapter:
@@ -151,6 +200,39 @@ class ClaudeAgentAdapter:
         stdout, _stderr = self.runner.run(
             args, cwd=workspace.root, timeout=timeout, cancel_event=cancel_event
         )
+        return AdapterResult(stdout.strip())
+
+    def run_prompt(
+        self, prompt: str, *, timeout: float, cancel_event: Event,
+        model: str | None = None,
+    ) -> AdapterResult:
+        """One read-only model call: text in, text out, no workspace, no tools.
+
+        The notebook overview's segmentation pass goes through here rather than
+        shelling out to `claude` on its own (overview spec §4.2). The probe that
+        validated the prompt does shell out, and that is exactly the thing not
+        to copy: the version check, the MCP lockdown and the process-group
+        teardown all live on this class, and a second route to the CLI is a
+        maintenance trap.
+
+        `--tools ""` disables every tool, so this cannot read, write or run
+        anything — which is the whole shape the overview needs. The cwd is a
+        fresh empty directory rather than the notebook's folder so that even a
+        relative path the model might emit has nothing to land on.
+        """
+        self.verify_supported()
+        args = [
+            self.executable, "-p", prompt, "--no-session-persistence",
+            "--safe-mode", "--disable-slash-commands", "--no-chrome",
+            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+            "--tools", "",
+        ]
+        if model in self._MODEL_ALIASES:
+            args += ["--model", model]
+        with tempfile.TemporaryDirectory(prefix="notebook-overview-") as sandbox:
+            stdout, _stderr = self.runner.run(
+                args, cwd=Path(sandbox), timeout=timeout, cancel_event=cancel_event,
+            )
         return AdapterResult(stdout.strip())
 
     def shutdown(self) -> None:

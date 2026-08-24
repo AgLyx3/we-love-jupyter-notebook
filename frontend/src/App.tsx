@@ -8,7 +8,7 @@ import type { TurnRecord } from "./agentChat/AgentChatPanel";
 import KernelControls from "./execution/KernelControls";
 import CloseNotebookDialog from "./fileOperations/CloseNotebookDialog";
 import FilePicker from "./fileOperations/FilePicker";
-import WorkspaceSidebar from "./fileOperations/WorkspaceSidebar";
+import WorkspaceSidebar, { readRailTab, writeRailTab, type RailTab } from "./fileOperations/WorkspaceSidebar";
 import FileToolbar from "./fileOperations/FileToolbar";
 import NotebookView from "./notebook/NotebookView";
 import { composeChatPrompt, composeInlineEditPrompt, defaultAttachmentInstruction, makeAttachment, makeErrorAttachment, type CellSelection, type SelectionAttachment } from "./notebook/selectionEdit";
@@ -59,6 +59,9 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [workspaceFolder, setWorkspaceFolder] = useState<string | null>(null);
   const [sidebarHidden, setSidebarHidden] = useState(false);
+  const [railTab, setRailTab] = useState<RailTab>("files");
+  // Cells the hovered outline block covers, highlighted in the gutter.
+  const [outlineHighlight, setOutlineHighlight] = useState<ReadonlySet<string> | null>(null);
   const [agentWidth, setAgentWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(AGENT_WIDTH_KEY));
     return Number.isFinite(saved) && saved > 0 ? clampAgentWidth(saved) : 360;
@@ -102,6 +105,11 @@ export default function App() {
   useEffect(() => { snapshotRef.current = notebook; }, [notebook]);
   useEffect(() => { scopeRef.current = scope; }, [scope]);
   useEffect(() => { setDirtyCellIds(new Set()); setAttachments([]); setTuningRecord(null); }, [notebook?.sessionId]);
+  // Tab memory is per notebook, keyed by path (spec §7.1). Save As changes the
+  // path and so counts as a new notebook; an uploaded notebook has no path and
+  // falls back to the default rather than inheriting the last file's choice.
+  useEffect(() => { setRailTab(readRailTab(notebook?.notebookPath, "files")); }, [notebook?.notebookPath]);
+  useEffect(() => { setOutlineHighlight(null); }, [notebook?.sessionId]);
   useEffect(() => {
     setCloseTarget((target) => target && (target.sessionId !== notebook?.sessionId || target.revision !== notebook.revision) ? null : target);
   }, [notebook?.sessionId, notebook?.revision]);
@@ -507,7 +515,7 @@ export default function App() {
   };
   return <div className="app-shell">
     <header className="topbar">
-      <div className="brand">{workspaceFolder && sidebarHidden && <button className="sidebar-reveal" title="Show files" aria-label="Show file tree" onClick={() => setSidebarHidden(false)}><Icon name="keyboard_tab" /></button>}<Icon name="menu_book" /><strong>{notebook?.filename ?? "Workspace"}</strong>{notebook && <span className={notebook.dirty ? "dirty" : ""}>{notebook.dirty ? "Unsaved" : "Clean"}</span>}{notebook && <span>Revision {notebook.revision}</span>}</div>
+      <div className="brand">{(workspaceFolder || notebook) && sidebarHidden && <button className="sidebar-reveal" title="Show sidebar" aria-label="Show sidebar" onClick={() => setSidebarHidden(false)}><Icon name="keyboard_tab" /></button>}<Icon name="menu_book" /><strong>{notebook?.filename ?? "Workspace"}</strong>{notebook && <span className={notebook.dirty ? "dirty" : ""}>{notebook.dirty ? "Unsaved" : "Clean"}</span>}{notebook && <span>Revision {notebook.revision}</span>}</div>
       <div className="toolbar-actions"><ThemeToggle />{notebook && <button className={`autosave-toggle ${autoSave ? "on" : ""}`} role="switch" aria-checked={autoSave} aria-label="Auto-save" title={autoSave ? "Auto-save is on — click to turn off" : "Auto-save is off — click to turn on"} onClick={() => setAutoSave((value) => !value)}><Icon name="save" /> Auto-save {autoSave ? "on" : "off"}</button>}{notebook && <KernelControls status={kernel} mutationDisabled={fileLocked} runAwaitingApproval={awaitingApproval} onRunAll={() => void mutate(() => api.runAll(notebook), { refreshAfter: false }, setOperation)} onInterrupt={() => void mutate(() => api.interrupt(notebook, kernel))} onRestart={() => void mutate(() => api.restart(notebook, kernel))} />}<FileToolbar notebook={notebook} saveDisabled={fileLocked || !notebook?.notebookPath || !notebook?.dirty} saveAsDisabled={fileLocked} closeDisabled={fileLocked} onBrowse={() => setPicking(true)} onSave={handleSave} onSaveAs={() => setSaving(true)} onClose={handleClose} /></div>
     </header>
     {notice && <Notice notice={notice} onClose={() => setNotice(null)} />}
@@ -515,7 +523,16 @@ export default function App() {
     {saving && notebook && <FilePicker mode="save" defaultName={notebook.filename} initialPath={notebook.workspaceRoot ?? workspaceFolder ?? undefined} onSaveAs={(path) => { setSaving(false); handleSaveAs(path); }} onClose={() => setSaving(false)} />}
     {closeTarget && <CloseNotebookDialog busy={busy} onCancel={() => setCloseTarget(null)} onConfirm={confirmClose} />}
     <div className="workspace-layout">
-      {workspaceFolder && !sidebarHidden && <WorkspaceSidebar root={workspaceFolder} activePath={notebook?.notebookPath ?? null} onOpenNotebook={(path) => void handleOpen(path, workspaceFolder)} onCollapse={() => setSidebarHidden(true)} />}
+      {(workspaceFolder || notebook) && !sidebarHidden && <WorkspaceSidebar
+        root={workspaceFolder}
+        activePath={notebook?.notebookPath ?? null}
+        notebook={notebook}
+        tab={railTab}
+        onTabChange={(tab) => { setRailTab(tab); writeRailTab(notebook?.notebookPath, tab); }}
+        onOpenNotebook={(path) => { if (workspaceFolder) void handleOpen(path, workspaceFolder); }}
+        onCollapse={() => setSidebarHidden(true)}
+        onJumpToCell={requestCellFocus}
+        onHoverBlock={(cellIds) => setOutlineHighlight(cellIds ? new Set(cellIds) : null)} />}
       {notebook ? <div className="editor-layout" style={{ "--agent-width": `${agentWidth}px` } as CSSProperties}>
       <div className="notebook-pane">
       {/* Gated on unsettled work, so finishing a review clears the bar rather
@@ -546,6 +563,7 @@ export default function App() {
           ? undoTunedOperations(notebook, tuningRecord!.recordId, reviewUnsettled.filter((item) => item.state === "pending").map((item) => item.operationId))
           : rejectOperations(notebook, selectedTurn!.turnId)} />}
       <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} tuningRecord={tuningRecord} trusted={trustedScope} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} autoSave={autoSave} focusRequest={focusRequest}
+        outlinedCellIds={outlineHighlight}
         tunableCellIds={tunableCellIds}
         tuningControls={{
           revision: notebook.revision,

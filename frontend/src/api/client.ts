@@ -163,6 +163,42 @@ export interface TuningRecord {
   error: ApiErrorBody | null; createdAt: string;
 }
 
+// ------------------------------------------------------- notebook overview
+// The same free/costly route split the tuning panel makes: `overview` is an AST
+// parse and never calls the model, `generateOverview` is one model call and is
+// always something the user asked for.
+
+/** A function defined in a block. An empty `callSites` means genuinely unused —
+ *  the backend counts name *references*, so a callback passed by value is not
+ *  reported dead. */
+export interface OverviewDef { name: string; callSites: number[] }
+/** `ok | never-run | out-of-order | risky`, in that precedence order. */
+export type BlockState = "ok" | "never-run" | "out-of-order" | "risky";
+export interface OverviewBlock {
+  start: number; end: number;
+  /** Generated, and the only generated field — empty in the deterministic
+   *  fallback, where names are genuinely unavailable rather than short. */
+  name: string;
+  state: BlockState;
+  produces: string[];
+  defines: OverviewDef[];
+  /** Markdown headings falling inside the range. Never dropped: if the model's
+   *  boundaries disagree with a heading it still surfaces in whichever block
+   *  contains it. */
+  marks: string[];
+}
+export interface Overview {
+  blocks: OverviewBlock[];
+  /** False when these are the deterministic blocks. The panel has to say so —
+   *  that map is measurably degraded, not merely terser. */
+  generated: boolean;
+  /** Cell sources changed since generation. The map stays visible and stale;
+   *  it never silently regenerates. */
+  stale: boolean;
+  cellCount: number;
+  error: string | null;
+}
+
 export interface KernelStatus {
   kernelSessionId: string | null;
   state: string;
@@ -275,6 +311,15 @@ export const api = {
   // it carries no expected revision.
   acceptTuningOperations: (snapshot: NotebookSnapshot, recordId: string, operationIds?: string[]) =>
     request<TuningRecord>(`/tuning/records/${encodeURIComponent(recordId)}/accept`, { method: "POST", body: JSON.stringify({ sessionId: snapshot.sessionId, ...(operationIds?.length ? { operationIds } : {}) }) }),
+  // Free: recomputes the computed fields and serves whatever map is cached.
+  // Opening a notebook must never cost a model call, so this never makes one.
+  overview: (snapshot: Pick<NotebookSnapshot, "sessionId" | "revision">) =>
+    request<Overview>(`/overview?sessionId=${encodeURIComponent(snapshot.sessionId)}&expectedDocumentRevision=${snapshot.revision}`),
+  // The one costly call, and always an explicit button press. A response that
+  // is not a valid partition comes back as `error` with the fallback map, not
+  // as an HTTP failure — the panel stays useful either way.
+  generateOverview: (snapshot: Pick<NotebookSnapshot, "sessionId" | "revision">) =>
+    request<Overview>("/overview/generate", { method: "POST", body: JSON.stringify(mutation(snapshot)) }),
   decide: (operation: ExecutionOperation, attempt: ExecutionAttempt, decision: "approve" | "skip" | "cancel") => {
     if (operation.currentDocumentRevision == null) throw new Error("Execution correlation is incomplete");
     return request<ExecutionOperation>(`/execution/${encodeURIComponent(attempt.executionAttemptId)}/${decision}`, { method: "POST", body: JSON.stringify({ sessionId: operation.sessionId, expectedDocumentRevision: operation.currentDocumentRevision, turnId: operation.parentTurnId, cellId: attempt.cellId }) });

@@ -136,3 +136,30 @@ class AgentAdapter(Protocol):
         self, workspace: AgentWorkspace, *, timeout: float, cancel_event: object,
         model: str | None = None, permission_mode: str = "acceptEdits",
     ) -> AdapterResult: ...
+
+    def run_prompt(
+        self, prompt: str, *, timeout: float, cancel_event: object,
+        model: str | None = None,
+    ) -> AdapterResult: ...
+
+
+class PromptAdapter(Protocol):
+    """The read-only half of an adapter: text in, text out, no workspace.
+
+    The notebook overview's segmentation pass needs a model call that writes
+    nothing anywhere — no workspace to build, no files to audit, no cells to
+    make editable. `run` cannot express that: it reads its prompt out of
+    `INSTRUCTIONS.md` inside a workspace root and hands the CLI edit tools
+    whenever any cell is editable.
+
+    This is the narrow path the overview spec (§4.2) asks for in preference to
+    a second, private route to the CLI. Everything that makes the existing
+    adapter trustworthy — the version check, the MCP and slash-command
+    lockdown, the process-group teardown in ProcessRunner — is shared with
+    `run`; the only difference is that no tools are enabled at all.
+    """
+
+    def run_prompt(
+        self, prompt: str, *, timeout: float, cancel_event: object,
+        model: str | None = None,
+    ) -> AdapterResult: ...

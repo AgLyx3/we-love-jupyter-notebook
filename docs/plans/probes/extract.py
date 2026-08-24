@@ -67,7 +67,29 @@ def analyse(cell: Cell) -> None:
     # is a local, not something the block "produces". Walking with ast.walk
     # flattened that distinction and filled `produces` with loop counters and
     # unpacked locals (`I`, `r0`) that no other cell can see.
-    def collect(node, *, top):
+    def scope_names(node) -> set:
+        """Everything a nested scope binds for itself — see #37 and the twin of
+        this function in backend/app/notebook_overview/analysis.py. Kept in
+        step with it deliberately: this probe is only useful while it segments
+        the way the backend does."""
+        names = set()
+        args = getattr(node, "args", None)
+        if isinstance(args, ast.arguments):
+            for group in (args.posonlyargs, args.args, args.kwonlyargs):
+                names |= {argument.arg for argument in group}
+            for extra in (args.vararg, args.kwarg):
+                if extra is not None:
+                    names.add(extra.arg)
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
+                names.add(sub.id)
+            elif isinstance(sub, ast.comprehension):
+                for target in ast.walk(sub.target):
+                    if isinstance(target, ast.Name):
+                        names.add(target.id)
+        return names
+
+    def collect(node, *, top, shadowed=frozenset()):
         for child in ast.iter_child_nodes(node):
             # Comprehensions carry their own scope in Python 3, so their targets
             # are not module-level either — `{r0: f(s) for r0, s in ...}` leaks
@@ -80,7 +102,7 @@ def analyse(cell: Cell) -> None:
                 if isinstance(child.ctx, ast.Store):
                     if top:
                         cell.binds.add(child.id)
-                else:
+                elif child.id not in shadowed:
                     cell.reads.add(child.id)
                     # A function passed as a value (`solve_ivp(rhs, ...)`) is a
                     # use. Counting only ast.Call marked every callback dead.
@@ -88,7 +110,8 @@ def analyse(cell: Cell) -> None:
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and top:
                 cell.defines.append(child.name)
                 cell.binds.add(child.name)
-            collect(child, top=top and not nested)
+            collect(child, top=top and not nested,
+                    shadowed=(shadowed | scope_names(child)) if nested else shadowed)
 
     collect(tree, top=True)
 

@@ -13,7 +13,7 @@ function retypeOf(turn: AgentTurn | null, cellId: string): { from: string; to: s
   return typeof from === "string" && typeof to === "string" ? { from, to } : undefined;
 }
 
-export default function NotebookView({ notebook, scope, turn, tuningRecord = null, trusted = false, disabled, sourceActionsDisabled, autoSave, focusRequest, tuningControls, tunableCellIds, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert, onKeepCell, onKeepOperation, onUndoOperation, onKeepTuned, onUndoTuned, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
+export default function NotebookView({ notebook, scope, turn, tuningRecord = null, trusted = false, disabled, sourceActionsDisabled, autoSave, focusRequest, outlinedCellIds, tuningControls, tunableCellIds, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert, onKeepCell, onKeepOperation, onUndoOperation, onKeepTuned, onUndoTuned, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
   notebook: NotebookSnapshot; scope: TurnScope; turn: AgentTurn | null; trusted?: boolean;
   /** The most recent Apply from the tuning panel. Its own record type, not an
    *  AgentTurn (design D6) — the cells it governs review under its own wording. */
@@ -22,6 +22,9 @@ export default function NotebookView({ notebook, scope, turn, tuningRecord = nul
   tuningControls?: CellTuningControls;
   tunableCellIds?: ReadonlySet<string>;
   disabled: boolean; sourceActionsDisabled: boolean; autoSave: boolean; focusRequest: { cellId: string; requestId: number } | null;
+  /** Cells the hovered outline block covers. Highlighting only — it changes
+   *  no selection and no scope, so it can never affect what an agent edits. */
+  outlinedCellIds?: ReadonlySet<string> | null;
   onKeepTuned?: (recordId: string, operationIds: string[]) => void;
   onUndoTuned?: (recordId: string, operationIds: string[]) => void;
   onDirtyChange: (cellId: string, dirty: boolean) => void;
@@ -157,7 +160,7 @@ export default function NotebookView({ notebook, scope, turn, tuningRecord = nul
       );
       const tuned = Boolean(tuningRecord) && (tunedUnsettled || Boolean(tunedChange));
       const recordId = tuningRecord?.recordId;
-      return <NotebookCell key={`${notebook.sessionId}:${cell.cellId}`} cell={cell} focused={focused === cell.cellId} selected={selected.has(cell.cellId)} dragIds={selected.has(cell.cellId) && orderedSelection.length > 1 ? orderedSelection : [cell.cellId]}
+      return <NotebookCell key={`${notebook.sessionId}:${cell.cellId}`} cell={cell} focused={focused === cell.cellId} selected={selected.has(cell.cellId)} outlined={outlinedCellIds?.has(cell.cellId) ?? false} dragIds={selected.has(cell.cellId) && orderedSelection.length > 1 ? orderedSelection : [cell.cellId]}
       editable={scope.editableCellIds.includes(cell.cellId)} context={scope.contextCellIds.includes(cell.cellId)} trusted={trusted} disabled={disabled} sourceActionsDisabled={sourceActionsDisabled} autoSave={autoSave}
       cellRef={(node) => { if (node) refs.current.set(cell.cellId, node); else refs.current.delete(cell.cellId); }}
       origin={tuned ? "tune" : "agent"}
