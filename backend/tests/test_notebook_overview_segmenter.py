@@ -1,8 +1,16 @@
-"""Tier 2: the prompt, and the validation that decides what gets rendered.
+"""Tier 2: the naming prompt, and the validation that decides what gets rendered.
 
-Validation is the safety net spec §4.3 makes non-negotiable — a response that is
-not a valid partition is discarded rather than rendered — so it is tested
-directly and adversarially rather than only through the happy path.
+The model no longer draws the boundaries (#36 measured its partition as
+indistinguishable from the deterministic one), so most of what this file used to
+assert has moved rather than gone:
+
+* The **partition guarantee** — every cell covered exactly once, in order, no
+  gaps or overlaps — used to be enforced here, adversarially, because the model
+  could return anything. `analysis.segment()` is now its sole guarantor, and it
+  is tested there (`test_segment_always_partitions_*`) more strictly than the
+  validator ever tested it, because nothing downstream checks it any more.
+* What is left here is the one thing the model can still get wrong: returning
+  the wrong number of names, or a blank one.
 
 Nothing here asserts a generated *name*. Names are model output; the tests
 assert the shape (spec §8).
@@ -44,100 +52,65 @@ class StubAdapter:
         return AdapterResult(self.response)
 
 
-def partition(ranges) -> str:
-    return json.dumps([
-        {"start": start, "end": end, "name": f"block {start}"} for start, end in ranges
-    ])
+def names_for(cells) -> str:
+    """A well-formed answer: one name per block the analyser drew."""
+    return json.dumps([f"block {i}" for i, _ in enumerate(analysis.segment(cells))])
 
 
 # ----------------------------------------------------------------- validation
 
 
-def test_a_correct_partition_has_no_problems():
-    assert segmenter.validate(
-        [{"start": 0, "end": 2, "name": "a"}, {"start": 3, "end": 4, "name": "b"}], 4,
-    ) == []
+def test_one_name_per_block_has_no_problems():
+    assert segmenter.validate(["alpha", "beta"], 2) == []
 
 
-def test_gaps_are_rejected():
-    problems = segmenter.validate(
-        [{"start": 0, "end": 1, "name": "a"}, {"start": 3, "end": 4, "name": "b"}], 4,
-    )
-    assert any("uncovered cells" in problem for problem in problems)
+def test_too_few_names_is_rejected():
+    problems = segmenter.validate(["alpha"], 3)
+    assert any("1 names for 3 blocks" in problem for problem in problems)
 
 
-def test_overlaps_are_rejected():
-    problems = segmenter.validate(
-        [{"start": 0, "end": 3, "name": "a"}, {"start": 2, "end": 4, "name": "b"}], 4,
-    )
-    assert any("overlapping cells" in problem for problem in problems)
+def test_too_many_names_is_rejected():
+    problems = segmenter.validate(["a", "b", "c"], 2)
+    assert any("3 names for 2 blocks" in problem for problem in problems)
 
 
-def test_out_of_range_indices_are_rejected():
-    problems = segmenter.validate([{"start": 0, "end": 9, "name": "a"}], 4)
-    assert any("out of range" in problem for problem in problems)
+def test_a_blank_name_is_rejected():
+    """The fallback renders the range when a name is absent; a blank string
+    would render as a block that looks named and says nothing."""
+    problems = segmenter.validate(["alpha", "   "], 2)
+    assert any("Blank names" in problem for problem in problems)
 
 
-def test_a_negative_index_is_rejected():
-    problems = segmenter.validate([{"start": -1, "end": 4, "name": "a"}], 4)
-    assert any("out of range" in problem for problem in problems)
+def test_an_empty_response_is_rejected_when_blocks_were_expected():
+    assert segmenter.validate([], 4) != []
 
 
-def test_reversed_range_is_rejected():
-    problems = segmenter.validate([{"start": 3, "end": 1, "name": "a"}], 4)
-    assert any("out of range" in problem for problem in problems)
-
-
-def test_unordered_blocks_are_rejected():
-    problems = segmenter.validate(
-        [{"start": 3, "end": 4, "name": "b"}, {"start": 0, "end": 2, "name": "a"}], 4,
-    )
-    assert any("document order" in problem for problem in problems)
-
-
-def test_an_empty_name_is_rejected():
-    problems = segmenter.validate(
-        [{"start": 0, "end": 4, "name": "   "}], 4,
-    )
-    assert any("no name" in problem for problem in problems)
-
-
-def test_a_missing_name_is_rejected():
-    problems = segmenter.validate([{"start": 0, "end": 4}], 4)
-    assert any("no name" in problem for problem in problems)
-
-
-def test_non_integer_indices_are_rejected():
-    problems = segmenter.validate([{"start": "0", "end": 4, "name": "a"}], 4)
-    assert any("non-integer" in problem for problem in problems)
-
-
-def test_a_boolean_is_not_accepted_as_an_index():
-    """`True` is an int in Python; it is not a cell index."""
-    problems = segmenter.validate([{"start": True, "end": 4, "name": "a"}], 4)
-    assert any("non-integer" in problem for problem in problems)
-
-
-def test_an_empty_response_is_rejected():
-    assert "no blocks returned" in segmenter.validate([], 4)
+def test_no_blocks_and_no_names_is_consistent():
+    assert segmenter.validate([], 0) == []
 
 
 # --------------------------------------------------------------------- parse
 
 
 def test_parse_extracts_the_array_from_surrounding_prose():
-    blocks = segmenter.parse('Sure! Here you go:\n[{"start": 0, "end": 1, "name": "a"}]\nHope that helps.')
-    assert blocks == [{"start": 0, "end": 1, "name": "a"}]
+    assert segmenter.parse('Sure! Here you go:\n["alpha", "beta"]\nHope that helps.') == ["alpha", "beta"]
 
 
 def test_parse_rejects_a_response_with_no_array():
     with pytest.raises(SegmentationRejected):
-        segmenter.parse("I could not segment this notebook.")
+        segmenter.parse("I could not name these blocks.")
 
 
 def test_parse_rejects_malformed_json():
     with pytest.raises(SegmentationRejected):
-        segmenter.parse('[{"start": 0, "end": }]')
+        segmenter.parse('["alpha", ]')
+
+
+def test_parse_rejects_a_list_that_is_not_names():
+    """The old prompt returned objects. A model still answering that shape is
+    wrong now, and saying so beats coercing it into strings."""
+    with pytest.raises(SegmentationRejected):
+        segmenter.parse('[{"start": 0, "end": 1, "name": "a"}]')
 
 
 # --------------------------------------------------------------------- prompt
@@ -156,26 +129,39 @@ def test_prompt_sends_source_but_never_outputs():
             }],
         }],
     }
-    prompt = segmenter.build_prompt(analysis.read_cells(notebook))
+    cells = analysis.read_cells(notebook)
+    prompt = segmenter.build_prompt(cells, analysis.segment(cells))
     assert "df = load()" in prompt
     assert "SECRET-CUSTOMER-ROW-12345" not in prompt
     assert "stdout" not in prompt
 
 
-def test_prompt_keeps_the_clauses_that_were_earned_not_guessed():
-    """Spec §4.1: both of these were measured, not assumed."""
-    prompt = segmenter.build_prompt(load("simulation-sweep.ipynb"))
+def test_prompt_keeps_the_naming_clauses_that_were_earned_not_guessed():
+    """Spec §4.1: both of these were measured, not assumed, and both survive
+    the change of job — the model still names, it just no longer partitions."""
+    cells = load("simulation-sweep.ipynb")
+    prompt = segmenter.build_prompt(cells, analysis.segment(cells))
     # Without the ban, Haiku drifts to categorical names (research §13.6).
     for banned in ("Analyze", "Explore", "Visualize", "Process", "Handle", "Perform", "Compute"):
         assert banned in prompt
     assert "Name the *subject*, not the activity" in prompt
-    # This is what makes headings annotation rather than structure.
+    # This is what keeps a heading from dictating a name the code contradicts.
     assert "Markdown headings are a hint" in prompt
 
 
-def test_prompt_states_the_real_last_index():
+def test_prompt_states_the_blocks_and_forbids_changing_them():
     cells = load("messy-exploration.ipynb")
-    assert f"every index from 0 to {len(cells) - 1}" in segmenter.build_prompt(cells)
+    ranges = analysis.segment(cells)
+    prompt = segmenter.build_prompt(cells, ranges)
+    assert f"JSON array of {len(ranges)} strings" in prompt
+    assert "already decided" in prompt
+    # 1-based in the prompt, as in the UI, so a name and a rail entry agree.
+    start, end = ranges[1]
+    assert f"2. cells {start + 1}-{end + 1}" in prompt
+
+
+def test_a_single_cell_block_reads_as_one_cell_not_a_range():
+    assert segmenter.describe([(0, 0), (1, 3)]).splitlines() == ["1. cell 1", "2. cells 2-4"]
 
 
 def test_long_cells_are_truncated_head_and_tail():
@@ -183,7 +169,8 @@ def test_long_cells_are_truncated_head_and_tail():
     notebook = {"cells": [
         {"cell_type": "code", "source": [f"FIRST = 1\n{body}LAST = 2\n"], "execution_count": None},
     ]}
-    prompt = segmenter.build_prompt(analysis.read_cells(notebook))
+    cells = analysis.read_cells(notebook)
+    prompt = segmenter.build_prompt(cells, analysis.segment(cells))
     assert "# ... truncated ..." in prompt
     # Head and tail both survive: the tail is where the result gets assigned.
     assert "FIRST = 1" in prompt
@@ -195,71 +182,96 @@ def test_markdown_cells_are_labelled_for_the_model():
         {"cell_type": "markdown", "source": ["# Title\n"]},
         {"cell_type": "code", "source": ["a = 1\n"], "execution_count": None},
     ]}
-    prompt = segmenter.build_prompt(analysis.read_cells(notebook))
+    cells = analysis.read_cells(notebook)
+    prompt = segmenter.build_prompt(cells, analysis.segment(cells))
     assert "[0] (markdown)" in prompt
     assert "[1] (code)" in prompt
 
 
 def test_an_oversized_notebook_is_refused_rather_than_truncated():
     """Spec §10.2: chunking is undefined, so segmenting a prefix would lie."""
-    cells = analysis.read_cells({"cells": [
+    notebook = {"cells": [
         {"cell_type": "code", "source": ["a = 1\n"], "execution_count": None}
         for _ in range(segmenter.MAX_CELLS + 1)
-    ]})
+    ]}
+    cells = analysis.read_cells(notebook)
     with pytest.raises(NotebookTooLarge):
-        segmenter.build_prompt(cells)
+        segmenter.build_prompt(cells, analysis.segment(cells))
 
 
-# -------------------------------------------------------------------- segment
+# ------------------------------------------------------------------- segment
 
 
-def test_segment_returns_ranges_and_names_on_a_valid_partition():
+def test_segment_returns_the_analysers_ranges_and_the_models_names():
     cells = load("simulation-sweep.ipynb")
-    adapter = StubAdapter(partition([(0, 9), (10, 20)]))
-    result = segmenter.segment(cells, adapter)
-    assert result.ranges == ((0, 9), (10, 20))
-    assert all(name for name in result.names)
+    expected = [tuple(span) for span in analysis.segment(cells)]
+    result = segmenter.segment(cells, StubAdapter(names_for(cells)))
+    assert list(result.ranges) == expected
+    assert len(result.names) == len(expected)
+
+
+def test_the_model_cannot_move_a_boundary():
+    """The point of the change: boundaries are not the model's to return, so
+    an answer that tries to move one cannot."""
+    cells = load("simulation-sweep.ipynb")
+    expected = [tuple(span) for span in analysis.segment(cells)]
+    result = segmenter.segment(cells, StubAdapter(names_for(cells)))
+    assert list(result.ranges) == expected
+
+
+def test_segment_is_deterministic_across_calls():
+    """Two runs of the old prompt returned block counts differing by 12% on
+    average. The blocks no longer depend on the model at all."""
+    cells = load("messy-exploration.ipynb")
+    first = segmenter.segment(cells, StubAdapter(names_for(cells)))
+    second = segmenter.segment(cells, StubAdapter(names_for(cells)))
+    assert first.ranges == second.ranges
 
 
 def test_segment_defaults_to_haiku():
-    """Research §13.6 measured Haiku as structurally equivalent."""
-    adapter = StubAdapter(partition([(0, 20)]))
-    segmenter.segment(load("simulation-sweep.ipynb"), adapter)
+    cells = load("simulation-sweep.ipynb")
+    adapter = StubAdapter(names_for(cells))
+    segmenter.segment(cells, adapter)
     assert adapter.models == ["haiku"]
 
 
-def test_segment_discards_an_invalid_partition():
+def test_segment_discards_a_wrong_number_of_names():
     cells = load("simulation-sweep.ipynb")
-    adapter = StubAdapter(partition([(0, 5)]))  # covers 6 of 21 cells
     with pytest.raises(SegmentationRejected) as caught:
-        segmenter.segment(cells, adapter)
-    assert any("uncovered" in problem for problem in caught.value.problems)
+        segmenter.segment(cells, StubAdapter('["only one"]'))
+    assert "names for" in str(caught.value)
 
 
 def test_segment_lets_adapter_errors_through_unchanged():
-    """"No model available" and "the model answered badly" are different facts."""
-    adapter = StubAdapter(error=AgentAdapterError("Claude CLI is unavailable"))
+    cells = load("simulation-sweep.ipynb")
     with pytest.raises(AgentAdapterError):
-        segmenter.segment(load("simulation-sweep.ipynb"), adapter)
+        segmenter.segment(cells, StubAdapter(error=AgentAdapterError("no CLI")))
 
 
 def test_a_long_name_is_truncated_rather_than_trusted():
-    """Spec §4.3.4: names are truncated for display, not trusted to be short."""
     cells = load("simulation-sweep.ipynb")
-    adapter = StubAdapter(json.dumps([{"start": 0, "end": 20, "name": "word " * 200}]))
-    result = segmenter.segment(cells, adapter)
-    assert len(result.names[0]) <= segmenter.NAME_LIMIT
+    count = len(analysis.segment(cells))
+    response = json.dumps(["x" * 400] * count)
+    result = segmenter.segment(cells, StubAdapter(response))
+    assert all(len(name) == segmenter.NAME_LIMIT for name in result.names)
 
 
 def test_segment_passes_a_cancel_event_through():
     cells = load("simulation-sweep.ipynb")
-    seen: list[Event] = []
+    seen = {}
 
-    class Recorder(StubAdapter):
+    class Recording(StubAdapter):
         def run_prompt(self, prompt, *, timeout, cancel_event, model=None):
-            seen.append(cancel_event)
-            return AdapterResult(partition([(0, 20)]))
+            seen["event"] = cancel_event
+            return AdapterResult(names_for(cells))
 
     event = Event()
-    segmenter.segment(cells, Recorder(), cancel_event=event)
-    assert seen == [event]
+    segmenter.segment(cells, Recording(), cancel_event=event)
+    assert seen["event"] is event
+
+
+def test_an_empty_notebook_asks_the_model_nothing():
+    adapter = StubAdapter("[]")
+    result = segmenter.segment([], adapter)
+    assert result.ranges == () and result.names == ()
+    assert adapter.prompts == []

@@ -1,6 +1,25 @@
-"""Tier 2: ask a model for the boundaries and the names, and refuse bad answers.
+"""Tier 2: ask a model to *name* blocks the analyser has already drawn.
 
-The prompt is `docs/plans/probes/segment.py`'s, verbatim. It is validated
+It used to ask for the boundaries too. Measured (#36), that was not worth
+buying: a model partition and the deterministic cohesion pass are
+indistinguishable on what a reader pays to find a cell — paired Δ 0.0 cells,
+95% CI [-1.5, +2.2] over nine notebooks. What the model is uniquely good at is
+the naming, which the fallback cannot do at all and says so.
+
+Handing it fixed ranges is worth more than the call it saves:
+
+* An invalid partition becomes structurally impossible. There is no longer a
+  gap, overlap or out-of-order block to detect, so the whole class of answer
+  that used to be discarded after a full-notebook call cannot occur.
+* The map stops moving. Two identical runs of the old prompt returned block
+  counts differing by 12% on average and 40% on one notebook; blocks are now
+  deterministic and only the names vary.
+* The task gets easier. Naming N given ranges is a smaller ask than
+  partitioning and naming at once — and the notebook where the model's own
+  partition was worst (`madewithml`, 243 cells) is exactly where partitioning
+  is hardest.
+
+The naming rules below are `docs/plans/probes/segment.py`'s, verbatim. It is validated
 against both fixtures and two model tiers, and two of its clauses were earned
 rather than guessed (spec §4.1):
 
@@ -9,7 +28,9 @@ rather than guessed (spec §4.1):
   it Haiku drifts to categorical names (research §13.6) — exactly the register
   the stage taxonomy was cut to avoid.
 * *"Markdown headings are a hint, not an instruction."* This is what makes
-  headings annotation rather than structure.
+  headings annotation rather than structure. It survives the change of job:
+  the model no longer draws boundaries, but it still must not let a heading
+  dictate a name that the code inside the block contradicts.
 
 Two things this module will not do. It sends **cell source only** — never
 outputs, at any size, for any reason (research §1). And it goes through
@@ -26,6 +47,7 @@ from threading import Event
 from typing import Sequence
 
 from ..agent_workspace.models import AgentAdapterError
+from . import analysis
 from .analysis import Cell
 from .models import NotebookTooLarge, SegmentationRejected
 
@@ -51,14 +73,13 @@ TIMEOUT_SECONDS = 300.0
 #: (spec §4.3.4). Enforced here so no consumer has to remember to.
 NAME_LIMIT = 90
 
-PROMPT = """You are segmenting a Jupyter notebook into contiguous blocks for a \
-navigation panel. A reader opens this panel to answer "what is in this notebook, \
-and where is the part I want".
+PROMPT = """You are naming the blocks of a Jupyter notebook for a navigation \
+panel. A reader opens this panel to answer "what is in this notebook, and where \
+is the part I want".
+
+The blocks are already decided. Do not change them, merge them or split them.
 
 Rules:
-- Blocks are contiguous ranges of cell indices and must partition the notebook: \
-every index from 0 to {last} appears in exactly one block, in order, no gaps, no \
-overlaps.
 - Name each block with a short phrase (at most 8 words) saying what it does, in \
 the notebook's own vocabulary — the column names, variables and domain words the \
 code actually uses.
@@ -67,13 +88,16 @@ code actually uses.
 "Visualize monthly patterns". Avoid opening with Analyze, Explore, Visualize, \
 Process, Handle, Perform or Compute unless the code's own vocabulary uses that \
 word. Never use a bare category like "Data loading" or "Modelling".
-- Prefer blocks a reader would think of as one step. Avoid single-cell blocks \
-unless the cell is a genuine milestone. Avoid blocks longer than about 12 cells.
 - Markdown headings are a hint about the author's intent, not an instruction. \
-Override them where the code disagrees.
+Where the code inside a block disagrees with a heading it contains, name what \
+the code does.
 
-Return ONLY a JSON array, no prose, no code fence:
-[{{"start": 0, "end": 4, "name": "..."}}, ...]
+Return ONLY a JSON array of {count} strings, one per block, in order. No prose, \
+no code fence, no object keys:
+["...", "..."]
+
+Blocks:
+{blocks}
 
 Notebook cells:
 
@@ -83,7 +107,12 @@ Notebook cells:
 
 @dataclass(frozen=True)
 class Segmentation:
-    """A validated partition: parallel ranges and names, in document order."""
+    """Ranges and names, in document order.
+
+    The ranges come from `analysis.segment()` and the names from the model, so
+    this is no longer "a validated partition" — the partition is not the
+    model's to invalidate.
+    """
 
     ranges: tuple[tuple[int, int], ...]
     names: tuple[str, ...]
@@ -109,13 +138,22 @@ def render(cells: Sequence[Cell]) -> str:
     return "\n\n".join(parts)
 
 
-def build_prompt(cells: Sequence[Cell]) -> str:
+def describe(ranges: Sequence[tuple[int, int]]) -> str:
+    """The blocks as the model sees them: one line each, 1-based like the UI."""
+    lines = []
+    for position, (start, end) in enumerate(ranges, 1):
+        span = f"cell {start + 1}" if start == end else f"cells {start + 1}-{end + 1}"
+        lines.append(f"{position}. {span}")
+    return "\n".join(lines)
+
+
+def build_prompt(cells: Sequence[Cell], ranges: Sequence[tuple[int, int]]) -> str:
     if len(cells) > MAX_CELLS:
         raise NotebookTooLarge(len(cells), MAX_CELLS)
-    return PROMPT.format(last=len(cells) - 1, body=render(cells))
+    return PROMPT.format(count=len(ranges), blocks=describe(ranges), body=render(cells))
 
 
-def parse(text: str) -> list[dict]:
+def parse(text: str) -> list[str]:
     """Pull the JSON array out of a response that may carry prose around it.
 
     A non-greedy match would stop at the first `]`, which is any nested list in
@@ -132,46 +170,32 @@ def parse(text: str) -> list[dict]:
         raise SegmentationRejected([f"The model's JSON was malformed: {error}."]) from error
     if not isinstance(payload, list):
         raise SegmentationRejected(["The model did not return a JSON array."])
+    if not all(isinstance(name, str) for name in payload):
+        raise SegmentationRejected(["The model returned something other than a list of names."])
     return payload
 
 
-def validate(blocks: Sequence[dict], last: int) -> list[str]:
+def validate(names: Sequence[str], expected: int) -> list[str]:
     """The check that runs before anything is rendered (spec §4.3).
 
-    Ported from the probe. Every index 0..last covered exactly once, all indices
-    in range, blocks in document order, names non-empty. A response failing any
-    of these is discarded — three probe runs across two notebooks and two models
-    each produced a valid partition first try, so this should be rare, but
-    "rare" is why it is handled rather than assumed away.
+    Much smaller than it was. It used to prove the model's answer partitioned
+    the notebook — every index covered exactly once, in order, no gaps or
+    overlaps — because a map that skips cells is worse than no map. The blocks
+    are no longer the model's to get wrong, so the only thing left to check is
+    that it returned one name per block.
+
+    An empty name is a rejection rather than a silent gap: the fallback renders
+    the cell range when a name is absent, and a blank string would render as
+    a block that looks named and says nothing.
     """
     problems: list[str] = []
-    covered: list[int] = []
-    for block in blocks:
-        start, end = block.get("start"), block.get("end")
-        if not isinstance(start, int) or not isinstance(end, int) \
-                or isinstance(start, bool) or isinstance(end, bool):
-            problems.append(f"non-integer cell range: {start!r}–{end!r}")
-            continue
-        if not 0 <= start <= end <= last:
-            problems.append(f"out of range: {start}–{end}")
-            continue
-        covered += list(range(start, end + 1))
-        name = block.get("name")
-        if not isinstance(name, str) or not name.strip():
-            problems.append(f"block {start}–{end} has no name")
-    seen = set(covered)
-    if len(covered) != len(seen):
-        counts = {index: covered.count(index) for index in seen}
-        dupes = sorted(index for index, count in counts.items() if count > 1)
-        problems.append(f"overlapping cells: {dupes[:10]}")
-    missing = sorted(set(range(last + 1)) - seen)
-    if missing:
-        problems.append(f"uncovered cells: {missing[:10]}")
-    ordered = sorted(blocks, key=lambda block: block.get("start", 0))
-    if list(blocks) != ordered:
-        problems.append("blocks not in document order")
-    if not blocks:
-        problems.append("no blocks returned")
+    if len(names) != expected:
+        problems.append(
+            f"The model returned {len(names)} names for {expected} blocks."
+        )
+    blank = [i for i, name in enumerate(names) if not name.strip()]
+    if blank:
+        problems.append(f"Blank names at positions: {blank[:10]}.")
     return problems
 
 
@@ -179,28 +203,32 @@ def segment(
     cells: Sequence[Cell], adapter, *, model: str | None = DEFAULT_MODEL,
     cancel_event: Event | None = None, timeout: float = TIMEOUT_SECONDS,
 ) -> Segmentation:
-    """Ask the model to partition the notebook, and refuse anything that is not.
+    """Draw the blocks here, and ask the model only what to call them.
 
-    Raises `SegmentationRejected` when the answer is not a valid partition, and
-    lets the adapter's own errors — CLI missing, unsupported version, timeout —
-    through unchanged so the caller can tell "no model available" apart from
-    "the model answered badly". They lead to different things being said.
+    Raises `SegmentationRejected` when the answer is not one usable name per
+    block, and lets the adapter's own errors — CLI missing, unsupported
+    version, timeout — through unchanged so the caller can tell "no model
+    available" apart from "the model answered badly". They lead to different
+    things being said.
     """
-    prompt = build_prompt(cells)
+    ranges = [tuple(span) for span in analysis.segment(cells)]
+    if not ranges:
+        return Segmentation(ranges=(), names=())
+    prompt = build_prompt(cells, ranges)
     result = adapter.run_prompt(
         prompt, timeout=timeout, cancel_event=cancel_event or Event(), model=model,
     )
-    blocks = parse(result.final_output)
-    problems = validate(blocks, len(cells) - 1)
+    names = parse(result.final_output)
+    problems = validate(names, len(ranges))
     if problems:
         raise SegmentationRejected(problems)
     return Segmentation(
-        ranges=tuple((block["start"], block["end"]) for block in blocks),
-        names=tuple(block["name"].strip()[:NAME_LIMIT] for block in blocks),
+        ranges=tuple(ranges),
+        names=tuple(name.strip()[:NAME_LIMIT] for name in names),
     )
 
 
 __all__ = [
     "AgentAdapterError", "DEFAULT_MODEL", "MAX_CELLS", "PROMPT", "Segmentation",
-    "build_prompt", "parse", "render", "segment", "validate",
+    "build_prompt", "describe", "parse", "render", "segment", "validate",
 ]

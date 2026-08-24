@@ -345,3 +345,71 @@ def test_produces_never_leaks_a_function_local_on_the_fixtures(name):
     locals_in_defs = {"S", "I", "R", "t", "y"}
     for block in analysis.fallback_blocks(cells):
         assert not set(block.produces) & locals_in_defs
+
+
+# ------------------------------------------------------- the partition itself
+#
+# `segmenter.validate()` used to prove every cell was covered exactly once,
+# adversarially, because the model could return anything. The model no longer
+# draws boundaries, so `segment()` is the sole guarantor and nothing downstream
+# re-checks it. These are stricter than that validator was, and they are here
+# rather than there for that reason.
+
+
+def _is_partition(blocks, count: int) -> bool:
+    covered = [i for block in blocks for i in range(block[0], block[1] + 1)]
+    return covered == list(range(count))
+
+
+@pytest.mark.parametrize("name", ["messy-exploration.ipynb", "simulation-sweep.ipynb"])
+def test_segment_always_partitions_the_fixtures(name):
+    cells = load(name)
+    assert _is_partition(analysis.segment(cells), len(cells))
+
+
+@pytest.mark.parametrize("count", [0, 1, 2, 3, 5, 6, 7, 13, 40, 97])
+def test_segment_always_partitions_a_uniform_notebook(count):
+    """Sizes around COHESION_WINDOW and MAX_BLOCK, where the windowing, the
+    oversize split and the singleton absorb all change behaviour."""
+    cells = analysis.read_cells({"cells": [
+        {"cell_type": "code", "source": [f"x{i} = {i}\n"], "execution_count": None}
+        for i in range(count)
+    ]})
+    assert _is_partition(analysis.segment(cells), count)
+
+
+def test_segment_partitions_a_notebook_of_only_markdown():
+    """No identifiers anywhere, so every cohesion score is zero — the case that
+    divides by an empty union if the guard is missing."""
+    cells = analysis.read_cells({"cells": [
+        {"cell_type": "markdown", "source": [f"some prose {i}\n"]} for i in range(30)
+    ]})
+    assert _is_partition(analysis.segment(cells), 30)
+
+
+def test_segment_partitions_when_every_cell_is_identical():
+    """Perfectly cohesive: no valley anywhere, so the only cuts are the ones
+    the size rule forces."""
+    cells = analysis.read_cells({"cells": [
+        {"cell_type": "code", "source": ["df = df.dropna()\n"], "execution_count": 1}
+        for _ in range(50)
+    ]})
+    blocks = analysis.segment(cells)
+    assert _is_partition(blocks, 50)
+    assert max(end - start + 1 for start, end in blocks) <= analysis.MAX_BLOCK
+
+
+def test_segment_partitions_unparsable_source():
+    """A cell that does not parse contributes no identifiers; it must still be
+    covered exactly once."""
+    cells = analysis.read_cells({"cells": [
+        {"cell_type": "code", "source": ["this is not python(((\n"], "execution_count": None}
+        for _ in range(20)
+    ]})
+    assert _is_partition(analysis.segment(cells), 20)
+
+
+def test_segment_never_returns_an_empty_or_reversed_block():
+    for name in ("messy-exploration.ipynb", "simulation-sweep.ipynb"):
+        for start, end in analysis.segment(load(name)):
+            assert start <= end, name
