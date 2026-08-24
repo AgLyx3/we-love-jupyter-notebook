@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
@@ -46,8 +47,23 @@ REQUEST_TIMEOUT_SECONDS = 30.0
 EXECUTION_POLL_TIMEOUT_SECONDS = 45.0
 
 
-class ToolFailure(RuntimeError):
-    """A failure worth showing the caller, phrased as what to do about it."""
+class ToolFailure(ToolError):
+    """A failure worth showing the caller, phrased as what to do about it.
+
+    A subclass of MCP's `ToolError` so the message actually reaches the caller.
+    From mcp 2.1.0 the server draws a line it did not draw before: an
+    *anticipated* failure — `ToolError` — keeps its own text after the
+    `Error executing tool <name>` prefix, and anything else is treated as a
+    crash and its message suppressed, so nothing from an unexpected exception
+    leaks to the client.
+
+    Every message raised as this class is written for the agent on the other
+    end: which path was refused, that a revision moved, what to do instead. It
+    is anticipated by definition, and saying so in the type is what keeps it
+    deliverable. Under mcp 2.0 these arrived only because that version appended
+    *every* exception's text — including genuine crashes, which is the leak
+    2.1.0 closed.
+    """
 
 
 class EditorSession:

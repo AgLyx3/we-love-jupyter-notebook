@@ -379,3 +379,21 @@ def test_a_delete_moves_the_revision_so_a_stale_edit_is_refused(editor, workspac
 
     after = call(server, "delete_cell", cell_id="cell1")
     assert after["revision"] > opened["revision"]
+
+
+def test_a_refusal_is_an_anticipated_failure_not_a_crash():
+    """#42: the base class is the contract, not an implementation detail.
+
+    From mcp 2.1.0 the server delivers a `ToolError`'s own text to the caller
+    and suppresses everything else as a crash — deliberately, so an unexpected
+    exception cannot leak. Every `ToolFailure` here is written *for* the agent
+    on the other end (which path was refused, that the revision moved, what to
+    do instead), so it has to be on the anticipated side of that line.
+
+    Asserted directly because the failure mode is silent: change the base back
+    and the tools still work, still refuse, still return an error — the reason
+    just stops arriving, and only the three end-to-end tests below would say so.
+    """
+    from backend.app.mcp.server import ToolFailure
+
+    assert issubclass(ToolFailure, ToolError)
