@@ -24,6 +24,8 @@ second-class-but-fine experience.
 
 from __future__ import annotations
 
+from statistics import mean
+
 import ast
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -340,33 +342,156 @@ def annotate(
     return tuple(blocks)
 
 
-def segment(cells: Sequence[Cell]) -> list[tuple[int, int]]:
-    """Deterministic boundaries: markdown headings if any, else milestone calls.
+#: The research doc's own size rule, now enforced rather than stated.
+MAX_BLOCK = 12
+MIN_BLOCK = 2
+#: Cells either side of a seam whose vocabulary is compared.
+COHESION_WINDOW = 3
 
-    The fallback, and measured as degraded (research §13.1): on a notebook with
-    no headings and one `read_csv` this puts 79% of the cells in one block. It
-    exists so the panel still works with no CLI, not as an alternative to the
-    model pass.
+
+def _terms(cell: Cell) -> set[str]:
+    """What a cell is *about*, for the purpose of comparing two of them.
+
+    Identifiers, not tokens. Two cells that both say `df` and `revenue` are
+    working on the same thing; two that both say `for` and `print` are not, and
+    a bag-of-words scores those the same.
     """
-    if not cells:
-        return []
-    starts = [0]
-    for cell in cells[1:]:
-        if cell.is_heading:
-            starts.append(cell.index)
-        elif cell.milestone and cell.milestone != "evaluate":
-            previous = [
-                earlier for earlier in cells[: cell.index]
-                if earlier.is_code and earlier.milestone
-            ]
-            if not previous or previous[-1].milestone != cell.milestone:
-                starts.append(cell.index)
-    ordered = sorted(set(starts))
-    last = cells[-1].index
+    if not cell.is_code:
+        return set()
+    # binds | reads | imports, and deliberately not `defines`: a def's *name*
+    # is already in binds, and adding it twice weights a definition cell above
+    # the cells that use it. The probe this was ported from has a `calls`
+    # field too; every name it records is also added to `reads`, so leaving it
+    # out here changes nothing. Verified block-for-block against the evaluated
+    # strategy on all nine corpus notebooks.
+    return set(cell.binds) | set(cell.reads) | set(cell.imports)
+
+
+def _spans(starts: Sequence[int], first: int, last: int) -> list[tuple[int, int]]:
+    ordered = sorted({start for start in starts if first <= start <= last} | {first})
     return [
         (start, (ordered[i + 1] - 1) if i + 1 < len(ordered) else last)
         for i, start in enumerate(ordered)
     ]
+
+
+def _split_oversized(
+    blocks: Sequence[tuple[int, int]], depths: Sequence[float], offset: int,
+) -> list[tuple[int, int]]:
+    """Halve anything over MAX_BLOCK at its weakest internal seam.
+
+    The size rule is the panel's own; a segmenter that states it and then
+    returns a 99-cell block has not applied it.
+    """
+    out: list[tuple[int, int]] = []
+    queue = list(blocks)
+    while queue:
+        low, high = queue.pop(0)
+        if high - low + 1 <= MAX_BLOCK:
+            out.append((low, high))
+            continue
+        inner = range(low + MIN_BLOCK, high - MIN_BLOCK + 2)
+        if not inner:
+            out.append((low, high))
+            continue
+        cut = min(inner, key=lambda i: depths[i - offset - 1]) if depths else low + (high - low + 1) // 2
+        queue = [(low, cut - 1), (cut, high)] + queue
+    return sorted(out)
+
+
+def _absorb_singletons(
+    blocks: Sequence[tuple[int, int]], cells: Sequence[Cell],
+) -> list[tuple[int, int]]:
+    """Fold a lone cell into the neighbour it shares more vocabulary with.
+
+    A one-cell block is worth a rail line only when the cell is a milestone;
+    otherwise it costs a line and says nothing.
+    """
+    by_index = {cell.index: cell for cell in cells}
+    out = list(blocks)
+    changed = True
+    while changed and len(out) > 1:
+        changed = False
+        for i, (low, high) in enumerate(out):
+            if high - low + 1 >= MIN_BLOCK:
+                continue
+            cell = by_index.get(low)
+            if cell is not None and cell.is_code and cell.milestone:
+                continue
+            if i == 0:
+                out[1] = (out[0][0], out[1][1]); out.pop(0)
+            elif i == len(out) - 1:
+                out[-2] = (out[-2][0], out[-1][1]); out.pop()
+            else:
+                mine = _terms(by_index[low]) if low in by_index else set()
+                before = set().union(*(_terms(by_index[j]) for j in range(*out[i - 1]) if j in by_index)) or set()
+                after = set().union(*(_terms(by_index[j]) for j in range(*out[i + 1]) if j in by_index)) or set()
+                if len(mine & before) >= len(mine & after):
+                    out[i - 1] = (out[i - 1][0], high); out.pop(i)
+                else:
+                    out[i + 1] = (low, out[i + 1][1]); out.pop(i)
+            changed = True
+            break
+    return out
+
+
+def segment(cells: Sequence[Cell]) -> list[tuple[int, int]]:
+    """Deterministic boundaries: cut where the notebook's vocabulary changes.
+
+    Replaces the heading-and-milestone pass this used to be. That version was
+    measured (docs/plans/probes/corpus/RESULTS.md) as a heading *follower* — 71
+    to 90% of its boundaries sat on a markdown heading, and with headings
+    removed it collapsed to three to five blocks regardless of length, putting
+    154 cells in five blocks with one of 99. It cost a reader 21.5 cells to find
+    something against 9.3 for this, and lost to cutting blindly every eight
+    cells.
+
+    This compares the identifiers used in the `COHESION_WINDOW` cells before
+    each seam with those after it, and cuts at the valleys — gaps whose depth
+    below the local peaks clears the mean, which adapts per notebook instead of
+    hard-coding a similarity nobody can tune. Headings are not consulted at
+    all — which is the point: the pass this replaces was 71-90% heading-driven,
+    and the notebooks a map is *for* are the ones without them.
+
+    On the corpus this is indistinguishable from what the model returns
+    (paired Δ 0.0 cells, 95% CI [-1.5, +2.2]), which is why the model call is
+    spent on naming instead.
+    """
+    if not cells:
+        return []
+    first, last = cells[0].index, cells[-1].index
+    if len(cells) < 2 * COHESION_WINDOW:
+        return [(first, last)]
+
+    terms = [_terms(cell) for cell in cells]
+    scores: list[float] = []
+    for gap in range(len(cells) - 1):
+        before: set[str] = set().union(*terms[max(0, gap - COHESION_WINDOW + 1):gap + 1]) or set()
+        after: set[str] = set().union(*terms[gap + 1:gap + 1 + COHESION_WINDOW]) or set()
+        union = before | after
+        scores.append(len(before & after) / len(union) if union else 0.0)
+
+    depths: list[float] = []
+    for gap, score in enumerate(scores):
+        left = score
+        for i in range(gap - 1, -1, -1):
+            if scores[i] < left:
+                break
+            left = scores[i]
+        right = score
+        for i in range(gap + 1, len(scores)):
+            if scores[i] < right:
+                break
+            right = scores[i]
+        depths.append((left - score) + (right - score))
+
+    positive = [depth for depth in depths if depth > 0]
+    if not positive:
+        return _split_oversized([(first, last)], depths, first)
+    cut = mean(positive)
+    starts = [first] + [cells[gap + 1].index for gap, depth in enumerate(depths) if depth >= cut]
+    blocks = _split_oversized(_spans(starts, first, last), depths, first)
+    return _absorb_singletons(blocks, cells)
 
 
 def fallback_blocks(cells: Sequence[Cell]) -> tuple[Block, ...]:
