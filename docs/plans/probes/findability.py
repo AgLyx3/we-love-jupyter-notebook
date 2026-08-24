@@ -46,7 +46,7 @@ HERE = pathlib.Path(__file__).parent
 CORPUS = HERE / "corpus"
 CACHE = CORPUS / "findability.json"
 
-DEFAULT_NOTEBOOKS = ["madewithml", "messy-adspend", "messy-exploration"]
+DEFAULT_NOTEBOOKS: list[str] | None = None   # None = every notebook in the corpus
 DEFAULT_STRATEGIES = ["headings", "fixed8", "cohesion", "hybrid"]
 
 QUESTION_PROMPT = """Below is a Jupyter notebook, one cell per entry.
@@ -189,6 +189,10 @@ def score(cells, blocks, names, questions: dict[int, str], model) -> dict:
         "accuracy": hits / len(ordered),
         "cells_to_read": statistics.mean(sizes) if sizes else None,
         "cost": statistics.mean(costs),
+        # Per question, keyed by target cell. Every strategy answers the same
+        # questions, so the comparison that matters is paired — two independent
+        # means throw away exactly the variance that pairing removes.
+        "per_question": {str(t): c for t, c in zip(ordered, costs)},
         "total_cells": total,
         "rail": len(blocks),
         "answers": {str(t): int(answers.get(str(i), -1)) for i, t in enumerate(ordered, 1)},
@@ -198,7 +202,7 @@ def score(cells, blocks, names, questions: dict[int, str], model) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--questions", type=int, default=8)
+    parser.add_argument("--questions", type=int, default=16)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--only", default=None)
     parser.add_argument("--model-name", default=None)
@@ -210,7 +214,8 @@ def main() -> None:
     paths |= {e["id"]: (CORPUS / e["path"]).resolve() for e in corpus["local"]}
     recorded = {r["notebook"]: r for r in json.loads((CORPUS / "baseline.json").read_text())}
 
-    wanted = [args.only] if args.only else DEFAULT_NOTEBOOKS
+    every = [e["id"] for e in corpus["remote"]] + [e["id"] for e in corpus["local"]]
+    wanted = [args.only] if args.only else (DEFAULT_NOTEBOOKS or every)
     cache = json.loads(CACHE.read_text()) if CACHE.exists() else {}
     names = args.strategies.split(",")
 

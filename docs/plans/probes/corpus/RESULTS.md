@@ -355,3 +355,90 @@ of what a reader pays.
   not change the conclusion, but it would matter for a closer race.
 - **One run, one model, one seed.** The seed is fixed so the question set is
   stable; nothing is averaged over resamples.
+
+---
+
+# Findability at scale — 2026-08-23
+
+`python3 docs/plans/probes/findability.py --questions 16`
+`python3 docs/plans/probes/significance.py`
+
+The previous round said the gap between the alternatives was "not resolved" at
+24 questions per strategy. This is the same experiment at **138 questions** —
+all nine notebooks, sixteen questions each — with the comparison done properly.
+
+Every strategy answers the *same* questions, so the statistic is the **paired**
+per-question difference, not two independent means: question difficulty
+dominates the variance (a question whose answer sits in a 99-cell block is
+expensive under every map) and pairing removes exactly that. The bootstrap
+resamples **notebooks, not questions** — sixteen questions from one notebook
+share its map, its length and its author's headings, so treating 138 questions
+as 138 independent samples would manufacture significance. Clustering roughly
+doubles the interval.
+
+```
+mean cost (cells a reader pays)        paired Δ, 95% CI over notebooks
+
+  headings   21.5                  headings vs fixed8    +10.3  [ +0.7, +24.4]  fixed8 cheaper
+  fixed8     11.2                  headings vs cohesion  +12.2  [ +0.9, +27.0]  cohesion cheaper
+  cohesion    9.3                  headings vs hybrid    +12.5  [ +1.8, +27.1]  hybrid cheaper
+  hybrid      9.1                  headings vs model     +12.5  [ +2.1, +26.8]  model cheaper
+  model       9.0                  fixed8   vs cohesion   +1.9  [ -1.1,  +5.0]  not resolved
+                                   fixed8   vs hybrid     +2.2  [ -0.4,  +4.4]  not resolved
+                                   fixed8   vs model      +2.2  [ +0.3,  +4.5]  model cheaper
+                                   cohesion vs hybrid     +0.3  [ -1.0,  +1.5]  not resolved
+                                   cohesion vs model      +0.3  [ -1.3,  +2.6]  not resolved
+                                   hybrid   vs model       0.0  [ -1.5,  +2.2]  not resolved
+```
+
+## 1. The shipped pass is out, conclusively
+
+Worse than every alternative, every interval strictly positive, by 10–12 cells.
+Including worse than cutting blindly every eight cells. This is no longer a
+suggestive mean; it is settled.
+
+## 2. cohesion and hybrid are the same thing
+
+Δ 0.3 cells, CI [-1.0, +1.5]. At six times the data the difference did not grow
+— it shrank. This is not "needs more evidence"; it is a measured equivalence,
+and the interval is tight enough (±1.25 cells) to say so.
+
+Pick on other grounds. **`cohesion`** is the recommendation: it is about forty
+lines, depends on nothing but the cells' own identifiers, and is the only
+candidate that cannot be fooled by headings that lie — the one corpus gap still
+open. `hybrid` is defensible on the same evidence and is marginally better on
+notebooks whose headings are good.
+
+## 3. The model's *segmentation* buys nothing
+
+**Δ 0.0 cells, CI [-1.5, +2.2], against a free strategy.**
+
+This is the result worth acting on. Every map in this table — including the
+model's — is named by the same prompt, so the comparison isolates *where the
+boundaries go* from *what the blocks are called*. On boundaries, a forty-line
+lexical heuristic matches the model call.
+
+It does not follow that the model call is pointless: naming still needs one, and
+the deterministic fallback still cannot name. What it means is that the call
+should be spent on naming rather than on segmenting, and that the free map a
+user sees before pressing Build map can be genuinely useful rather than the
+5-blocks-for-154-cells it is today.
+
+## 4. Two things that argue against over-reading this
+
+- **Ordering is not perfectly transitive.** `fixed8` loses to `model`
+  (CI [+0.3, +4.5]) but is not separated from `cohesion` or `hybrid`. With
+  overlapping intervals that is expected, and it is a reminder that "not
+  resolved" is not "equal" for the pairs where the interval is wide.
+- **The model's own map is the weakest link on the longest notebook.**
+  `madewithml`: 12% found, cost 18.3 — worse than three of the four free
+  strategies on that notebook. Consistent with the 25% seen at 8 questions, so
+  it is not a sampling artefact. Whatever is wrong there is in the model's
+  boundaries, and the old boundary-F1 metric could never have seen it because
+  the model *was* the reference.
+
+## Recommendation
+
+Replace `extract.segment()` with `cohesion`. Keep the model call for naming.
+Re-run this file after the change; the corpus and the harness are the point, not
+this particular table.
