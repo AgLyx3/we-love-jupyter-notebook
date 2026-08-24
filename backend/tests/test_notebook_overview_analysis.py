@@ -274,7 +274,7 @@ def test_messy_exploration_matches_the_measured_shape():
     assert analysis.call_sites(cells) == {}
     assert analysis.is_out_of_order(cells) is True
     blocks = analysis.fallback_blocks(cells)
-    assert len(blocks) == 12
+    assert len(blocks) == 11
     # Nothing over the size rule the panel states for itself.
     assert max(block.end - block.start + 1 for block in blocks) <= analysis.MAX_BLOCK
 
@@ -327,18 +327,7 @@ def test_fallback_leaves_names_empty_rather_than_inventing_them():
     assert all(block.name == "" for block in blocks)
 
 
-@pytest.mark.parametrize("name", [
-    "messy-exploration.ipynb",
-    pytest.param("simulation-sweep.ipynb", marks=pytest.mark.xfail(
-        strict=True,
-        reason="issue #37: collect() counts a nested function's own parameters as "
-               "module-level reads, so the block holding cell 10 advertises producing "
-               "`t` for cell 14's `def rhs(t, y)`. Latent, not caused by the segmenter "
-               "change — which names leak depends on where the boundaries fall, and the "
-               "old heading pass put cells 4-18 in one block so nothing later read `t`. "
-               "Marked rather than weakened: the messy-exploration case still runs, and "
-               "this goes green the moment #37 is fixed.")),
-])
+@pytest.mark.parametrize("name", ["messy-exploration.ipynb", "simulation-sweep.ipynb"])
 def test_produces_never_leaks_a_function_local_on_the_fixtures(name):
     """The end-to-end form of bug 1, on the notebooks that exposed it."""
     cells = load(name)
@@ -413,3 +402,45 @@ def test_segment_never_returns_an_empty_or_reversed_block():
     for name in ("messy-exploration.ipynb", "simulation-sweep.ipynb"):
         for start, end in analysis.segment(load(name)):
             assert start <= end, name
+
+
+def test_a_nested_scopes_own_names_are_not_module_reads():
+    """#37: descending into a nested scope for reads is right — a function
+    reading a module-level `df` really does read it — but only for names that
+    scope does not bind itself."""
+    cell, = analysis.read_cells({"cells": [{
+        "cell_type": "code",
+        "source": [
+            "def outer(alpha):\n",
+            "    def inner(t, y):\n",
+            "        local = t + y + alpha\n",
+            "        return local + module_level\n",
+            "    return inner\n",
+        ],
+        "execution_count": None,
+    }]})
+    # The free variable is a genuine read.
+    assert "module_level" in cell.reads
+    # Parameters and locals of the nested scopes are not.
+    for shadowed in ("t", "y", "alpha", "local"):
+        assert shadowed not in cell.reads, shadowed
+
+
+def test_a_comprehension_target_is_not_a_module_read():
+    cell, = analysis.read_cells({"cells": [{
+        "cell_type": "code",
+        "source": ["totals = {key: source[key] for key in keys}\n"],
+        "execution_count": None,
+    }]})
+    assert {"source", "keys"} <= cell.reads
+    assert "key" not in cell.reads
+
+
+def test_a_function_that_rebinds_an_outer_name_does_not_read_it():
+    """Python makes it a local, so the module binding is not read at all."""
+    cell, = analysis.read_cells({"cells": [{
+        "cell_type": "code",
+        "source": ["def f():\n", "    df = 1\n", "    return df\n"],
+        "execution_count": None,
+    }]})
+    assert "df" not in cell.reads

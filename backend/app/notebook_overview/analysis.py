@@ -142,7 +142,33 @@ def _collect_names(cell: Cell, tree: ast.Module) -> None:
     for *reads*, never for *binds*.
     """
 
-    def collect(node: ast.AST, *, top: bool) -> None:
+    def scope_names(node: ast.AST) -> set[str]:
+        """Everything a nested scope binds for itself: parameters, locals,
+        comprehension targets.
+
+        Conservative on purpose — it walks deeper nested scopes too, so an
+        inner function's local also shadows. Over-shadowing costs a `produces`
+        entry that would have been right; under-shadowing advertises a name the
+        block does not produce, which is the bug this exists for.
+        """
+        names: set[str] = set()
+        args = getattr(node, "args", None)
+        if isinstance(args, ast.arguments):
+            for group in (args.posonlyargs, args.args, args.kwonlyargs):
+                names |= {argument.arg for argument in group}
+            for extra in (args.vararg, args.kwarg):
+                if extra is not None:
+                    names.add(extra.arg)
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
+                names.add(sub.id)
+            elif isinstance(sub, ast.comprehension):
+                for target in ast.walk(sub.target):
+                    if isinstance(target, ast.Name):
+                        names.add(target.id)
+        return names
+
+    def collect(node: ast.AST, *, top: bool, shadowed: frozenset[str] = frozenset()) -> None:
         for child in ast.iter_child_nodes(node):
             # Bug 3: comprehensions carry their own scope in Python 3, so
             # `{r0: f(s) for r0, s in ...}` binds nothing at module level.
@@ -156,12 +182,21 @@ def _collect_names(cell: Cell, tree: ast.Module) -> None:
                 if isinstance(child.ctx, ast.Store):
                     if top:
                         cell.binds.add(child.id)
-                else:
+                elif child.id not in shadowed:
+                    # Bug 4 (#37): descending into a nested scope for reads is
+                    # right — a function reading a module-level `df` really does
+                    # read it — but only for names that scope does not bind
+                    # itself. `def rhs(t, y)` reading `t` reads its own
+                    # parameter, and counting it made the block holding an
+                    # unrelated module-level `t` advertise producing it.
                     cell.reads.add(child.id)
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and top:
                 cell.defines.append(child.name)
                 cell.binds.add(child.name)
-            collect(child, top=top and not nested)
+            collect(
+                child, top=top and not nested,
+                shadowed=(shadowed | scope_names(child)) if nested else shadowed,
+            )
 
     collect(tree, top=True)
 
