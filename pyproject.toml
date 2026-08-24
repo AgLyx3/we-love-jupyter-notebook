@@ -1,12 +1,32 @@
 [build-system]
-requires = ["setuptools>=68"]
+# 77 is the floor for PEP 639: the `license = "MIT"` expression and
+# `license-files` below are errors on anything older.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "jupyter-notebook-ai-adapter"
+# The distribution is named for the command it installs, which is also the name
+# a user types into `claude mcp add`. One name for one thing: the wheel, the
+# console script and the client entry all read the same.
+name = "notebook-editor-mcp"
 version = "0.1.0"
-description = "Local notebook editor with scoped AI agent integration"
+description = "Local Jupyter notebook editor an MCP client drives, with a browser tab watching the same session"
+readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "AgLyx3" }]
+keywords = ["mcp", "jupyter", "notebook", "model-context-protocol", "claude"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Framework :: Jupyter",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Code Generators",
+]
 dependencies = [
   "fastapi>=0.115,<1",
   "nbformat>=5.10,<6",
@@ -15,6 +35,11 @@ dependencies = [
   "python-multipart>=0.0.9,<1",
   "uvicorn[standard]>=0.30,<1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/AgLyx3/we-love-jupyter-notebook"
+Repository = "https://github.com/AgLyx3/we-love-jupyter-notebook"
+Issues = "https://github.com/AgLyx3/we-love-jupyter-notebook/issues"
 
 [project.optional-dependencies]
 # The MCP server is optional: the editor runs perfectly well without it, and

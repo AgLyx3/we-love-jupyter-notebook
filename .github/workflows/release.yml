@@ -1,0 +1,78 @@
+# Publish to PyPI when a version tag is pushed.
+#
+# One-time setup on PyPI, before the first tag will land: register this
+# repository as a trusted publisher for the `notebook-editor-mcp` project
+# (PyPI → Publishing → Add a pending publisher), with workflow `release.yml`
+# and environment `pypi`. Trusted publishing mints a short-lived token per run,
+# so there is no API token in repository secrets to leak or rotate.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # So a release can be rehearsed — build and smoke-test, publish skipped —
+  # without inventing a throwaway tag.
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      # Order is load-bearing: the SPA is built *into* the package directory,
+      # and a wheel built before this step is a wheel with no user interface.
+      - name: Build the frontend into the package
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build the wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --wheel
+
+      # A tag that disagrees with pyproject.toml publishes a version nobody can
+      # refer to. Cheaper to stop here than to yank a release.
+      - name: Check the tag matches the packaged version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          packaged=$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          tagged=${GITHUB_REF_NAME#v}
+          if [ "$packaged" != "$tagged" ]; then
+            echo "tag $GITHUB_REF_NAME does not match pyproject version $packaged" >&2
+            exit 1
+          fi
+          echo "tag and packaged version agree: $packaged"
+
+      - name: Smoke-test the wheel
+        run: python scripts/smoke_wheel.py dist/*.whl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: dist/*.whl
+
+  publish:
+    needs: build
+    # Only a tag publishes. A manual run stops after the build above, which is
+    # the rehearsal this workflow is also for.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Required for trusted publishing; nothing else in this job needs a token.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheel
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
