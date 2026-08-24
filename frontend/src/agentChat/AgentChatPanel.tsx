@@ -158,10 +158,27 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
         {keptCount > 0 && turn.undoEligible && !active && <p className="turn-undo-note" role="note">Undoing the turn also reverses the {keptCount} change{keptCount === 1 ? "" : "s"} you kept.</p>}
         <div className="turn-actions">{active && <button onClick={onCancel}><Icon name="stop" /> Cancel turn</button>}{turn.undoEligible && !active && <button disabled={mutationsDisabled} onClick={onUndo}><Icon name="undo" /> Undo entire turn</button>}</div>
       </div>}
-      {operation && <div className={`execution-status ${operation.error ? "has-error" : ""}`}><span>Execution: {operation.state.replaceAll("_", " ")}</span>{operation.error && <p>{operation.error.message}</p>}{operation.attempts.filter((attempt) => attempt.error).map((attempt) => <p key={attempt.executionAttemptId}>Cell {attempt.cellIndex + 1}: {attempt.error!.message}</p>)}{operation.attempts.filter((attempt) => attempt.outputsTruncated).map((attempt) => <p key={`${attempt.executionAttemptId}-output-truncated`}>Cell {attempt.cellIndex + 1}: Retained execution output was truncated.</p>)}</div>}
-      {operation && operation.kind === "manual" && !["completed", "failed", "cancelled", "validation_incomplete", "timed_out"].includes(operation.state) && manualAttempt && <button disabled={!manualCorrelated} className="manual-cancel" onClick={() => onDecision(manualAttempt, "cancel")}><Icon name="stop" /> Cancel run</button>}
-      {operation && awaiting && <RiskyExecutionDialog operation={operation} attempt={awaiting} busy={busy} onDecision={(decision) => onDecision(awaiting, decision)} />}
     </section>}
+    {/* Cell execution is not a conversation entry. Left in the scrolling
+        conversation it landed wherever the scroll happened to be — most
+        awkwardly in the middle of the "No agent turn yet" empty state, which
+        was simultaneously telling the user nothing was happening. It is
+        notebook status, so it gets a fixed place: pinned above the composer,
+        visible on both tabs and at any scroll position.
+
+        The risky-execution gate moves with it, and that part is a fix rather
+        than a tidy-up: the Agent/History tabs put the conversation behind a
+        tab, so an approval prompt rendered inside it was invisible from the
+        History tab — a gate the user could not answer. It is `role="alertdialog"`
+        and it must not depend on which tab is showing.
+
+        aria-live is re-declared here because this content just left the
+        conversation's live region and still needs announcing. */}
+    {operation && <div className="execution-strip" aria-live="polite">
+      <div className={`execution-status ${operation.error ? "has-error" : ""}`}><span>Execution: {operation.state.replaceAll("_", " ")}</span>{operation.error && <p>{operation.error.message}</p>}{operation.attempts.filter((attempt) => attempt.error).map((attempt) => <p key={attempt.executionAttemptId}>Cell {attempt.cellIndex + 1}: {attempt.error!.message}</p>)}{operation.attempts.filter((attempt) => attempt.outputsTruncated).map((attempt) => <p key={`${attempt.executionAttemptId}-output-truncated`}>Cell {attempt.cellIndex + 1}: Retained execution output was truncated.</p>)}</div>
+      {operation.kind === "manual" && !["completed", "failed", "cancelled", "validation_incomplete", "timed_out"].includes(operation.state) && manualAttempt && <button disabled={!manualCorrelated} className="manual-cancel" onClick={() => onDecision(manualAttempt, "cancel")}><Icon name="stop" /> Cancel run</button>}
+      {awaiting && <RiskyExecutionDialog operation={operation} attempt={awaiting} busy={busy} onDecision={(decision) => onDecision(awaiting, decision)} />}
+    </div>}
     <form className="prompt-form" onSubmit={(event) => { event.preventDefault(); submitPrompt(); }}>
       <label htmlFor="agent-prompt">Agent instruction</label>
       {attachments.length > 0 && <div className="chat-attachments" aria-label="Referenced selections">{attachments.map((attachment) => <span className={`attachment-chip ${attachment.kind}`} key={attachment.id}>

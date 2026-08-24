@@ -298,6 +298,16 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   await expect(dialog).toBeVisible({ timeout: 45_000 });
   await assertOverlayLayout(page, ".risk-dialog", ".risk-actions button");
   await expect(dialog).toContainText("Reads environment variables that may contain secrets");
+  // The approval gate must not depend on which agent-panel tab is showing.
+  // It used to live inside the conversation, which the Agent/History tabs put
+  // behind a tab — so switching to History hid a prompt the turn is blocked on
+  // and the user cannot answer. Only agent-downstream execution reaches this
+  // gate (manual run-all passes prompt_for_risk=False), and that is exactly
+  // when someone might be reading History.
+  await page.getByRole("tab", { name: "History" }).click();
+  await expect(dialog).toBeVisible();
+  await page.getByRole("tab", { name: "Agent" }).click();
+  await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Approve and run" }).click();
   await waitForTurn(page, /completed/);
   await expect(page.getByLabel("Cell output").filter({ hasText: "Total: 30" })).toBeVisible();
