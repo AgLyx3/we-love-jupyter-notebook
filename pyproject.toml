@@ -34,6 +34,12 @@ dependencies = [
   "ipykernel>=6.29,<8",
   "python-multipart>=0.0.9,<1",
   "uvicorn[standard]>=0.30,<1",
+  # `backend.app.mcp.server` imports both at module scope, and that module is
+  # the console script this distribution is named for. Leaving them optional
+  # meant the documented `uvx`/`pipx` install produced a command that died on
+  # import before it could say anything.
+  "mcp>=2,<3",
+  "httpx>=0.27,<1",
 ]
 
 [project.urls]
@@ -42,12 +48,10 @@ Repository = "https://github.com/AgLyx3/we-love-jupyter-notebook"
 Issues = "https://github.com/AgLyx3/we-love-jupyter-notebook/issues"
 
 [project.optional-dependencies]
-# The MCP server is optional: the editor runs perfectly well without it, and
-# nothing in the app imports these.
-mcp = [
-  "mcp>=2,<3",
-  "httpx>=0.27,<1",
-]
+# Kept as an empty alias so `notebook-editor-mcp[mcp]`, which earlier
+# instructions published, still resolves instead of erroring on an unknown
+# extra. Its contents are core dependencies now.
+mcp = []
 test = [
   "httpx>=0.27,<1",
   # The MCP tool surface is covered by backend/tests, so the test extra needs

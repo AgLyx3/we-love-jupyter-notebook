@@ -79,11 +79,16 @@ def check_wheel_contents(wheel: Path) -> None:
 
 
 def install(wheel: Path, into: Path) -> Path:
-    """A venv with the wheel and its mcp extra, and nothing else."""
+    """A venv with the wheel and nothing else.
+
+    Deliberately no extra: this is the install the README tells a stranger to
+    do, and naming one here would test a command nobody runs. Anything the
+    server needs to start has to be a plain dependency to survive this.
+    """
     venv.EnvBuilder(with_pip=True, clear=True).create(into)
     python = into / "bin" / "python"
     subprocess.run(
-        [str(python), "-m", "pip", "install", "--quiet", f"{wheel}[mcp]"],
+        [str(python), "-m", "pip", "install", "--quiet", str(wheel)],
         check=True,
     )
     return python
