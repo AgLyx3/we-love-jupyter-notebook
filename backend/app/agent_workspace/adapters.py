@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import tempfile
@@ -111,27 +112,29 @@ class DevelopmentFakeAgentAdapter:
         self, prompt: str, *, timeout: float, cancel_event: Event,
         model: str | None = None,
     ) -> AdapterResult:
-        """A valid partition of whatever the prompt describes, with fixed names.
+        """One name per block the prompt lists.
 
         The overview's model pass is the only thing that calls this, and the
         e2e suite runs against this adapter, so returning a well-formed answer
-        is what lets generation be exercised end to end without a model. The
-        boundaries are arbitrary — every fourth cell — which is the point: the
-        tests assert the *shape* of a partition, never the names (spec §8).
+        is what lets generation be exercised end to end without a model.
+
+        It used to return a partition — `{"start", "end", "name"}` triples
+        parsed out of "every index from 0 to N". The model no longer draws
+        boundaries, so there is no partition to fake: the prompt states how
+        many blocks it wants named, and the answer is that many strings. The
+        names echo the ranges so a wrong-order answer would be visible; the
+        tests assert the shape, never the names (spec §8).
         """
         if cancel_event.is_set():
             raise AgentCancelled()
-        match = re.search(r"every index from 0 to (\d+)", prompt)
-        last = int(match.group(1)) if match else 0
-        blocks, start = [], 0
-        while start <= last:
-            end = min(start + 3, last)
-            blocks.append(
-                '{"start": %d, "end": %d, "name": "Cells %d to %d"}'
-                % (start, end, start, end)
-            )
-            start = end + 1
-        return AdapterResult("[" + ", ".join(blocks) + "]")
+        count_match = re.search(r"JSON array of (\d+) strings", prompt)
+        spans = re.findall(r"^\s*\d+\. (cells? [\d-]+)$", prompt, re.M)
+        count = int(count_match.group(1)) if count_match else len(spans)
+        names = [
+            spans[i] if i < len(spans) else f"Block {i + 1}"
+            for i in range(count)
+        ]
+        return AdapterResult(json.dumps(names))
 
 
 class ClaudeAgentAdapter:

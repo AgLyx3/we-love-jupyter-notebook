@@ -123,13 +123,20 @@ describe("OutlinePanel", () => {
     expect(await screen.findByText("Revenue by region")).toBeInTheDocument();
   });
 
-  it("reports a state that is not ok", async () => {
-    mount({ blocks: [
+  // The never-run / out-of-order / risky chips were dropped by stitch-diff D10
+  // (accepted in §H), so the state is no longer written out in words. It is
+  // still on the row as a class, which is what a future marker would hang off
+  // and what keeps the drop a render decision rather than a data one.
+  it("classes a block by its state without spelling it out", async () => {
+    const { container } = mount({ blocks: [
       block({ state: "never-run" }),
       block({ start: 3, end: 5, name: "Later", state: "out-of-order" }),
     ] });
-    expect(await screen.findByText("never run")).toBeInTheDocument();
-    expect(screen.getByText("ran out of order")).toBeInTheDocument();
+    await screen.findByText("Revenue by region");
+    expect(container.querySelector(".outline-block.state-never-run")).not.toBeNull();
+    expect(container.querySelector(".outline-block.state-out-of-order")).not.toBeNull();
+    expect(screen.queryByText("never run")).not.toBeInTheDocument();
+    expect(screen.queryByText("ran out of order")).not.toBeInTheDocument();
   });
 
   it("reports the cells a hovered block covers", async () => {
