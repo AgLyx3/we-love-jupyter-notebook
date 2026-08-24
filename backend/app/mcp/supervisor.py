@@ -26,6 +26,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from mcp.server.mcpserver.exceptions import ToolError
+
 from ..process_group import terminate_process_groups
 
 
@@ -44,8 +46,16 @@ _POLL_SECONDS = 0.1
 LOG_PATH_ENV_VAR = "NOTEBOOK_EDITOR_LOG"
 
 
-class EditorStartupError(RuntimeError):
-    """The editor process never became ready."""
+class EditorStartupError(ToolError):
+    """The editor process never became ready.
+
+    Every tool call goes through `ensure_running()`, so this escapes tool
+    bodies, and its message is the whole diagnosis — the drained child log that
+    says the frontend was never built, or which port refused to bind. It
+    subclasses the SDK's `ToolError` for the same reason `ToolFailure` does:
+    that is the only exception whose text the SDK passes on instead of
+    replacing with a bare `Error executing tool <name>`.
+    """
 
 
 def free_loopback_port() -> int:

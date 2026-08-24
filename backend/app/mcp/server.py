@@ -29,6 +29,7 @@ from typing import Any, Literal
 
 import httpx
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from .shaping import budget_hint, shape_notebook
@@ -46,8 +47,15 @@ REQUEST_TIMEOUT_SECONDS = 30.0
 EXECUTION_POLL_TIMEOUT_SECONDS = 45.0
 
 
-class ToolFailure(RuntimeError):
-    """A failure worth showing the caller, phrased as what to do about it."""
+class ToolFailure(ToolError):
+    """A failure worth showing the caller, phrased as what to do about it.
+
+    It subclasses the SDK's `ToolError` because that is the only exception type
+    whose message the SDK forwards. Anything else raised out of a tool body is
+    treated as a crash and reaches the model as a bare
+    `Error executing tool <name>`, which would throw away every sentence
+    `_explain` and `_with_suggestions` write.
+    """
 
 
 class EditorSession:
