@@ -264,6 +264,13 @@ async function main() {
     await tune.click();
     await waitDismissingRisky(page, page.locator(".tuning-knobs"), 180_000, "the tuning knobs");
     await page.waitForTimeout(1500);
+    // Bring the preview the knobs drive into frame before shooting. The panel
+    // puts that preview in flow where the cell's outputs were, and the popover
+    // is fixed, so scrolling moves the picture and leaves the controls put.
+    // Without this the plot sits below the fold and the shot is knobs alone —
+    // which photographs the controls and omits the thing they control.
+    await page.locator(".tuning-preview-column").scrollIntoViewIfNeeded();
+    await page.waitForTimeout(800);
     // The whole viewport, not `.tuning-panel`. The knobs are a fixed-position
     // popover floating over the notebook now (stitch-diff B6), so they sit
     // outside the panel element's box — cropping to it would photograph the

@@ -50,6 +50,14 @@ after the notebook moves on.
 </tr>
 </table>
 
+Plots get knobs. **Tune** scans the cells above a figure for values it can vary
+safely — sizes, counts, colours, flags — and puts each on a control, floating
+over the notebook so the picture keeps the full width of the cell. Moving one
+re-runs the cell into a preview labelled *not in your notebook yet*; **Apply and
+re-run** is what writes the values back. Nothing is committed until you press it.
+
+![The Tuning Controls popover open over a histogram, with sliders for N_POINTS, NOISE, BINS and ALPHA](docs/screenshots/07-tuning-panel.png)
+
 Screenshots are captured from a live session against the notebooks in
 `examples/`, with a real kernel and the real Claude CLI. See
 [`docs/screenshots/`](docs/screenshots/) for the full set and how to re-capture
