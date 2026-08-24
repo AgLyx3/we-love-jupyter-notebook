@@ -147,7 +147,7 @@ describe("remediation behaviors", () => {
       return baseFetch(input, init);
     });
     render(<App />);
-    expect(await screen.findByLabelText("Revert agent change to code cell 1")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Discard agent change to code cell 1")).toBeInTheDocument();
     expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(nextSource);
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/agent-turns/large"), expect.anything());
   });
@@ -174,12 +174,12 @@ describe("remediation behaviors", () => {
     });
     render(<App />);
 
-    const undo = await screen.findByLabelText("Revert agent change to code cell 1");
+    const undo = await screen.findByLabelText("Discard agent change to code cell 1");
     expect(undo.closest(".cell-actions")).toBeNull();
     expect(undo.closest(".cell-review")).not.toBeNull();
     // Labelled, not icon-only — the other reason it was unfindable.
-    expect(undo).toHaveTextContent("Undo");
-    expect(screen.getByText("Agent changed this cell")).toBeInTheDocument();
+    expect(undo).toHaveTextContent("Discard");
+    expect(screen.getByText("Agent Suggestion")).toBeInTheDocument();
   });
 
   it("rehydrates authoritative outcome and error after a truncated status advances", async () => {
@@ -231,7 +231,7 @@ describe("remediation behaviors", () => {
     expect(await screen.findByText("failed")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText((_, element) => element?.tagName === "P" && element.textContent?.endsWith("full outcome tail") === true)).toBeInTheDocument());
     expect(screen.getByText((_, element) => element?.classList.contains("error-text") === true && element.textContent?.endsWith("full error tail") === true)).toBeInTheDocument();
-    expect(await screen.findByLabelText("Revert agent change to code cell 1")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Discard agent change to code cell 1")).toBeInTheDocument();
     expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(nextSource);
     expect(detailCalls).toBeGreaterThanOrEqual(1);
   });
@@ -258,7 +258,7 @@ describe("remediation behaviors", () => {
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Undo entire turn" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "Undo entire turn" })).not.toBeInTheDocument());
-    expect(screen.queryByLabelText("Revert agent change to code cell 1")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Discard agent change to code cell 1")).not.toBeInTheDocument();
     expect(screen.getByText("Revision 4")).toBeInTheDocument();
     expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(applied.changes[0].previousSource);
     expect(screen.getByLabelText("Cell output")).toHaveTextContent("restored output");
@@ -286,8 +286,8 @@ describe("remediation behaviors", () => {
       return baseFetch(input, init);
     });
     render(<App />);
-    await userEvent.click(await screen.findByLabelText("Revert agent change to code cell 1"));
-    await waitFor(() => expect(screen.queryByLabelText("Revert agent change to code cell 1")).not.toBeInTheDocument());
+    await userEvent.click(await screen.findByLabelText("Discard agent change to code cell 1"));
+    await waitFor(() => expect(screen.queryByLabelText("Discard agent change to code cell 1")).not.toBeInTheDocument());
     expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(applied.changes[0].previousSource);
     expect(revertCalls).toBe(1);
   });
@@ -488,7 +488,7 @@ describe("remediation behaviors", () => {
     source.emit("turn.updated", { turnId: "race" }, 3);
     await waitFor(() => expect(screen.getByText("Revision 4")).toBeInTheDocument());
     await waitFor(() => expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(nextSource));
-    expect(await screen.findByLabelText("Revert agent change to code cell 1")).toBeEnabled();
+    expect(await screen.findByLabelText("Discard agent change to code cell 1")).toBeEnabled();
     expect(screen.getByText("Kernel idle")).toBeInTheDocument();
     expect(screen.queryByText("Execution: running")).not.toBeInTheDocument();
 
@@ -552,13 +552,13 @@ describe("remediation behaviors", () => {
     expect(await screen.findByText("Revision 5")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(newerSource));
     expect(await screen.findByText("newest terminal outcome")).toBeInTheDocument();
-    expect(await screen.findByLabelText("Revert agent change to code cell 1")).toBeEnabled();
+    expect(await screen.findByLabelText("Discard agent change to code cell 1")).toBeEnabled();
 
     resolveOlderRefresh(new Response(JSON.stringify({ ...notebook, revision: 4, cells: [{ ...notebook.cells[0], source: olderSource }] }), { headers: { "Content-Type": "application/json" } }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.getByText("newest terminal outcome")).toBeInTheDocument();
     expect(screen.queryByText("older terminal outcome")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Revert agent change to code cell 1")).toBeEnabled();
+    expect(screen.getByLabelText("Discard agent change to code cell 1")).toBeEnabled();
     expect(screen.getByLabelText("Source for code cell 1")).toHaveValue(newerSource);
     expect(turnCalls).toBe(3);
   });

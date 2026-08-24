@@ -1,11 +1,54 @@
 import { useMemo, useRef, useState } from "react";
-import { MessageSquarePlus, Send, Wand2, X } from "lucide-react";
+import Icon from "../ui/Icon";
 import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
 import { Prec, StateField, type EditorState, type Extension, type Range } from "@codemirror/state";
 import { Decoration, EditorView, keymap, WidgetType, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { cellDiffRanges, type HunkOverlay } from "./cellDiff";
 import type { CellSelection } from "./selectionEdit";
+import { useTheme } from "../theme";
+
+/* ------------------------------------------------------- the theme boundary
+   CodeMirror carries its own theme, so left alone it and the stylesheet would
+   disagree the moment the app went dark. Rather than pick one of CM's stock
+   themes, both of these are written against the same CSS custom properties the
+   rest of the sheet uses: a token change moves the editor and its surroundings
+   together, and there is exactly one place (`--cm-*` in styles.css) where the
+   editor's colours are decided.
+
+   `dark` is still passed to EditorView.theme because CM branches on it for
+   things a stylesheet cannot reach — selection layers, the drop cursor, and
+   which of its own `&dark`/`&light` rules apply. */
+const editorTheme = (dark: boolean) => EditorView.theme({
+  "&": { color: "var(--on-surface)", backgroundColor: "transparent" },
+  ".cm-content": { caretColor: "var(--on-surface)" },
+  ".cm-gutters": { backgroundColor: "var(--surface-container-low)", color: "var(--outline)", border: "none" },
+  ".cm-activeLine": { backgroundColor: "color-mix(in srgb, var(--primary) 6%, transparent)" },
+  ".cm-activeLineGutter": { backgroundColor: "color-mix(in srgb, var(--primary) 10%, transparent)" },
+  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
+    backgroundColor: "color-mix(in srgb, var(--primary) 26%, transparent)",
+  },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--on-surface)" },
+  ".cm-selectionMatch": { backgroundColor: "color-mix(in srgb, var(--secondary) 20%, transparent)" },
+}, { dark });
+
+// basicSetup registers defaultHighlightStyle as a *fallback*, so a real
+// highlighter takes precedence over it without having to be ordered ahead.
+const codeHighlighting = syntaxHighlighting(HighlightStyle.define([
+  { tag: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment], color: "var(--cm-comment)", fontStyle: "italic" },
+  { tag: [tags.keyword, tags.modifier, tags.controlKeyword, tags.moduleKeyword, tags.self, tags.null], color: "var(--cm-keyword)" },
+  { tag: [tags.string, tags.special(tags.string), tags.regexp], color: "var(--cm-string)" },
+  { tag: [tags.number, tags.integer, tags.float], color: "var(--cm-number)" },
+  { tag: [tags.bool, tags.atom, tags.literal], color: "var(--cm-atom)" },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName), tags.labelName], color: "var(--cm-function)" },
+  { tag: [tags.typeName, tags.className, tags.namespace, tags.standard(tags.variableName)], color: "var(--cm-type)" },
+  { tag: [tags.variableName, tags.propertyName, tags.definition(tags.variableName), tags.attributeName], color: "var(--cm-variable)" },
+  { tag: [tags.operator, tags.punctuation, tags.separator, tags.bracket], color: "var(--cm-operator)" },
+  { tag: [tags.meta, tags.processingInstruction, tags.annotation], color: "var(--cm-meta)" },
+  { tag: tags.invalid, color: "var(--error)" },
+]));
 
 export type HunkControls = {
   overlays: HunkOverlay[];
@@ -50,34 +93,30 @@ class HunkWidget extends WidgetType {
     bar.className = "cm-hunk-actions";
     bar.setAttribute("role", "toolbar");
     bar.setAttribute("aria-label", "Review this change");
-    // Same markup and classes as the cell-header pair (icon + label, shared
+    // Same markup and classes as the cell-header pair (glyph + label, shared
     // .review-action styling), so a Keep here and a Keep there are visibly the
     // same control acting at different scopes.
-    const make = (label: string, variant: string, icon: string, onClick: () => void) => {
+    const make = (label: string, variant: string, glyphName: string, onClick: () => void) => {
       const button = document.createElement("button");
       button.type = "button";
       button.className = `review-action ${variant}`;
       button.disabled = this.disabled;
       button.setAttribute("aria-label", `${label} this change`);
-      const glyph = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      glyph.setAttribute("viewBox", "0 0 24 24");
-      glyph.setAttribute("fill", "none");
-      glyph.setAttribute("stroke", "currentColor");
-      glyph.setAttribute("stroke-width", "2");
-      glyph.setAttribute("stroke-linecap", "round");
-      glyph.setAttribute("stroke-linejoin", "round");
+      // Hand-built rather than rendered, because this lives inside a CodeMirror
+      // block widget — but it is the same span the Icon component emits, down
+      // to the aria-hidden that keeps the ligature out of the accessible name.
+      const glyph = document.createElement("span");
+      glyph.className = "material-symbols-outlined";
       glyph.setAttribute("aria-hidden", "true");
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      path.setAttribute("d", icon);
-      glyph.appendChild(path);
+      glyph.setAttribute("translate", "no");
+      glyph.textContent = glyphName;
       button.appendChild(glyph);
       button.appendChild(document.createTextNode(label));
       button.addEventListener("click", (event) => { event.preventDefault(); onClick(); });
       bar.appendChild(button);
     };
-    // lucide "check" and "rotate-ccw", matching the header icons.
-    make("Keep", "keep", "M20 6 9 17l-5-5", () => this.onKeep(this.overlay.operationId));
-    make("Undo", "undo", "M3 7v6h6M21 17a9 9 0 0 0-15-6.7L3 13", () => this.onUndo(this.overlay.operationId));
+    make("Keep", "keep", "check", () => this.onKeep(this.overlay.operationId));
+    make("Discard", "undo", "undo", () => this.onUndo(this.overlay.operationId));
     wrap.appendChild(bar);
     return wrap;
   }
@@ -149,7 +188,10 @@ export default function CellEditor({ value, label, disabled, language, change, h
   // its per-render identity does not invalidate the memo.
   const runRef = useRef(onRun);
   runRef.current = onRun;
+  const mode = useTheme();
+  const theme = useMemo(() => editorTheme(mode === "dark"), [mode]);
   const extensions = useMemo(() => [
+    codeHighlighting,
     ...(language === "code" ? [python()] : []),
     // Ledger-driven overlays win when available: they map hunks onto the
     // *composed* document, so highlights stay aligned after a partial undo —
@@ -211,6 +253,7 @@ export default function CellEditor({ value, label, disabled, language, change, h
       value={value}
       aria-label={label}
       readOnly={disabled}
+      theme={theme}
       extensions={extensions}
       basicSetup={{ lineNumbers: true, foldGutter: false, highlightActiveLine: true }}
       onCreateEditor={(view) => { viewRef.current = view; }}
@@ -223,8 +266,8 @@ export default function CellEditor({ value, label, disabled, language, change, h
     {toolbar && !inlineEdit && <div className={`selection-toolbar ${toolbar.above ? "above" : "below"}`} role="toolbar" aria-label="Selection actions"
       style={{ top: toolbar.top, left: toolbar.left }}
       onMouseDown={(event) => event.preventDefault()}>
-      {onAddSelectionToChat && <button type="button" onClick={() => { onAddSelectionToChat(toolbar.selection); setToolbar(null); }}><MessageSquarePlus /> Add to chat</button>}
-      {onInlineEdit && <button type="button" onClick={() => openInlineEdit(toolbar.selection)}><Wand2 /> Edit inline</button>}
+      {onAddSelectionToChat && <button type="button" onClick={() => { onAddSelectionToChat(toolbar.selection); setToolbar(null); }}><Icon name="add_comment" /> Add to chat</button>}
+      {onInlineEdit && <button type="button" onClick={() => openInlineEdit(toolbar.selection)}><Icon name="auto_fix_high" /> Edit inline</button>}
     </div>}
     {inlineEdit && <form className="inline-edit-widget" style={{ top: inlineEdit.top }} aria-label="Inline edit instruction" onSubmit={(event) => {
       event.preventDefault();
@@ -238,8 +281,8 @@ export default function CellEditor({ value, label, disabled, language, change, h
           aria-label="Inline edit instruction"
           onChange={(event) => setInstruction(event.target.value)}
           onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setInlineEdit(null); } }} />
-        <button className="primary" type="submit" disabled={interactionsDisabled || !instruction.trim()} aria-label="Run inline edit"><Send /></button>
-        <button type="button" aria-label="Cancel inline edit" onClick={() => setInlineEdit(null)}><X /></button>
+        <button className="primary" type="submit" disabled={interactionsDisabled || !instruction.trim()} aria-label="Run inline edit"><Icon name="arrow_upward" /></button>
+        <button type="button" aria-label="Cancel inline edit" onClick={() => setInlineEdit(null)}><Icon name="close" /></button>
       </div>
       <small>{inlineEdit.selection.startLine === inlineEdit.selection.endLine ? `Line ${inlineEdit.selection.startLine}` : `Lines ${inlineEdit.selection.startLine}–${inlineEdit.selection.endLine}`} · the agent edits the whole cell, focused on your selection</small>
     </form>}

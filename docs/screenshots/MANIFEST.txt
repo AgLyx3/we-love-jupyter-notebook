@@ -1,0 +1,10 @@
+Captured from http://127.0.0.1:5183 at 1440x900 @2x, except 08-mobile (390x844, full page).
+
+01-app-shell.png
+03-cell-with-output.png
+06-outline-panel.png
+05-agent-panel.png
+04-cell-under-review.png
+02-app-shell-reviewing.png
+07-tuning-panel.png
+08-mobile.png

@@ -172,7 +172,7 @@ test("tunes a plot: preview costs nothing, apply rewrites the source and re-rend
   // The edit is the user's, and is reviewed as the user's.
   const tunedCell = cellOf(page, parameters);
   await expect(tunedCell.locator(".cell-review-label")).toContainText("You tuned this cell");
-  await expect(tunedCell.getByLabel("Undo tuned change to code cell 4")).toBeVisible();
+  await expect(tunedCell.getByLabel("Discard tuned change to code cell 4")).toBeVisible();
 });
 
 test("undoes a tuned change from the cell's own review controls", async ({ page }) => {
@@ -195,13 +195,13 @@ test("undoes a tuned change from the cell's own review controls", async ({ page 
   const applied = await page.request.get(`${backendUrl}/notebooks/download`).then((response) => response.json());
   expect(sourceText(applied.cells.find((cell: { id: string }) => cell.id === "params-cell"))).toContain("GRID = False");
 
-  // Wait for apply's live re-run to finish before undoing. Undo is guarded on
+  // Wait for apply's live re-run to finish before discarding. Discard is guarded on
   // the document revision and every re-executed cell bumps it, so an undo fired
   // mid-run loses a 409 race — and loses it *quietly*, because the notice is at
   // the top of the window and the cell still reads correctly.
   await expect(page.locator(".kernel-state")).toContainText("Kernel idle", { timeout: 120_000 });
   const tunedCell = cellOf(page, parameters);
-  await tunedCell.getByLabel("Undo tuned change to code cell 4").click();
+  await tunedCell.getByLabel("Discard tuned change to code cell 4").click();
 
   // The review surface clearing is the assertion that the undo landed. The
   // editor's text is not: while the diff is on screen it renders the removed

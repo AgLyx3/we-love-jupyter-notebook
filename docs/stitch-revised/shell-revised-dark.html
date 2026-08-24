@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>App Shell - Mid-Review</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        "colors": {
+                "on-surface-variant": "#a3a3a3",
+                "inverse-on-surface": "#2d3137",
+                "on-surface": "#cccccc",
+                "on-tertiary-fixed": "#271900",
+                "on-tertiary-fixed-variant": "#5f4100",
+                "primary": "#007acc",
+                "secondary-fixed": "#83fc89",
+                "tertiary": "#fabc45",
+                "error": "#f48771",
+                "primary-fixed-dim": "#007acc",
+                "secondary-container": "#27a640",
+                "surface": "#1e1e1e",
+                "tertiary-container": "#cc941c",
+                "surface-tint": "#007acc",
+                "primary-fixed": "#007acc",
+                "surface-container": "#252526",
+                "inverse-surface": "#dfe2eb",
+                "background": "#1e1e1e",
+                "tertiary-fixed": "#ffdeaa",
+                "surface-container-low": "#252526",
+                "surface-container-lowest": "#1e1e1e",
+                "on-primary-container": "#ffffff",
+                "destructive": "#f85149",
+                "surface-bright": "#353940",
+                "tertiary-fixed-dim": "#fabc45",
+                "on-secondary-container": "#00320a",
+                "on-secondary-fixed-variant": "#005317",
+                "surface-dim": "#10141a",
+                "inverse-primary": "#0060a9",
+                "steelblue": "#4682b4",
+                "on-error-container": "#ffdad6",
+                "surface-container-highest": "#333333",
+                "surface-container-high": "#2d2d2d",
+                "primary-container": "#007acc",
+                "on-primary-fixed": "#ffffff",
+                "surface-variant": "#2d2d2d",
+                "secondary": "#89d185",
+                "error-container": "#93000a",
+                "secondary-fixed-dim": "#89d185",
+                "on-secondary-fixed": "#002105",
+                "on-secondary": "#ffffff",
+                "outline": "#3c3c3c",
+                "outline-variant": "#3c3c3c",
+                "on-primary": "#ffffff",
+                "on-tertiary": "#422c00",
+                "on-background": "#cccccc",
+                "on-tertiary-container": "#483100",
+                "on-error": "#690005",
+                "on-primary-fixed-variant": "#ffffff"
+        },
+        "borderRadius": {
+                "DEFAULT": "0.125rem",
+                "lg": "0.25rem",
+                "xl": "0.5rem",
+                "full": "0.75rem"
+        },
+        "spacing": {
+                "sidebar": "260px",
+                "xl": "24px",
+                "xs": "4px",
+                "lg": "16px",
+                "md": "12px",
+                "sm": "8px",
+                "gutter": "12px"
+        },
+        "fontFamily": {
+                "code-sm": [
+                        "JetBrains Mono"
+                ],
+                "code-base": [
+                        "JetBrains Mono"
+                ],
+                "tiny": [
+                        "Inter"
+                ],
+                "headline": [
+                        "Inter"
+                ],
+                "large": [
+                        "Inter"
+                ],
+                "display": [
+                        "Inter"
+                ],
+                "base": [
+                        "Inter"
+                ],
+                "small": [
+                        "Inter"
+                ]
+        },
+        "fontSize": {
+                "code-sm": [
+                        "12px",
+                        {
+                                "lineHeight": "18px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "code-base": [
+                        "13px",
+                        {
+                                "lineHeight": "20px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "tiny": [
+                        "11px",
+                        {
+                                "lineHeight": "14px",
+                                "letterSpacing": "0.02em",
+                                "fontWeight": "500"
+                        }
+                ],
+                "headline": [
+                        "16px",
+                        {
+                                "lineHeight": "24px",
+                                "fontWeight": "600"
+                        }
+                ],
+                "large": [
+                        "14px",
+                        {
+                                "lineHeight": "20px",
+                                "fontWeight": "500"
+                        }
+                ],
+                "display": [
+                        "20px",
+                        {
+                                "lineHeight": "28px",
+                                "fontWeight": "600"
+                        }
+                ],
+                "base": [
+                        "13px",
+                        {
+                                "lineHeight": "18px",
+                                "fontWeight": "400"
+                        }
+                ],
+                "small": [
+                        "12px",
+                        {
+                                "lineHeight": "16px",
+                                "fontWeight": "400"
+                        }
+                ]
+        }
+},
+    },
+  }
+</script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .filled-icon {
+            font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface h-screen w-screen overflow-hidden flex flex-col font-base dark">
+<!-- TopAppBar -->
+<header class="bg-surface-container-low text-primary flex items-center justify-between px-md w-full border-b border-outline-variant h-[52px] shrink-0">
+<div class="flex items-center gap-4">
+<h1 class="font-headline text-headline font-semibold text-white">ml-pipeline.ipynb</h1>
+<nav class="flex gap-4 items-center">
+<a class="font-base text-base text-primary font-semibold hover:bg-surface-container-highest transition-colors px-2 py-1 rounded opacity-80" href="#">Unsaved</a>
+<a class="font-base text-base text-on-surface-variant hover:bg-surface-container-highest transition-colors px-2 py-1 rounded" href="#">Revision 16</a>
+</nav>
+</div>
+<div class="flex items-center gap-2">
+<button class="h-[28px] px-2 flex items-center justify-center border border-outline-variant hover:bg-surface-container-highest transition-colors rounded text-on-surface-variant font-small text-small">Auto-save off</button>
+<div class="flex items-center gap-1.5 px-2 h-[28px]">
+<div class="w-2 h-2 rounded-full bg-secondary"></div>
+<span class="font-small text-small text-on-surface-variant">Kernel Idle</span>
+</div>
+<button class="w-[28px] h-[28px] flex items-center justify-center hover:bg-surface-container-highest transition-colors rounded text-on-surface-variant"><span class="material-symbols-outlined" data-icon="play_arrow">play_arrow</span></button>
+<button class="w-[28px] h-[28px] flex items-center justify-center hover:bg-surface-container-highest transition-colors rounded text-on-surface-variant"><span class="material-symbols-outlined" data-icon="stop">stop</span></button>
+<button class="w-[28px] h-[28px] flex items-center justify-center hover:bg-surface-container-highest transition-colors rounded text-on-surface-variant"><span class="material-symbols-outlined" data-icon="refresh">refresh</span></button>
+<div class="w-[1px] h-[16px] bg-outline-variant mx-1"></div>
+<button class="w-[28px] h-[28px] flex items-center justify-center hover:bg-surface-container-highest transition-colors rounded text-on-surface-variant"><span class="material-symbols-outlined" data-icon="folder">folder</span></button>
+<button class="w-[28px] h-[28px] flex items-center justify-center hover:bg-surface-container-highest transition-colors rounded text-on-surface-variant"><span class="material-symbols-outlined" data-icon="save">save</span></button>
+<button class="w-[28px] h-[28px] flex items-center justify-center hover:bg-surface-container-highest transition-colors rounded text-on-surface-variant"><span class="material-symbols-outlined" data-icon="content_copy">content_copy</span></button>
+<div class="w-[1px] h-[16px] bg-outline-variant mx-1"></div>
+<button class="w-[28px] h-[28px] flex items-center justify-center hover:bg-surface-container-highest transition-colors rounded text-on-surface-variant"><span class="material-symbols-outlined" data-icon="close">close</span></button>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden">
+<!-- SideNavBar (Left) -->
+<aside class="bg-surface-container flex flex-col h-full overflow-y-auto border-r border-outline-variant w-[240px] shrink-0 transition-all duration-150"><div class="flex items-center px-sm pt-sm pb-sm border-b border-outline-variant"><div class="flex gap-1 w-full relative"><button class="flex-1 py-1.5 px-3 rounded text-on-surface-variant font-tiny text-tiny font-bold uppercase tracking-wider hover:bg-surface-container-low transition-colors text-center">Files</button><button class="flex-1 py-1.5 px-3 rounded bg-primary-container/20 text-primary font-tiny text-tiny font-bold uppercase tracking-wider text-center">Outline</button><button class="ml-auto p-1 text-on-surface-variant hover:bg-surface-container-low rounded inline-flex items-center justify-center transition-colors"><span class="material-symbols-outlined text-[18px]">keyboard_tab_rtl</span></button></div></div><div class="p-sm flex flex-col gap-2">
+<button class="w-full flex items-center justify-center gap-sm py-1 px-3 border border-outline-variant rounded bg-surface-container-lowest hover:bg-surface-container-low transition-colors shadow-sm font-small text-small text-on-surface-variant h-[28px]"><span class="material-symbols-outlined text-[16px]">auto_awesome</span><span class="">Rebuild map</span></button>
+<div class="bg-tertiary-container/10 border border-tertiary-container/20 rounded p-2 flex gap-2">
+<span class="material-symbols-outlined text-[16px] text-tertiary shrink-0 mt-0.5">warning</span>
+<p class="font-small text-small text-tertiary m-0 leading-tight">Cells changed since this map was built. It is still shown as-is — press Rebuild map to update it.</p>
+</div>
+</div>
+<nav class="flex-1 flex flex-col p-2 gap-1"><div class="group flex items-start gap-1 py-1 px-1 rounded hover:bg-surface-container-low cursor-pointer"><span class="material-symbols-outlined text-[16px] text-outline mt-0.5 transition-transform group-hover:text-on-surface-variant">chevron_right</span><div class="flex flex-col min-w-0"><span class="font-small text-small text-on-surface truncate border-b border-dotted border-primary">Setup and sigmoid function</span><span class="font-tiny text-tiny text-outline">Cells 1–3</span></div></div><div class="group flex items-start gap-1 py-1 px-1 rounded hover:bg-surface-container-low cursor-pointer"><span class="material-symbols-outlined text-[16px] text-outline mt-0.5 transition-transform group-hover:text-on-surface-variant">chevron_right</span><div class="flex flex-col min-w-0"><span class="font-small text-small text-on-surface truncate border-b border-dotted border-primary">Sample size and hyperparameters</span><span class="font-tiny text-tiny text-outline">Cells 4–5</span></div></div></nav>
+<div class="p-2 border-t border-outline-variant">
+<a class="flex items-center gap-3 px-3 py-[6px] text-on-surface-variant font-small text-small hover:bg-surface-container-low transition-colors rounded" href="#">
+<span class="material-symbols-outlined text-[18px]" data-icon="settings">settings</span>
+<span class="">Settings</span>
+</a>
+</div>
+</aside>
+<!-- Main Content Canvas (Notebook) -->
+<main class="flex-1 overflow-y-auto bg-surface relative flex flex-col">
+<!-- Review Bar (Top Sticky) -->
+<div class="sticky top-0 z-10 w-full bg-surface-container border-b border-outline-variant p-3 flex justify-between items-center shadow-sm">
+<div class="flex items-center gap-2">
+<button class="h-[28px] px-3 flex items-center gap-2 text-primary font-small text-small hover:bg-surface-container-highest rounded transition-colors min-w-[160px]">
+<span class="material-symbols-outlined text-[16px]">location_on</span>
+<span>0 of 2 changes reviewed</span>
+</button>
+</div>
+<div class="flex items-center gap-3">
+<div class="flex border border-outline-variant rounded overflow-hidden h-[28px]">
+<button class="w-[28px] h-full flex items-center justify-center hover:bg-surface-container-highest transition-colors text-on-surface-variant border-r border-outline-variant"><span class="material-symbols-outlined text-[18px]">chevron_left</span></button>
+<button class="w-[28px] h-full flex items-center justify-center hover:bg-surface-container-highest transition-colors text-on-surface-variant"><span class="material-symbols-outlined text-[18px]">chevron_right</span></button>
+</div>
+<div class="w-[1px] h-[16px] bg-outline-variant mx-1"></div>
+<button class="h-[28px] px-3 border border-outline-variant bg-surface-container hover:bg-surface-container-highest rounded font-small text-small text-on-surface transition-colors min-w-[80px] flex items-center justify-center gap-1">
+<span class="material-symbols-outlined text-[16px]">check</span> Keep all
+                    </button>
+<button class="h-[28px] px-3 border border-outline-variant bg-surface-container hover:bg-surface-container-highest rounded font-small text-small text-error transition-colors min-w-[90px] flex items-center justify-center gap-1">
+<span class="material-symbols-outlined text-[16px]">undo</span> Reject All
+                    </button>
+</div>
+</div>
+<div class="flex-1 p-6 space-y-4 max-w-4xl mx-auto w-full">
+<!-- Cell 1: Standard -->
+<div class="border border-outline-variant bg-surface-container-lowest rounded flex flex-col">
+<div class="flex">
+<!-- Gutter -->
+<div class="w-10 bg-surface-container-low border-r border-outline-variant flex flex-col items-center py-2 shrink-0 rounded-l gap-1">
+<div class="bg-primary/20 text-primary font-tiny text-tiny px-1.5 rounded-full mb-1">1</div>
+<span class="font-code-sm text-code-sm text-outline-variant">[1]</span>
+</div>
+<!-- Content -->
+<div class="p-3 flex-1 overflow-x-auto">
+<pre class="font-code-base text-code-base text-on-surface m-0"><code>import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split</code></pre>
+</div>
+</div>
+</div>
+<!-- Cell 2: AI Generated (Active Review) -->
+<div class="border border-primary bg-surface-container-lowest rounded flex flex-col relative shadow-[0_0_0_1px_rgba(0,122,204,0.2)]">
+<div class="absolute left-[-2px] top-0 bottom-0 w-[4px] bg-primary rounded-l"></div>
+<div class="flex border-b border-outline-variant bg-surface-container-low px-3 py-1 justify-between items-center rounded-t">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[16px] filled-icon">smart_toy</span>
+<span class="font-small text-small text-white font-medium">Agent Suggestion</span>
+</div>
+<div class="flex gap-2">
+<button class="h-[28px] px-2 border border-error bg-surface-container-lowest hover:bg-surface-container-low rounded font-small text-small text-error flex items-center gap-1 transition-colors min-w-[80px]">
+<span class="material-symbols-outlined text-[14px]">undo</span> Discard
+                            </button>
+<button class="h-[28px] px-2 border border-secondary bg-surface-container-lowest hover:bg-secondary/10 rounded font-small text-small text-secondary flex items-center gap-1 transition-colors min-w-[70px]">
+<span class="material-symbols-outlined text-[14px]">check</span> Keep
+                            </button>
+</div>
+</div>
+<div class="flex">
+<!-- Gutter -->
+<div class="w-10 bg-surface-container-low border-r border-outline-variant flex flex-col items-center py-2 shrink-0 gap-1">
+<div class="bg-primary/20 text-primary font-tiny text-tiny px-1.5 rounded-full mb-1">2</div>
+<span class="font-code-sm text-code-sm text-outline-variant">[*]</span>
+</div>
+<!-- Content -->
+<div class="p-3 flex-1 overflow-x-auto bg-primary-fixed/5">
+<pre class="font-code-base text-code-base text-on-surface m-0"><code><span class="text-outline"># Added robust error handling and imputation</span>
+def preprocess_data(df):
+    <span class="text-outline"># Drop high missing value cols</span>
+    df_clean = df.dropna(thresh=len(df)*0.8, axis=1)
+    
+    <span class="border-b border-dotted border-primary">numeric_cols = df_clean.select_dtypes(include=[np.number]).columns</span>
+    <span class="border-b border-dotted border-primary">df_clean[numeric_cols] = df_clean[numeric_cols].fillna(df_clean[numeric_cols].median())</span>
+    
+    return df_clean</code></pre>
+</div>
+</div>
+</div>
+<!-- Cell 3: Output -->
+<div class="flex flex-col ml-10">
+<div class="p-3 bg-surface text-on-surface-variant font-code-sm text-code-sm border-l-2 border-outline-variant ml-2">
+                         Dataframe shape after preprocessing: (15420, 42)
+                     </div>
+</div>
+</div>
+</main>
+<!-- SideNavBar (Right - Agent Panel) -->
+<aside class="bg-surface-container flex flex-col h-full border-l border-outline-variant w-[300px] shrink-0">
+<div class="p-4 border-b border-outline-variant flex justify-between items-center bg-surface-container-low">
+<div>
+<h2 class="font-headline text-headline font-semibold text-white">Notebook Agent</h2>
+<p class="font-small text-small text-on-surface-variant">Scoped local edits</p>
+</div>
+<div class="flex items-center gap-2">
+<select class="bg-surface border border-outline-variant rounded font-small text-small text-on-surface px-2 py-1 h-[28px] focus:ring-1 focus:ring-primary focus:border-primary">
+<option>Blocking</option>
+<option>Trusted</option>
+</select>
+<button class="w-[28px] h-[28px] flex items-center justify-center hover:bg-surface-container-highest transition-colors rounded text-on-surface-variant">
+<span class="material-symbols-outlined" data-icon="close">close</span>
+</button>
+</div>
+</div>
+<nav class="flex border-b border-outline-variant">
+<a class="flex-1 text-center py-2 text-primary font-bold border-b-2 border-primary font-small text-small transition-all scale-95 active" href="#">
+<span class="material-symbols-outlined block mx-auto text-[18px] mb-1" data-icon="smart_toy">smart_toy</span>
+                    Agent
+                </a>
+<a class="flex-1 text-center py-2 text-on-surface-variant border-b-2 border-transparent hover:bg-surface-container font-small text-small transition-all" href="#">
+<span class="material-symbols-outlined block mx-auto text-[18px] mb-1" data-icon="history">history</span>
+                    History
+                </a>
+</nav>
+<!-- Turn Scope Panel -->
+<div class="border-b border-outline-variant p-3 bg-surface">
+<div class="flex justify-between items-center mb-2">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">lock</span>
+<span class="font-small text-small font-semibold text-on-surface">Turn scope</span>
+</div>
+<button class="w-[24px] h-[24px] flex items-center justify-center hover:bg-surface-container-low rounded text-on-surface-variant transition-colors">
+<span class="material-symbols-outlined text-[16px]">layers_clear</span>
+</button>
+</div>
+<div class="flex gap-2 mb-2">
+<span class="bg-primary/20 text-primary px-2 py-0.5 rounded font-tiny text-tiny">3 editable</span>
+<span class="bg-surface-container-highest text-on-surface px-2 py-0.5 rounded font-tiny text-tiny">0 focus</span>
+</div>
+<div class="space-y-1">
+<div class="flex items-center justify-between group hover:bg-surface-container-low p-1 rounded">
+<span class="font-code-sm text-code-sm text-on-surface-variant truncate">cell_f7ddc0c7.py</span>
+<button class="w-[20px] h-[20px] items-center justify-center text-outline hidden group-hover:flex hover:text-on-surface transition-colors rounded"><span class="material-symbols-outlined text-[14px]">close</span></button>
+</div>
+<div class="flex items-center justify-between group hover:bg-surface-container-low p-1 rounded">
+<span class="font-code-sm text-code-sm text-on-surface-variant truncate">cell_0447bdfe.py</span>
+<button class="w-[20px] h-[20px] items-center justify-center text-outline hidden group-hover:flex hover:text-on-surface transition-colors rounded"><span class="material-symbols-outlined text-[14px]">close</span></button>
+</div>
+<div class="flex items-center justify-between group hover:bg-surface-container-low p-1 rounded">
+<span class="font-code-sm text-code-sm text-on-surface-variant truncate">cell_1707cecb.md</span>
+<button class="w-[20px] h-[20px] items-center justify-center text-outline hidden group-hover:flex hover:text-on-surface transition-colors rounded"><span class="material-symbols-outlined text-[14px]">close</span></button>
+</div>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+<!-- User Message -->
+<div class="flex flex-col gap-1 items-end">
+<div class="bg-surface-container-highest text-on-surface p-3 rounded-xl rounded-tr-sm max-w-[85%] font-base text-base">
+                        Can you write a function to preprocess the dataset, specifically handling missing values by median imputation for numerical columns? Drop columns with &gt;80% missing data.
+                    </div>
+</div>
+<!-- Agent Message -->
+<div class="flex flex-col gap-1 items-start">
+<div class="flex items-center gap-2 mb-1">
+<span class="material-symbols-outlined text-primary text-[16px] filled-icon">smart_toy</span>
+<span class="font-tiny text-tiny text-on-surface-variant uppercase tracking-wider">Agent</span>
+</div>
+<div class="bg-surface-container-low border border-outline-variant text-on-surface p-3 rounded-xl rounded-tl-sm w-full font-base text-base space-y-3">
+<p class="">I've implemented a `preprocess_data` function that meets your requirements. It first drops columns with less than 20% valid values, then applies median imputation to the remaining numerical columns.</p>
+<div class="bg-surface-container-lowest border border-outline-variant rounded p-2">
+<div class="flex items-center gap-2 text-primary font-small text-small mb-1">
+<span class="material-symbols-outlined text-[16px]">edit_document</span>
+<span class="">Cell Edit Proposed</span>
+</div>
+<p class="font-tiny text-tiny text-on-surface-variant">Review the changes inline in the notebook editor.</p>
+</div>
+<button class="mt-2 h-[28px] px-3 border border-outline-variant bg-surface-container hover:bg-surface-container-highest rounded font-small text-small text-on-surface flex items-center justify-center gap-1 transition-colors">
+<span class="material-symbols-outlined text-[16px]">undo</span> Undo entire turn
+</button>
+</div>
+</div>
+</div>
+<div class="p-3 border-t border-outline-variant bg-surface-container-lowest">
+<div class="border border-outline-variant rounded focus-within:border-primary transition-colors flex flex-col bg-surface">
+<textarea class="w-full bg-transparent border-none focus:ring-0 resize-none p-2 font-base text-base text-on-surface placeholder:text-outline-variant h-[60px]" placeholder="Ask the agent to edit code..."></textarea>
+<div class="flex justify-between items-center p-2 bg-surface-container-lowest border-t border-outline-variant">
+<button class="w-[28px] h-[28px] flex items-center justify-center hover:bg-surface-container transition-colors rounded text-on-surface-variant">
+<span class="material-symbols-outlined text-[18px]">attach_file</span>
+</button>
+<button class="w-[28px] h-[28px] flex items-center justify-center bg-primary hover:bg-surface-tint transition-colors rounded text-on-primary">
+<span class="material-symbols-outlined text-[16px]">arrow_upward</span>
+</button>
+</div>
+</div>
+<div class="mt-3 flex gap-2">
+<div class="flex flex-col gap-1 flex-1">
+<span class="font-tiny text-tiny text-on-surface-variant uppercase">Model</span>
+<select class="bg-surface-container-low border border-outline-variant rounded font-small text-small text-on-surface px-2 h-[28px] focus:ring-1 focus:ring-primary focus:border-primary w-full">
+<option>Default</option>
+<option>Opus</option>
+<option>Sonnet</option>
+<option>Haiku</option>
+</select>
+</div>
+<div class="flex flex-col gap-1 flex-1">
+<span class="font-tiny text-tiny text-on-surface-variant uppercase">Mode</span>
+<select class="bg-surface-container-low border border-outline-variant rounded font-small text-small text-on-surface px-2 h-[28px] focus:ring-1 focus:ring-primary focus:border-primary w-full">
+<option>Edit</option>
+<option>Plan</option>
+</select>
+</div>
+</div>
+</div>
+</aside>
+</div>
+</body></html>

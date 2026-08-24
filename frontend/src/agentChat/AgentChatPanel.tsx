@@ -1,4 +1,4 @@
-import { AlertTriangle, BookOpen, Code2, File, RotateCcw, Send, Square, X } from "lucide-react";
+import Icon from "../ui/Icon";
 import ReactMarkdown from "react-markdown";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type AgentMode, type AgentModel, type AgentTurn, type ExecutionAttempt, type ExecutionOperation, type FileMatch, type NotebookSnapshot, type StructuralOp, type TurnOptions, type TurnScope, type WriteScope } from "../api/client";
@@ -26,6 +26,10 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
   onRemoveAttachment?: (id: string) => void; onRemoveScopeCell?: (id: string) => void;
 }) {
   const keptCount = (turn?.operations ?? []).filter((item) => item.state === "accepted").length;
+  // B4. History is a tab and a placeholder: the design splits the rail in two,
+  // but nothing behind the split exists yet, so this deliberately reads no
+  // state and calls no endpoint. The turn list stays where it is, in Agent.
+  const [rail, setRail] = useState<"agent" | "history">("agent");
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState<AgentModel>("default");
   const [mode, setMode] = useState<AgentMode>("edit");
@@ -120,49 +124,74 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
   return <aside className="agent-panel" aria-label="Agent workspace" onDragOver={(event) => { if (!mutationsDisabled) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }} onDrop={(event) => { event.preventDefault(); if (mutationsDisabled) return; const many = event.dataTransfer.getData("application/x-notebook-cells"); if (many) { try { const ids = JSON.parse(many) as string[]; if (ids?.length) { if (onDropCells) onDropCells(ids); else ids.forEach(onDropCell); return; } } catch { /* fall through to single */ } } const id = event.dataTransfer.getData("application/x-notebook-cell"); if (id) onDropCell(id); }}>
     <header>
       <div className="agent-panel-title"><h1>Notebook Agent</h1><span>Scoped local edits</span></div>
-      <label className="prompt-select scope-header">
-        <span>Scope</span>
-        <select aria-label="Write scope" value={writeScope} disabled={busy || mode === "plan"}
-          title={mode === "plan" ? "Plan mode writes nothing, so write scope has no effect." : "Blocking: the agent may only edit cells you mark editable. Trusted: the agent may add, delete, reorder, and edit any cell in the notebook."}
-          onChange={(event) => updateWriteScope(event.target.value as WriteScope)}>
-          <option value="blocking">Blocking</option>
-          <option value="trusted">Trusted</option>
-        </select>
-      </label>
     </header>
-    <TurnScopePanel notebook={notebook} scope={scope} disabled={mutationsDisabled} trusted={trustedScope} onClear={onClearScope} onFocusCell={onFocusCell} onDropCell={onDropCell} onRemoveCell={onRemoveScopeCell} />
-    <section className="conversation" aria-live="polite">
+    <div className="agent-tabs" role="tablist" aria-label="Agent panel view">
+      <button type="button" role="tab" id="agent-tab-agent" aria-controls="agent-tabpanel-agent" aria-selected={rail === "agent"} className={rail === "agent" ? "active" : ""} onClick={() => setRail("agent")}><Icon name="smart_toy" /> Agent</button>
+      <button type="button" role="tab" id="agent-tab-history" aria-controls="agent-tabpanel-history" aria-selected={rail === "history"} className={rail === "history" ? "active" : ""} onClick={() => setRail("history")}><Icon name="history" /> History</button>
+    </div>
+    {rail === "history" && <section className="conversation agent-history-empty" role="tabpanel" id="agent-tabpanel-history" aria-labelledby="agent-tab-history">
+      <div className="empty-conversation">
+        <p>No saved history yet</p>
+        <span>Turns from earlier sessions will be listed here. This session's turns are on the Agent tab.</span>
+      </div>
+    </section>}
+    {rail === "agent" && <TurnScopePanel notebook={notebook} scope={scope} disabled={mutationsDisabled} trusted={trustedScope} onClear={onClearScope} onFocusCell={onFocusCell} onDropCell={onDropCell} onRemoveCell={onRemoveScopeCell} />}
+    {rail === "agent" && <section className="conversation" role="tabpanel" id="agent-tabpanel-agent" aria-labelledby="agent-tab-agent" aria-live="polite">
       {history.length > 0 && <div className="turn-history" aria-label="Turn history">{history.map((record) => <button className={record.turn.turnId === turn?.turnId ? "selected" : ""} key={record.turn.turnId} onClick={() => onSelectTurn(record.turn.turnId)}><span>{record.prompt}</span><small>{(record.turn.writeScope === "trusted" ? "all editable" : `${record.editableCellIds.length} editable`) + " · " + record.turn.state.replaceAll("_", " ")}</small></button>)}</div>}
-      {activeTurn && activeTurn.turnId !== turn?.turnId && <button className="manual-cancel" onClick={onCancel}><Square /> Cancel active turn</button>}
+      {activeTurn && activeTurn.turnId !== turn?.turnId && <button className="manual-cancel" onClick={onCancel}><Icon name="stop" /> Cancel active turn</button>}
       {!turn && <div className="empty-conversation"><p>No agent turn yet</p><span>Select cells to edit, or just ask a read-only question.</span></div>}
       {turn && <div className="turn-status">
         <div className="turn-state"><span className={active ? "activity-dot" : ""} />{turn.state.replaceAll("_", " ")}</div>
         {turn.finalOutput && <div className="turn-output"><ReactMarkdown>{turn.finalOutput}</ReactMarkdown></div>}
         {turn.error && <p className="error-text">{turn.error.message}</p>}
-        {turn.changes.length > 0 && turn.writeScope !== "trusted" && <p>{turn.changes.length} cell{turn.changes.length === 1 ? "" : "s"} changed. Review the inline diff.</p>}
+        {/* C7. The design's card, with the count kept: "Cell Edit Proposed"
+            says what happened, the count says how much, and the sentence says
+            where to go and settle it. */}
+        {turn.changes.length > 0 && turn.writeScope !== "trusted" && <div className="turn-edit-card">
+          <p className="turn-edit-card-head"><Icon name="edit_document" /> Cell Edit Proposed<span>{turn.changes.length} cell{turn.changes.length === 1 ? "" : "s"}</span></p>
+          <p>Review the changes inline in the notebook editor.</p>
+        </div>}
         {turn.structuralOps && turn.structuralOps.length > 0 && <p className="structural-summary">Structural changes: {structuralSummary(turn.structuralOps)}. Review the inline diff — undo reverts the whole turn.</p>}
-        {/* Unlike "Undo all" in the review bar, restoring the checkpoint also
+        {/* Unlike "Reject All" in the review bar, restoring the checkpoint also
             reverses changes the user explicitly kept, so say so rather than
             letting the label imply it only undoes outstanding work. */}
         {keptCount > 0 && turn.undoEligible && !active && <p className="turn-undo-note" role="note">Undoing the turn also reverses the {keptCount} change{keptCount === 1 ? "" : "s"} you kept.</p>}
-        <div className="turn-actions">{active && <button onClick={onCancel}><Square /> Cancel turn</button>}{turn.undoEligible && !active && <button disabled={mutationsDisabled} onClick={onUndo}><RotateCcw /> Undo entire turn</button>}</div>
+        <div className="turn-actions">{active && <button onClick={onCancel}><Icon name="stop" /> Cancel turn</button>}{turn.undoEligible && !active && <button disabled={mutationsDisabled} onClick={onUndo}><Icon name="undo" /> Undo entire turn</button>}</div>
       </div>}
-      {operation && <div className={`execution-status ${operation.error ? "has-error" : ""}`}><span>Execution: {operation.state.replaceAll("_", " ")}</span>{operation.error && <p>{operation.error.message}</p>}{operation.attempts.filter((attempt) => attempt.error).map((attempt) => <p key={attempt.executionAttemptId}>Cell {attempt.cellIndex + 1}: {attempt.error!.message}</p>)}{operation.attempts.filter((attempt) => attempt.outputsTruncated).map((attempt) => <p key={`${attempt.executionAttemptId}-output-truncated`}>Cell {attempt.cellIndex + 1}: Retained execution output was truncated.</p>)}</div>}
+    </section>}
+    {/* Cell execution is not a conversation entry. Left in the scrolling
+        conversation it landed wherever the scroll happened to be — most
+        awkwardly in the middle of the "No agent turn yet" empty state, which
+        was simultaneously telling the user nothing was happening. It is
+        notebook status, so it gets a fixed place: pinned above the composer,
+        visible on both tabs and at any scroll position.
+
+        The risky-execution gate moves with it, and that part is a fix rather
+        than a tidy-up: the Agent/History tabs put the conversation behind a
+        tab, so an approval prompt rendered inside it was invisible from the
+        History tab — a gate the user could not answer. It is `role="alertdialog"`
+        and it must not depend on which tab is showing.
+
+        aria-live is re-declared here because this content just left the
+        conversation's live region and still needs announcing. */}
+    {operation && <div className="execution-strip" aria-live="polite">
+      <div className={`execution-status ${operation.error ? "has-error" : ""}`}><span>Execution: {operation.state.replaceAll("_", " ")}</span>{operation.error && <p>{operation.error.message}</p>}{operation.attempts.filter((attempt) => attempt.error).map((attempt) => <p key={attempt.executionAttemptId}>Cell {attempt.cellIndex + 1}: {attempt.error!.message}</p>)}{operation.attempts.filter((attempt) => attempt.outputsTruncated).map((attempt) => <p key={`${attempt.executionAttemptId}-output-truncated`}>Cell {attempt.cellIndex + 1}: Retained execution output was truncated.</p>)}</div>
       {/* Not while the approval panel is up. That panel carries its own Cancel
           run beside Skip and Approve, and this button is the same action on the
           same attempt — two identical controls a few pixels apart, one of them
           without the context of what is being cancelled. It only became
           possible to see both at once when this stopped being manual-only: a
           manual run is never gated, so it never reaches `awaiting_approval`,
-          but a run a model asked for does exactly that. */}
-      {operation && operation.parentTurnId === null && !awaiting && !["completed", "failed", "cancelled", "validation_incomplete", "timed_out"].includes(operation.state) && manualAttempt && <button disabled={!manualCorrelated} className="manual-cancel" onClick={() => onDecision(manualAttempt, "cancel")}><Square /> Cancel run</button>}
-      {operation && awaiting && <RiskyExecutionDialog operation={operation} attempt={awaiting} busy={busy} onDecision={(decision) => onDecision(awaiting, decision)} />}
-    </section>
+          but a run a model asked for does exactly that. Truer still now that
+          both sit inside this one strip. */}
+      {operation.parentTurnId === null && !awaiting && !["completed", "failed", "cancelled", "validation_incomplete", "timed_out"].includes(operation.state) && manualAttempt && <button disabled={!manualCorrelated} className="manual-cancel" onClick={() => onDecision(manualAttempt, "cancel")}><Icon name="stop" /> Cancel run</button>}
+      {awaiting && <RiskyExecutionDialog operation={operation} attempt={awaiting} busy={busy} onDecision={(decision) => onDecision(awaiting, decision)} />}
+    </div>}
     <form className="prompt-form" onSubmit={(event) => { event.preventDefault(); submitPrompt(); }}>
       <label htmlFor="agent-prompt">Agent instruction</label>
       {attachments.length > 0 && <div className="chat-attachments" aria-label="Referenced selections">{attachments.map((attachment) => <span className={`attachment-chip ${attachment.kind}`} key={attachment.id}>
-        <button type="button" className="attachment-focus" title="Reveal selection" onClick={() => onFocusCell(attachment.cellId)}>{attachment.kind === "error" ? <AlertTriangle /> : <Code2 />} {attachmentLabel(attachment)}</button>
-        <button type="button" className="attachment-remove" aria-label={`Remove ${attachmentLabel(attachment)}`} onClick={() => onRemoveAttachment?.(attachment.id)}><X /></button>
+        <button type="button" className="attachment-focus" title="Reveal selection" onClick={() => onFocusCell(attachment.cellId)}>{attachment.kind === "error" ? <Icon name="warning" /> : <Icon name="code" />} {attachmentLabel(attachment)}</button>
+        <button type="button" className="attachment-remove" aria-label={`Remove ${attachmentLabel(attachment)}`} onClick={() => onRemoveAttachment?.(attachment.id)}><Icon name="close" /></button>
       </span>)}</div>}
       <div className="mention-anchor">
         {menuOpen && <ul className="mention-menu" role="listbox" aria-label="Workspace files">
@@ -170,7 +199,7 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
             <button type="button" className={`mention-option ${index === activeMatch ? "active" : ""}`}
               onMouseDown={(event) => { event.preventDefault(); chooseMatch(match); }}
               onMouseEnter={() => setActiveMatch(index)}>
-              {match.kind === "notebook" ? <BookOpen /> : <File />}
+              {match.kind === "notebook" ? <Icon name="menu_book" /> : <Icon name="description" />}
               <span className="mention-name">{match.name}</span>
               <span className="mention-path">{match.relativePath}</span>
             </button>
@@ -196,6 +225,21 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
       {trusted && <span className="prompt-mode trusted" role="note">Trusted turn — the agent may add, delete, reorder, and edit any cell. Review the diff before keeping.</span>}
       {mode === "plan" && <span className="prompt-mode" role="note">Plan mode — the agent proposes a plan and writes no changes.</span>}
       <div className="prompt-controls">
+        {/* D2, MODIFY: the write boundary lives with the other per-turn
+            choices now, but it is not one of them. It is first, wider, and
+            ruled off down its left — and if the three do not fit at the
+            panel's minimum width they wrap rather than shrink, because a
+            truncated "Blocking"/"Trusted" is the one label here that must
+            never be a guess. */}
+        <label className={`prompt-select write-scope ${trustedScope ? "trusted" : ""}`}>
+          <span>Write scope</span>
+          <select aria-label="Write scope" value={writeScope} disabled={busy || mode === "plan"}
+            title={mode === "plan" ? "Plan mode writes nothing, so write scope has no effect." : "Blocking: the agent may only edit cells you mark editable. Trusted: the agent may add, delete, reorder, and edit any cell in the notebook."}
+            onChange={(event) => updateWriteScope(event.target.value as WriteScope)}>
+            <option value="blocking">Blocking</option>
+            <option value="trusted">Trusted</option>
+          </select>
+        </label>
         <label className="prompt-select">
           <span>Model</span>
           <select aria-label="Agent model" value={model} disabled={busy} onChange={(event) => setModel(event.target.value as AgentModel)}>
@@ -212,7 +256,7 @@ export default function AgentChatPanel({ notebook, scope, turn, activeTurn, hist
             <option value="plan">Plan</option>
           </select>
         </label>
-        <button className={`primary ${trusted ? "trusted" : ""}`} disabled={!canSubmit} type="submit"><Send /> {mode === "plan" ? "Plan" : trusted ? "Send · Trusted" : readOnly ? "Ask" : "Send"}</button>
+        <button className={`primary ${trusted ? "trusted" : ""}`} disabled={!canSubmit} type="submit"><Icon name="arrow_upward" /> {mode === "plan" ? "Plan" : trusted ? "Send · Trusted" : readOnly ? "Ask" : "Send"}</button>
       </div>
     </form>
   </aside>;

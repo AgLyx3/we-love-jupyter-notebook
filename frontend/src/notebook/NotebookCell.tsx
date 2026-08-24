@@ -1,4 +1,4 @@
-import { BookOpen, Bot, Check, MessageSquarePlus, Pencil, Play, RotateCcw, Save, Send, SlidersHorizontal, Wand2, X } from "lucide-react";
+import Icon from "../ui/Icon";
 import ReactMarkdown from "react-markdown";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { AgentChange, AgentOperation, CellOutput, NotebookCellData, TuningPlan, TuningPreview, TuningRecord, TuningWarmResult } from "../api/client";
@@ -67,7 +67,7 @@ function stripAnsi(value: string): string {
 function ErrorOutput({ value, disabled, onAdd }: { value: string; disabled: boolean; onAdd?: (text: string) => void }) {
   const clean = stripAnsi(value);
   return <div className="output-error-block">
-    {onAdd && !disabled && <button type="button" className="output-add-chat" aria-label="Add error to agent chat" onClick={() => onAdd(clean)}><MessageSquarePlus /> Add to chat</button>}
+    {onAdd && !disabled && <button type="button" className="output-add-chat" aria-label="Add error to agent chat" onClick={() => onAdd(clean)}><Icon name="add_comment" /> Add to chat</button>}
     <pre className="output-error">{clean}</pre>
   </div>;
 }
@@ -116,8 +116,8 @@ function MarkdownPreview({ source, cellId, disabled, onAddSelectionToChat, onInl
   return <div ref={ref} className="markdown-preview-wrap" onMouseMove={(event) => { const target = event.target as HTMLElement; onHoverChange(!(target === ref.current || target.classList.contains("markdown-preview"))); }} onMouseLeave={() => onHoverChange(false)}>
     <div className="markdown-preview"><ReactMarkdown>{source}</ReactMarkdown></div>
     {menu && !inline && <div className="selection-toolbar above" role="toolbar" aria-label="Selection actions" style={{ left: menu.left, top: menu.top }} onMouseDown={(event) => event.preventDefault()}>
-      {onAddSelectionToChat && <button type="button" onClick={() => { onAddSelectionToChat(selectionOf(menu.text)); setMenu(null); window.getSelection()?.removeAllRanges(); }}><MessageSquarePlus /> Add to chat</button>}
-      {onInlineEdit && <button type="button" onClick={openInline}><Wand2 /> Edit inline</button>}
+      {onAddSelectionToChat && <button type="button" onClick={() => { onAddSelectionToChat(selectionOf(menu.text)); setMenu(null); window.getSelection()?.removeAllRanges(); }}><Icon name="add_comment" /> Add to chat</button>}
+      {onInlineEdit && <button type="button" onClick={openInline}><Icon name="auto_fix_high" /> Edit inline</button>}
     </div>}
     {inline && <form className="inline-edit-widget" style={{ top: inline.top }} aria-label="Inline edit instruction" onSubmit={(event) => {
       event.preventDefault();
@@ -131,8 +131,8 @@ function MarkdownPreview({ source, cellId, disabled, onAddSelectionToChat, onInl
         <input autoFocus value={instruction} placeholder="Describe the edit for the selection…" aria-label="Inline edit instruction"
           onChange={(event) => setInstruction(event.target.value)}
           onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); setInline(null); } }} />
-        <button className="primary" type="submit" disabled={!instruction.trim()} aria-label="Run inline edit"><Send /></button>
-        <button type="button" aria-label="Cancel inline edit" onClick={() => setInline(null)}><X /></button>
+        <button className="primary" type="submit" disabled={!instruction.trim()} aria-label="Run inline edit"><Icon name="arrow_upward" /></button>
+        <button type="button" aria-label="Cancel inline edit" onClick={() => setInline(null)}><Icon name="close" /></button>
       </div>
       <small>Markdown selection · the agent edits the whole cell, focused on your selection</small>
     </form>}
@@ -148,7 +148,7 @@ export function Outputs({ outputs, disabled = false, onAddErrorToChat, onHoverCh
         undiscoverable". Unlike add-chat this one is never hover-revealed: it is
         the entry point for a whole feature, and hiding it until hover would
         reintroduce exactly the objection it was placed here to avoid. */}
-    {onTune && <button type="button" className="output-tune" title="Tune the values this plot depends on" aria-label={tuneLabel} onClick={onTune}><SlidersHorizontal /> Tune</button>}
+    {onTune && <button type="button" className="output-tune" title="Tune the values this plot depends on" aria-label={tuneLabel} onClick={onTune}><Icon name="tune" /> Tune</button>}
     {outputs.map((output, index) => {
     const kind = String(output.output_type ?? "output");
     if (kind === "stream") return <pre key={index}>{text(output.text)}</pre>;
@@ -276,7 +276,7 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
   const outputsStale = undone && undoneAt.current === cell.executionCount;
   // Every string on the review surface is keyed off the origin. The user reused
   // the agent's ledger on purpose, but their own edit must never be attributed
-  // to the agent — so "Agent changed this cell" becomes "You tuned this cell",
+  // to the agent — so "Agent Suggestion" becomes "You tuned this cell",
   // and so does everything around it.
   const tuned = origin === "tune";
   const reviewLabel = stale
@@ -285,14 +285,17 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
     // unreachable for it today. The branch is here so that a structural tune,
     // if one ever lands, cannot silently fall through to the agent's wording.
     : added ? tuned ? "You added this cell" : "Agent added this cell"
-    : tuned ? "You tuned this cell" : "Agent changed this cell";
+    : tuned ? "You tuned this cell" : "Agent Suggestion";
   const staleNote = tuned
     ? "This cell changed after you tuned it — these values can no longer be undone individually; edit them by hand."
     : "This cell changed after the agent edited it — undo the whole turn or edit it by hand.";
   const keepLabel = tuned ? `Keep tuned change to ${description}` : `Keep agent change to ${description}`;
-  const undoLabel = tuned ? `Undo tuned change to ${description}` : `Revert agent change to ${description}`;
+  // C1 renamed the visible word to Discard, so the accessible name has to
+  // carry it too: WCAG 2.5.3 wants the visible label inside the accessible
+  // name, and "Revert agent change to…" no longer contains it.
+  const undoLabel = tuned ? `Discard tuned change to ${description}` : `Discard agent change to ${description}`;
   const keepTitle = tuned ? "Keep these tuned values" : added ? "Keep this cell" : "Keep this agent change";
-  const undoTitle = tuned ? "Undo these tuned values" : added ? "Remove this added cell" : "Undo this agent change";
+  const undoTitle = tuned ? "Discard these tuned values" : added ? "Remove this added cell" : "Discard this agent change";
   // §3.5's gate: a picture to compare against, and knobs the scan actually
   // found. Without the second half the button would promise a panel that opens
   // on "nothing here can be tuned".
@@ -312,21 +315,21 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
     event.dataTransfer.setData("application/x-notebook-cells", JSON.stringify(ids));
     event.dataTransfer.effectAllowed = "copy";
   }} className={`notebook-cell ${focused ? "is-focused" : ""} ${selected ? "is-selected" : ""}`} tabIndex={0} onFocus={onFocus} onContextMenu={onContextMenu} aria-label={description}>
-    <div className="cell-gutter" aria-label={`Select ${description}`} title="Click to select · Shift-click for a range · right-click for scope actions" onClick={onSelect}><span className="cell-number" title={`Cell ${cell.index + 1}`}>{cell.index + 1}</span><span className="execution-count">{cell.cellType === "code" ? `[${cell.executionCount ?? " "}]` : cell.cellType === "raw" ? "RAW" : "MD"}</span>{cell.metadata?.agent_authored ? <span className="agent-authored-badge" title="Added by the agent — review before running">AI</span> : null}</div>
+    <div className="cell-gutter" aria-label={`Select ${description}`} title="Click to select · Shift-click for a range · right-click for scope actions" onClick={onSelect}><span className="cell-number" title={`Cell ${cell.index + 1}`}>{cell.index + 1}</span><span className="execution-count">{cell.cellType === "code" ? `[${cell.executionCount ?? " "}]` : cell.cellType === "raw" ? "RAW" : "MD"}</span>{cell.metadata?.agent_authored ? <span className="agent-authored-badge" role="img" aria-label="Added by the agent" title="Added by the agent — review before running"><Icon name="smart_toy" filled /></span> : null}</div>
     <div className="cell-main">
       <div className="cell-actions">
-        {!trusted && <button disabled={dependentDisabled || cell.cellType === "raw"} className={editable ? "selected" : ""} title="Allow agent edit" aria-label={`Allow agent edit ${description}`} onClick={(event) => { event.stopPropagation(); onAddEditable(); }}>{editable ? <Check /> : <Bot />}</button>}
-        <button disabled={dependentDisabled} className={context ? "selected context" : ""} title="Add as focus" aria-label={`Add ${description} as focus`} onClick={(event) => { event.stopPropagation(); onAddContext(); }}>{context ? <Check /> : <BookOpen />}</button>
-        {cell.cellType === "code" && <button disabled={dependentDisabled} title="Run cell" aria-label={`Run ${description}`} onClick={onRun}><Play /></button>}
-        {cell.cellType === "markdown" && <button disabled={disabled} title={editingMarkdown ? "Preview Markdown" : "Edit Markdown"} aria-label={`${editingMarkdown ? "Preview" : "Edit"} ${description}`} onClick={() => setEditingMarkdown(!editingMarkdown)}><Pencil /></button>}
-        {dirty && <button disabled={disabled} title="Save source" aria-label={`Save ${description}`} onClick={() => onSave(source)}><Save /></button>}
+        {!trusted && <button disabled={dependentDisabled || cell.cellType === "raw"} className={editable ? "selected" : ""} title="Allow agent edit" aria-label={`Allow agent edit ${description}`} onClick={(event) => { event.stopPropagation(); onAddEditable(); }}>{editable ? <Icon name="check" /> : <Icon name="smart_toy" />}</button>}
+        <button disabled={dependentDisabled} className={context ? "selected context" : ""} title="Add as focus" aria-label={`Add ${description} as focus`} onClick={(event) => { event.stopPropagation(); onAddContext(); }}>{context ? <Icon name="check" /> : <Icon name="menu_book" />}</button>
+        {cell.cellType === "code" && <button disabled={dependentDisabled} title="Run cell" aria-label={`Run ${description}`} onClick={onRun}><Icon name="play_arrow" /></button>}
+        {cell.cellType === "markdown" && <button disabled={disabled} title={editingMarkdown ? "Preview Markdown" : "Edit Markdown"} aria-label={`${editingMarkdown ? "Preview" : "Edit"} ${description}`} onClick={() => setEditingMarkdown(!editingMarkdown)}><Icon name="edit" /></button>}
+        {dirty && <button disabled={disabled} title="Save source" aria-label={`Save ${description}`} onClick={() => onSave(source)}><Icon name="save" /></button>}
       </div>
       {/* Agent changes are reviewed from a persistent, labelled bar rather than
           the hover-revealed action cluster above: the cluster is invisible until
           hover, unlabelled, and shared with scope/run actions, so the revert
           control was there but effectively undiscoverable. */}
       {reviewable && <div className={`cell-review${tuned ? " tuned" : ""}`}>
-        <span className="cell-review-label">{tuned ? <SlidersHorizontal /> : <Bot />} {reviewLabel}</span>
+        <span className="cell-review-label">{tuned ? <Icon name="tune" /> : <Icon name="smart_toy" />} {reviewLabel}</span>
         {!revertable
           // A Trusted turn rewrote the whole notebook, so this cell's change
           // cannot be separated from the adds, deletes and moves around it.
@@ -345,8 +348,8 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
           : hunksVisible
           ? null
           : <>
-            {onKeep && <button className="review-action keep" disabled={dependentDisabled} title={keepTitle} aria-label={keepLabel} onClick={onKeep}><Check /> Keep</button>}
-            <button className="review-action undo" disabled={dependentDisabled} title={undoTitle} aria-label={undoLabel} onClick={onRevert}><RotateCcw /> Undo</button>
+            {onKeep && <button className="review-action keep" disabled={dependentDisabled} title={keepTitle} aria-label={keepLabel} onClick={onKeep}><Icon name="check" /> Keep</button>}
+            <button className="review-action undo" disabled={dependentDisabled} title={undoTitle} aria-label={undoLabel} onClick={onRevert}><Icon name="undo" /> Discard</button>
           </>}
       </div>}
       {retypedTo && <p className="cell-retyped" role="note">
@@ -360,11 +363,13 @@ export default function NotebookCell({ cell, focused, selected, dragIds, editabl
           can be far narrower than the viewport, so a viewport media query
           would miss it. */}
       <div className="cell-output-region" ref={outputRegionRef} tabIndex={tuningOpen ? -1 : undefined}>
-        {/* The panel replaces the cell's own outputs rather than sitting under
-            them: it renders that same committed picture as its "before", and a
-            second copy of a tall plot would push the knob rail out of sight. */}
+        {/* The panel stands in for the cell's own output region rather than
+            sitting under it: it renders that same picture as its "before", and
+            a second copy of a tall plot would just push the first off screen.
+            The knobs themselves float over the notebook (stitch-diff B6), so
+            the picture keeps the full width of the cell either way. */}
         {tuningOpen && tuning
-          ? <TuningPanel cellId={cell.cellId} open revision={tuning.revision}
+          ? <TuningPanel cellId={cell.cellId} open revision={tuning.revision} cellOutputs={cell.outputs}
             onScan={tuning.onScan} onWarm={tuning.onWarm} onPreview={tuning.onPreview} onApply={tuning.onApply}
             onDiscardShadow={tuning.onDiscardShadow} onClose={() => setTuningOpen(false)} />
           : <Outputs outputs={cell.outputs} disabled={dependentDisabled} onAddErrorToChat={onAddErrorToChat} onHoverChange={setSuppressDrag}

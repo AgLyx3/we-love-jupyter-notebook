@@ -93,12 +93,12 @@ afterEach(() => vi.restoreAllMocks());
 describe("per-operation review", () => {
   it("shows a persistent review bar counting unreviewed changes", async () => {
     mount(turnWith([operation(0, "pending"), operation(1, "pending")]));
-    expect(await screen.findByText("0 of 2 changes reviewed")).toBeInTheDocument();
+    expect(await screen.findByText("2 Pending Reviews")).toBeInTheDocument();
   });
 
   it("counts accepted operations as reviewed", async () => {
     mount(turnWith([operation(0, "accepted"), operation(1, "pending")]));
-    expect(await screen.findByText("1 of 2 changes reviewed")).toBeInTheDocument();
+    expect(await screen.findByText("1 Pending Review")).toBeInTheDocument();
   });
 
   it("hides the review bar when a turn applied no changes", async () => {
@@ -112,14 +112,14 @@ describe("per-operation review", () => {
     // one hunk made the whole cell's diff — including this pending one — vanish.
     const operations = [operation(0, "rejected"), operation(1, "pending")];
     mount(turnWith(operations), notebookFor(operations));
-    expect(await screen.findByText("Agent changed this cell")).toBeInTheDocument();
+    expect(await screen.findByText("Agent Suggestion")).toBeInTheDocument();
   });
 
   it("clears the cell diff once every operation is settled", async () => {
     const operations = [operation(0, "accepted"), operation(1, "rejected")];
     mount(turnWith(operations), notebookFor(operations));
     await screen.findByLabelText("Source for code cell 1");
-    expect(screen.queryByText("Agent changed this cell")).not.toBeInTheDocument();
+    expect(screen.queryByText("Agent Suggestion")).not.toBeInTheDocument();
   });
 
   it("does not repeat Keep/Undo in the cell header when hunk controls are shown", async () => {
@@ -127,9 +127,9 @@ describe("per-operation review", () => {
     // duplication. The header keeps only the label.
     const operations = [operation(0, "pending"), operation(1, "pending")];
     mount(turnWith(operations), notebookFor(operations));
-    expect(await screen.findByText("Agent changed this cell")).toBeInTheDocument();
+    expect(await screen.findByText("Agent Suggestion")).toBeInTheDocument();
     expect(screen.queryByLabelText("Keep agent change to code cell 1")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Revert agent change to code cell 1")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Discard agent change to code cell 1")).not.toBeInTheDocument();
   });
 
   it("keeps header Keep/Undo for an added cell, which has no hunks to attach to", async () => {
@@ -140,12 +140,12 @@ describe("per-operation review", () => {
     mount(turnWith([add]), notebook);
     expect(await screen.findByText("Agent added this cell")).toBeInTheDocument();
     expect(screen.getByLabelText("Keep agent change to code cell 1")).toBeInTheDocument();
-    expect(screen.getByLabelText("Revert agent change to code cell 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("Discard agent change to code cell 1")).toBeInTheDocument();
   });
 
   it("sends accept-all without an expected revision", async () => {
     const calls = mount(turnWith([operation(0, "pending"), operation(1, "pending")]));
-    await userEvent.click(await screen.findByRole("button", { name: /Keep all/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Accept All/ }));
     const accept = await waitFor(() => {
       const found = calls.find((item) => item.path.includes("/operations/accept-all"));
       expect(found).toBeDefined();
@@ -156,8 +156,8 @@ describe("per-operation review", () => {
 
   it("sends reject-all with the expected revision after confirming", async () => {
     const calls = mount(turnWith([operation(0, "pending"), operation(1, "pending")]));
-    await userEvent.click(await screen.findByRole("button", { name: /Undo all/ }));
-    await userEvent.click(await screen.findByRole("button", { name: "Undo them" }));
+    await userEvent.click(await screen.findByRole("button", { name: /Reject All/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Reject them" }));
     const reject = await waitFor(() => {
       const found = calls.find((item) => item.path.includes("/operations/reject-all"));
       expect(found).toBeDefined();
@@ -168,22 +168,22 @@ describe("per-operation review", () => {
 
   it("confirms before undoing, and says kept changes are preserved", async () => {
     const calls = mount(turnWith([operation(0, "accepted"), operation(1, "pending")]));
-    await userEvent.click(await screen.findByRole("button", { name: /Undo all/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Reject All/ }));
 
     // Reject-all only undoes what is still unreviewed. Claiming it also
     // reverses kept work would be false — that is whole-turn undo's job.
-    expect(await screen.findByText(/Undo 1 unreviewed change\? The 1 you kept stay\./)).toBeInTheDocument();
+    expect(await screen.findByText(/Reject 1 unreviewed change\? The 1 you kept stay\./)).toBeInTheDocument();
     expect(calls.some((item) => item.path.includes("/reject"))).toBe(false);
 
-    await userEvent.click(screen.getByRole("button", { name: "Undo them" }));
+    await userEvent.click(screen.getByRole("button", { name: "Reject them" }));
     await waitFor(() => expect(calls.some((item) => item.path.includes("/operations/reject-all"))).toBe(true));
   });
 
   it("can be cancelled from the confirmation without undoing anything", async () => {
     const calls = mount(turnWith([operation(0, "pending"), operation(1, "pending")]));
-    await userEvent.click(await screen.findByRole("button", { name: /Undo all/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Reject All/ }));
     await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("button", { name: "Undo them" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reject them" })).not.toBeInTheDocument();
     expect(calls.some((item) => item.path.includes("/reject"))).toBe(false);
   });
 
@@ -231,7 +231,7 @@ describe("per-operation review", () => {
 
   it("hides the review bar once every change is settled", async () => {
     // The counter used to include settled operations, so the bar stayed on
-    // screen at "2 of 2 reviewed" with a live no-op Undo all.
+    // screen at "0 Pending Reviews" with a live no-op Reject All.
     const operations = [operation(0, "accepted"), operation(1, "accepted")];
     mount(turnWith(operations), notebookFor(operations));
     await screen.findByLabelText("Source for code cell 1");
@@ -241,17 +241,17 @@ describe("per-operation review", () => {
   it("counts a stale change as unreviewed so the bar and the cell agree", async () => {
     const operations = [operation(0, "stale"), operation(1, "accepted")];
     mount(turnWith(operations), notebookFor(operations));
-    expect(await screen.findByText("1 of 2 changes reviewed")).toBeInTheDocument();
-    // Stale cannot be undone, so Undo all has nothing to do — but Keep all can
+    expect(await screen.findByText("1 Pending Review")).toBeInTheDocument();
+    // Stale cannot be undone, so Reject All has nothing to do — but Accept All can
     // still settle it, which is why the bar is still shown.
-    expect(screen.getByRole("button", { name: /Undo all/ })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /Keep all/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Reject All/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Accept All/ })).toBeEnabled();
   });
 
   it("replaces per-cell controls with an explanation when the cell went stale", async () => {
     mount(turnWith([operation(0, "stale"), operation(1, "stale")]));
     expect(await screen.findByText(/This cell changed after the agent edited it/)).toBeInTheDocument();
-    expect(screen.queryByLabelText("Revert agent change to code cell 1")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Discard agent change to code cell 1")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Keep agent change to code cell 1")).not.toBeInTheDocument();
   });
 
@@ -315,7 +315,7 @@ describe("per-operation review", () => {
     mount(trusted, withAdded);
     expect(await screen.findByText("Agent added this cell")).toBeInTheDocument();
     expect(screen.getByLabelText("Keep agent change to markdown cell 2")).toBeEnabled();
-    expect(screen.getByLabelText("Revert agent change to markdown cell 2")).toBeEnabled();
+    expect(screen.getByLabelText("Discard agent change to markdown cell 2")).toBeEnabled();
   });
 
   it("explains instead of offering Undo on a trusted cell without operations", async () => {
@@ -324,7 +324,7 @@ describe("per-operation review", () => {
     const trusted = { ...turnWith([]), writeScope: "trusted" as const, changes: [{ cellId: "code-1", previousSource: PREVIOUS, nextSource: NEXT }] };
     mount(trusted);
     expect(await screen.findByText(/Part of a whole-notebook edit/)).toBeInTheDocument();
-    expect(screen.queryByLabelText("Revert agent change to code cell 1")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Discard agent change to code cell 1")).not.toBeInTheDocument();
   });
 
   it("clears the cell header immediately after keeping every change", async () => {
@@ -333,8 +333,8 @@ describe("per-operation review", () => {
     // pending hunks left for the ledger overlay — the legacy whole-change diff.
     const operations = [operation(0, "pending"), operation(1, "pending")];
     mount(turnWith(operations), notebookFor(operations));
-    await userEvent.click(await screen.findByRole("button", { name: /Keep all/ }));
-    await waitFor(() => expect(screen.queryByText("Agent changed this cell")).not.toBeInTheDocument());
+    await userEvent.click(await screen.findByRole("button", { name: /Accept All/ }));
+    await waitFor(() => expect(screen.queryByText("Agent Suggestion")).not.toBeInTheDocument());
   });
 
   it("keeps the diff for a cell the ledger does not govern", async () => {
@@ -357,7 +357,7 @@ describe("per-operation review", () => {
     ];
     mount(turn, twoCells);
     // Both cells still under review: the governed one and the ungoverned one.
-    await waitFor(() => expect(screen.getAllByText(/Agent changed this cell/)).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByText(/Agent Suggestion/)).toHaveLength(2));
     expect(screen.getByText(/Part of a whole-notebook edit/)).toBeInTheDocument();
   });
 
@@ -406,6 +406,6 @@ describe("per-operation review", () => {
     delete (legacy as { operations?: unknown }).operations;
     mount(legacy);
     // Pre-ledger turns must still resolve their diffs against the notebook.
-    expect(await screen.findByLabelText("Revert agent change to code cell 1")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Discard agent change to code cell 1")).toBeInTheDocument();
   });
 });

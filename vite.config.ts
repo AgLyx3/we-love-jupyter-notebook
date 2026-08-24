@@ -10,7 +10,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["./frontend/src/test/setup.ts"],
-    exclude: ["e2e/**", "node_modules/**", "dist/**", "backend/app/web/**"],
+    exclude: ["e2e/**", "node_modules/**", "dist/**", "backend/app/web/**", ".claude/**"],
   },
   build: {
     // Inside the Python package, not a sibling `dist/`, so the built frontend
@@ -25,7 +25,6 @@ export default defineConfig({
         manualChunks(id) {
           if (id.includes("@codemirror") || id.includes("@uiw/react-codemirror")) return "editor";
           if (id.includes("react-markdown") || id.includes("remark-") || id.includes("micromark")) return "markdown";
-          if (id.includes("lucide-react")) return "icons";
           if (id.includes("node_modules/react") || id.includes("node_modules/scheduler")) return "react";
         },
       },

@@ -16,7 +16,7 @@ async function replaceEditor(page: Page, label: string, source: string) {
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.insertText(source);
   // .cm-line only: diff decorations render removed lines and the per-hunk
-  // Keep/Undo widgets inside .cm-content, so its innerText is the document plus
+  // Keep/Discard widgets inside .cm-content, so its innerText is the document plus
   // review chrome. The document lines are what this helper is asserting on.
   await expect.poll(() => editor.evaluate((node) =>
     [...node.querySelectorAll(".cm-line")].map((line) => (line as HTMLElement).innerText).join("\n"),
@@ -27,14 +27,14 @@ function cellOf(page: Page, sourceLabel: string) {
   return page.locator(".notebook-cell").filter({ has: page.getByLabel(sourceLabel) });
 }
 
-// Undo every agent change in one cell.
+// Discard every agent change in one cell.
 //
 // Review lives on the hunks now: a cell whose changes are all hunks carries a
-// Keep/Undo pair per changed region inside the editor and deliberately no pair
-// in its header, so there is no single per-cell revert button to click. Undo
-// each remaining hunk until the cell is back to its pre-turn source.
+// Keep/Discard pair per changed region inside the editor and deliberately no
+// pair in its header, so there is no single per-cell revert button to click.
+// Discard each remaining hunk until the cell is back to its pre-turn source.
 async function undoCellChanges(page: Page, sourceLabel: string) {
-  const undo = cellOf(page, sourceLabel).getByLabel("Undo this change");
+  const undo = cellOf(page, sourceLabel).getByLabel("Discard this change");
   let remaining = await undo.count();
   expect(remaining).toBeGreaterThan(0);
   while (remaining > 0) {
@@ -188,6 +188,16 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   page.on("requestfailed", (request) => {
     const failure = request.failure()?.errorText ?? "unknown failure";
     const url = new URL(request.url());
+    // The redesign loads Inter, JetBrains Mono and Material Symbols from Google
+    // Fonts (stitch-diff A8, accepted in §H). openSample() reloads the page
+    // mid-load, which aborts whichever font files are still in flight — a
+    // consequence of the reload, not of the app. Narrow on purpose: only the
+    // two font origins, only GET, only ERR_ABORTED. Anything the app itself
+    // requests still fails this test.
+    const expectedFontAbort = (url.origin === "https://fonts.gstatic.com" || url.origin === "https://fonts.googleapis.com")
+      && request.method() === "GET"
+      && failure === "net::ERR_ABORTED";
+    if (expectedFontAbort) return;
     const expectedEventTeardown = replacedSessionId !== null
       && url.origin === frontendUrl
       && url.pathname === "/api/events"
@@ -301,6 +311,16 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   await expect(dialog).toBeVisible({ timeout: 45_000 });
   await assertOverlayLayout(page, ".risk-dialog", ".risk-actions button");
   await expect(dialog).toContainText("Reads environment variables that may contain secrets");
+  // The approval gate must not depend on which agent-panel tab is showing.
+  // It used to live inside the conversation, which the Agent/History tabs put
+  // behind a tab — so switching to History hid a prompt the turn is blocked on
+  // and the user cannot answer. Only agent-downstream execution reaches this
+  // gate (manual run-all passes prompt_for_risk=False), and that is exactly
+  // when someone might be reading History.
+  await page.getByRole("tab", { name: "History" }).click();
+  await expect(dialog).toBeVisible();
+  await page.getByRole("tab", { name: "Agent" }).click();
+  await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Approve and run" }).click();
   await waitForTurn(page, /completed/);
   await expect(page.getByLabel("Cell output").filter({ hasText: "Total: 30" })).toBeVisible();
@@ -312,11 +332,11 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
   // is enforced end to end: the hunk pair is present, the header pair is not,
   // and both render as the same control rather than two unrelated buttons.
   const changed = cellOf(page, "Source for code cell 2");
-  await expect(changed.getByLabel("Undo this change").first()).toBeVisible();
+  await expect(changed.getByLabel("Discard this change").first()).toBeVisible();
   await expect(changed.getByLabel("Keep this change").first()).toBeVisible();
-  await expect(changed.getByLabel("Revert agent change to code cell 2")).toHaveCount(0);
+  await expect(changed.getByLabel("Discard agent change to code cell 2")).toHaveCount(0);
   await expect(changed.getByLabel("Keep agent change to code cell 2")).toHaveCount(0);
-  await expect(changed.locator(".cell-review-label")).toContainText("Agent changed this cell");
+  await expect(changed.locator(".cell-review-label")).toContainText("Agent Suggestion");
   // Not assertOverlayLayout: that also forbids overlapping the sticky topbar,
   // which is meaningless for a widget inline in a scrolling document. The part
   // that matters here is the touch target the project enforces elsewhere.
@@ -328,8 +348,8 @@ test("edits a notebook through scoped agent and execution workflows", async ({ p
 
   await undoCellChanges(page, "Source for code cell 2");
   await expect(page.getByLabel("Source for code cell 2")).toContainText("values = [2, 4, 6]");
-  // Undoing the last hunk settles the cell, so its review surface clears.
-  await expect(changed.getByLabel("Undo this change")).toHaveCount(0);
+  // Discarding the last hunk settles the cell, so its review surface clears.
+  await expect(changed.getByLabel("Discard this change")).toHaveCount(0);
   await expect(changed.locator(".cell-review-label")).toHaveCount(0);
 
   await replaceEditor(page, "Source for code cell 4", "average = total / len(values)\nprint('stale save')");

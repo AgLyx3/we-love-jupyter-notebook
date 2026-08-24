@@ -1,4 +1,4 @@
-import { ShieldAlert } from "lucide-react";
+import Icon from "../ui/Icon";
 import { useEffect, useRef } from "react";
 import type { ExecutionAttempt, ExecutionOperation } from "../api/client";
 
@@ -44,7 +44,7 @@ export default function RiskyExecutionDialog({ operation, attempt, busy, onDecis
     if (event.key === "Escape" && correlated && !busy) { event.preventDefault(); onDecision("cancel"); }
   };
   return <section ref={dialogRef} tabIndex={-1} className="risk-dialog" role="alertdialog" aria-labelledby="risk-title" aria-describedby="risk-description" onKeyDown={handleKeyDown}>
-    <div className="risk-title"><ShieldAlert /><div><h3 id="risk-title">Execution needs approval</h3><p id="risk-description">{askedFor(operation.kind, attempt.cellIndex + 1)}</p></div></div>
+    <div className="risk-title"><Icon name="gpp_maybe" /><div><h3 id="risk-title">Execution needs approval</h3><p id="risk-description">{askedFor(operation.kind, attempt.cellIndex + 1)}</p></div></div>
     <ul>{attempt.risk.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
     <pre className="risk-source" aria-label={`Source preview for cell ${attempt.cellIndex + 1}`}>{attempt.sourcePreview || "Source preview unavailable"}</pre>
     {attempt.risk.matchedPatterns.length > 0 && <code>{attempt.risk.matchedPatterns.join(", ")}</code>}
