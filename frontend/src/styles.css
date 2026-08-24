@@ -545,6 +545,13 @@ body.marquee-active iframe { pointer-events: none; }
 .execution-status { font-size: var(--text-small); color: var(--on-surface-variant); border-left-color: var(--outline); text-transform: capitalize; }
 .structural-summary { color: var(--tertiary); }
 
+/* Notebook execution status, pinned between the conversation and the composer.
+   Capped and scrollable so a long error list — or the risky-execution gate —
+   cannot push the composer off the bottom of the panel. */
+.execution-strip { border-top: 1px solid var(--outline-variant); background: var(--surface-container-low); padding: 8px 12px; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; max-height: 45vh; overflow-y: auto; }
+.execution-strip .execution-status { flex: 1 1 160px; min-width: 0; margin: 0; }
+.execution-strip .manual-cancel { flex: 0 0 auto; margin: 0; }
+.execution-strip .risk-dialog { flex: 1 1 100%; margin: 0; }
 .chat-attachments { display: flex; flex-wrap: wrap; gap: 6px; }
 .attachment-chip { display: inline-flex; align-items: stretch; background: color-mix(in srgb, var(--primary) 10%, var(--surface-container-lowest)); border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--outline-variant)); border-radius: var(--radius); overflow: hidden; font-size: var(--text-small); }
 .attachment-chip .attachment-focus { height: 28px; width: auto; flex: 0 0 auto; gap: 6px; padding: 0 4px 0 8px; background: transparent; border: 0; color: var(--primary); font-weight: 500; border-radius: 0; }
