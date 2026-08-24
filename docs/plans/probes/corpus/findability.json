@@ -1,0 +1,3695 @@
+{
+  "messy-exploration": {
+    "headings": {
+      "names": [
+        "pandas, numpy, matplotlib, seaborn imports",
+        "Sales with store regions, revenue, weekly store lag features",
+        "GradientBoostingRegressor revenue forecast, MAPE, feature importances",
+        "model2 retune, residuals, and pred column",
+        "forecast_v4.csv export and model_v4.pkl dump"
+      ],
+      "score": {
+        "accuracy": 0.9375,
+        "cells_to_read": 30.8,
+        "cost": 29.3125,
+        "per_question": {
+          "1": 44,
+          "8": 44,
+          "17": 44,
+          "18": 44,
+          "23": 44,
+          "27": 44,
+          "32": 44,
+          "33": 44,
+          "35": 44,
+          "38": 44,
+          "43": 7,
+          "45": 5,
+          "48": 5,
+          "49": 5,
+          "51": 3,
+          "53": 4
+        },
+        "total_cells": 57,
+        "rail": 5
+      },
+      "answers": {
+        "1": 2,
+        "8": 2,
+        "17": 2,
+        "18": 2,
+        "23": 2,
+        "27": 2,
+        "32": 2,
+        "33": 2,
+        "35": 2,
+        "38": 2,
+        "43": 3,
+        "45": 3,
+        "48": 3,
+        "49": 3,
+        "51": 4,
+        "53": 5
+      },
+      "misses": [
+        [
+          43,
+          3,
+          "Which inputs does the model actually learn from, and what is it trying to predict?"
+        ]
+      ]
+    },
+    "hybrid": {
+      "names": [
+        "Sales CSV load and NA check",
+        "Store region merge and revenue column",
+        "Revenue by region and weekly totals",
+        "Weekly revenue spread across regions",
+        "Monthly region heatmap and units outlier trim",
+        "NORTH region revenue histogram",
+        "SOUTH histogram and weekly store agg",
+        "Lag/roll features and GradientBoostingRegressor fit",
+        "Test MAPE, feature importances, deeper model2",
+        "Residuals and forecast_v4.csv export",
+        "LightGBM TODO and model_v4.pkl dump"
+      ],
+      "score": {
+        "accuracy": 0.75,
+        "cells_to_read": 5.583333333333333,
+        "cost": 8.875,
+        "per_question": {
+          "1": 6,
+          "8": 11,
+          "17": 3,
+          "18": 3,
+          "23": 5,
+          "27": 7,
+          "32": 5,
+          "33": 57,
+          "35": 3,
+          "38": 8,
+          "43": 8,
+          "45": 9,
+          "48": 5,
+          "49": 5,
+          "51": 3,
+          "53": 4
+        },
+        "total_cells": 57,
+        "rail": 11
+      },
+      "answers": {
+        "1": 1,
+        "8": 2,
+        "17": 3,
+        "18": 3,
+        "23": 4,
+        "27": 5,
+        "32": 7,
+        "33": -1,
+        "35": 7,
+        "38": 8,
+        "43": 8,
+        "45": 8,
+        "48": 9,
+        "49": 9,
+        "51": 10,
+        "53": 10
+      },
+      "misses": [
+        [
+          32,
+          7,
+          "What does the weekly sales trend look like once the extreme orders are thrown out?"
+        ],
+        [
+          33,
+          -1,
+          "Did the ranking of areas by total sales change after the unusually large orders were removed?"
+        ],
+        [
+          45,
+          8,
+          "What kind of model is trained here, and what settings were chosen for it?"
+        ],
+        [
+          53,
+          10,
+          "Where do the final forecasts get written out so someone else can use them?"
+        ]
+      ]
+    },
+    "model": {
+      "names": [
+        "Sales 2023\u20132025 CSV loaded and inspected",
+        "Store dimension merged on store_id",
+        "Revenue from units \u00d7 unit_price, negatives dropped",
+        "Revenue by region totals and bar chart",
+        "Weekly revenue overall and by region",
+        "Monthly revenue by region heatmap",
+        "Units outliers above 1000 removed",
+        "NORTH and SOUTH revenue histograms",
+        "Store-week lag_1, lag_4, roll_4 features",
+        "GradientBoostingRegressor revenue forecast and MAPE",
+        "Actual vs pred, importances, tuned model2, residuals",
+        "forecast_v4.csv store_id, date, revenue, pred export",
+        "model_v4.pkl dump and lightgbm TODO"
+      ],
+      "score": {
+        "accuracy": 0.9375,
+        "cells_to_read": 4.466666666666667,
+        "cost": 7.75,
+        "per_question": {
+          "1": 8,
+          "8": 5,
+          "17": 2,
+          "18": 2,
+          "23": 7,
+          "27": 3,
+          "32": 5,
+          "33": 57,
+          "35": 3,
+          "38": 5,
+          "43": 6,
+          "45": 6,
+          "48": 4,
+          "49": 4,
+          "51": 4,
+          "53": 3
+        },
+        "total_cells": 57,
+        "rail": 13
+      },
+      "answers": {
+        "1": 1,
+        "8": 2,
+        "17": 4,
+        "18": 4,
+        "23": 5,
+        "27": 6,
+        "32": 7,
+        "33": -1,
+        "35": 8,
+        "38": 9,
+        "43": 10,
+        "45": 10,
+        "48": 11,
+        "49": 11,
+        "51": 11,
+        "53": 12
+      },
+      "misses": [
+        [
+          33,
+          -1,
+          "Did the ranking of areas by total sales change after the unusually large orders were removed?"
+        ]
+      ]
+    },
+    "fixed8": {
+      "names": [
+        "sales_2023_2025 shape, dtypes, missing values",
+        "store_dim region merge and revenue column",
+        "Regional revenue totals and weekly revenue series",
+        "Region correlation, month pivot heatmap, units outlier cut",
+        "Post-cut weekly revenue, NORTH/SOUTH histograms, store lags",
+        "GradientBoostingRegressor on lag features, test MAPE",
+        "Actual vs pred, tuned model2, forecast_v4.csv export",
+        "model_v4.pkl joblib dump"
+      ],
+      "score": {
+        "accuracy": 0.8125,
+        "cells_to_read": 8,
+        "cost": 17.1875,
+        "per_question": {
+          "1": 8,
+          "8": 8,
+          "17": 8,
+          "18": 8,
+          "23": 8,
+          "27": 8,
+          "32": 8,
+          "33": 57,
+          "35": 8,
+          "38": 8,
+          "43": 8,
+          "45": 8,
+          "48": 8,
+          "49": 57,
+          "51": 57,
+          "53": 8
+        },
+        "total_cells": 57,
+        "rail": 8
+      },
+      "answers": {
+        "1": 1,
+        "8": 2,
+        "17": 3,
+        "18": 3,
+        "23": 3,
+        "27": 4,
+        "32": 5,
+        "33": -1,
+        "35": 5,
+        "38": 5,
+        "43": 6,
+        "45": 6,
+        "48": 7,
+        "49": -1,
+        "51": -1,
+        "53": 7
+      },
+      "misses": [
+        [
+          33,
+          -1,
+          "Did the ranking of areas by total sales change after the unusually large orders were removed?"
+        ],
+        [
+          49,
+          -1,
+          "Which of the inputs mattered most to the model's predictions?"
+        ],
+        [
+          51,
+          -1,
+          "Are the prediction errors evenly balanced, or does the model consistently guess too high or too low?"
+        ]
+      ]
+    },
+    "cohesion": {
+      "names": [
+        "sales_2023_2025 load, shape, dtypes, missing counts",
+        "store_dim region merge and revenue column",
+        "Revenue by region totals and bar chart",
+        "Weekly revenue trend, overall and by region",
+        "Month-by-region revenue pivot heatmap",
+        "Units outlier cutoff at 1000",
+        "Weekly revenue and region totals after trim",
+        "NORTH and SOUTH revenue histograms",
+        "Store-week lag_1, lag_4, roll_4 gradient boosting fit",
+        "Test MAPE, actual-vs-pred, feature importances",
+        "Deeper model2 retune and residuals",
+        "forecast_v4.csv export and model_v4.pkl dump"
+      ],
+      "score": {
+        "accuracy": 1.0,
+        "cells_to_read": 5.125,
+        "cost": 5.125,
+        "per_question": {
+          "1": 6,
+          "8": 11,
+          "17": 3,
+          "18": 3,
+          "23": 5,
+          "27": 4,
+          "32": 2,
+          "33": 2,
+          "35": 3,
+          "38": 10,
+          "43": 10,
+          "45": 10,
+          "48": 3,
+          "49": 3,
+          "51": 3,
+          "53": 4
+        },
+        "total_cells": 57,
+        "rail": 12
+      },
+      "answers": {
+        "1": 1,
+        "8": 2,
+        "17": 3,
+        "18": 3,
+        "23": 4,
+        "27": 5,
+        "32": 7,
+        "33": 7,
+        "35": 8,
+        "38": 9,
+        "43": 9,
+        "45": 9,
+        "48": 10,
+        "49": 10,
+        "51": 11,
+        "53": 12
+      },
+      "misses": []
+    },
+    "questions": {
+      "1": "Where does the raw sales data get pulled in from?",
+      "8": "Where do the extra details about each store get brought in?",
+      "17": "Which parts of the country bring in the most money overall?",
+      "18": "Is there a chart that compares total sales across the different areas side by side?",
+      "23": "How do I get a week-by-week sales series broken out separately for each area?",
+      "27": "How does spending break down by calendar month across the different areas?",
+      "32": "What does the weekly sales trend look like once the extreme orders are thrown out?",
+      "33": "Did the ranking of areas by total sales change after the unusually large orders were removed?",
+      "35": "How are individual sale amounts spread out in the second area they zoom in on?",
+      "38": "How do they give the model a memory of what each store sold in earlier weeks?",
+      "43": "Which inputs does the model actually learn from, and what is it trying to predict?",
+      "45": "What kind of model is trained here, and what settings were chosen for it?",
+      "48": "Can I see how closely the forecasts track what actually happened?",
+      "49": "Which of the inputs mattered most to the model's predictions?",
+      "51": "Are the prediction errors evenly balanced, or does the model consistently guess too high or too low?",
+      "53": "Where do the final forecasts get written out so someone else can use them?"
+    }
+  },
+  "madewithml": {
+    "headings": {
+      "names": [
+        "Made With ML data and modeling notebook",
+        "Ray cluster init, worker resources, EFS_DIR",
+        "Data",
+        "pandas import for data ingestion",
+        "dataset.csv loaded into df",
+        "Stratified train_df/val_df split on tag",
+        "Tag distribution and title word cloud",
+        "nltk stopwords and regex preprocessing imports",
+        "text feature from title plus description",
+        "clean_text lowercasing, stopword and regex filters",
+        "DataFrame cleanup to text and tag",
+        "class_to_index label encoding and decode",
+        "scibert tokenizer and preprocess function",
+        "Distributed Ray Dataset split and map_batches preprocess",
+        "set_seeds, load_data and CustomPreprocessor",
+        "Pretrained scibert BertModel embeddings",
+        "FinetunedLLM classifier head over llm",
+        "collate_fn repadding ids and masks",
+        "Ray Train and TorchTrainer imports",
+        "train_step and eval_step loops",
+        "train_loop_per_worker with checkpoint reporting",
+        "train_loop_config, scaling_config and run_config",
+        "Training dataset load_data and stratify_split",
+        "TorchTrainer fit, epoch metrics, best checkpoints",
+        "TorchPredictor from best checkpoint",
+        "Holdout precision, recall and f1",
+        "predict_proba tag probabilities for a sample project",
+        "MLflow tracking URI and logger callback",
+        "MLflow-tracked run and best_run by val_loss",
+        "MLflow dashboard of experiments and runs",
+        "get_best_checkpoint from MLflow run artifacts",
+        "HyperOptSearch tuning of dropout_p, lr, lr_patience",
+        "y_test, y_prob and test_df predictions",
+        "Overall weighted precision, recall, f1",
+        "Per-class metrics sorted by f1",
+        "TP, FP, FN natural-language-processing samples",
+        "Low-confidence samples and cleanlab label issues",
+        "nlp_llm and short_text slice metrics",
+        "LIME explanation of a prediction",
+        "Behavioral INV, DIR and MFT checks",
+        "Batch inference (offline)",
+        "Batch inference over test_ds with ActorPoolStrategy",
+        "ModelDeployment FastAPI /predict service",
+        "ModelDeploymentRobust threshold fallback to other"
+      ],
+      "score": {
+        "accuracy": 0.6875,
+        "cells_to_read": 8.454545454545455,
+        "cost": 16.3125,
+        "per_question": {
+          "20": 6,
+          "27": 8,
+          "53": 10,
+          "58": 8,
+          "75": 4,
+          "89": 2,
+          "108": 4,
+          "111": 113,
+          "128": 9,
+          "140": 34,
+          "152": 22,
+          "168": 8,
+          "181": 5,
+          "188": 10,
+          "213": 6,
+          "227": 12
+        },
+        "total_cells": 243,
+        "rail": 44
+      },
+      "answers": {
+        "20": 6,
+        "27": 7,
+        "53": 13,
+        "58": 14,
+        "75": 17,
+        "89": 20,
+        "108": 25,
+        "111": 42,
+        "128": 28,
+        "140": 34,
+        "152": 32,
+        "168": 33,
+        "181": 36,
+        "188": 37,
+        "213": 39,
+        "227": 43
+      },
+      "misses": [
+        [
+          58,
+          14,
+          "What does one batch of training data look like after every cleaning and encoding step has been applied?"
+        ],
+        [
+          75,
+          17,
+          "Which pretrained language model does this classifier build on top of, and how is its output size determined?"
+        ],
+        [
+          111,
+          42,
+          "How are predictions generated for an entire dataset at once rather than one example at a time?"
+        ],
+        [
+          128,
+          28,
+          "How does the training run get wired up so that its metrics and artifacts are recorded by the tracking system?"
+        ],
+        [
+          140,
+          34,
+          "How well does the tuned model actually perform on data it never saw during training?"
+        ]
+      ]
+    },
+    "fixed8": {
+      "names": [
+        "Ray init for the Made With ML PoC",
+        "Cluster resources, g4dn workers, EFS_DIR storage",
+        "dataset.csv ingestion and stratified tag split",
+        "Tag distribution and title word clouds",
+        "text = title + description, clean_text stopwords",
+        "DataFrame cleanup and tag class_to_index encoding",
+        "scibert BertTokenizer ids and masks",
+        "preprocess() applied over a Ray Dataset split",
+        "Distributed map_batches, set_seeds, load_data",
+        "CustomPreprocessor and FinetunedLLM over scibert",
+        "collate_fn repadding ids and masks",
+        "train_step, eval_step, train_loop_per_worker, train_loop_config",
+        "TorchTrainer fit with scaling and run configs",
+        "TorchPredictor on holdout.csv y_true and y_pred",
+        "evaluate() precision/recall/f1 and predict_proba sample",
+        "MLflow tracking URI and MLflowLoggerCallback run config",
+        "MLflow-tracked training run, runs sorted by val_loss",
+        "get_best_checkpoint from MLflow run, re-evaluated",
+        "Tuning trainer, MLflow callback, HyperOptSearch initial_params",
+        "param_space, AsyncHyperBandScheduler, Tuner best trial",
+        "Tuned best checkpoint evaluation and metrics dict",
+        "y_test, y_prob, test_df predictions, overall metrics",
+        "Per-class f1 and TP/FP/FN samples",
+        "Low-confidence natural-language-processing samples",
+        "cleanlab label issues, nlp_llm and short_text slices",
+        "Slice dataframes and per-slice precision/recall/f1",
+        "LIME classifier_fn explanation and INVariance verb test",
+        "DIRectional/MFT tests and batch inference on test_ds",
+        "FastAPI ModelDeployment served with Ray Serve",
+        "Noise queries and ModelDeploymentRobust other-class threshold",
+        "Robust deployment noise query and serve.shutdown"
+      ],
+      "score": {
+        "accuracy": 0.6875,
+        "cells_to_read": 8,
+        "cost": 21.1875,
+        "per_question": {
+          "20": 8,
+          "27": 8,
+          "53": 8,
+          "58": 8,
+          "75": 8,
+          "89": 8,
+          "108": 36,
+          "111": 113,
+          "128": 9,
+          "140": 28,
+          "152": 8,
+          "168": 65,
+          "181": 8,
+          "188": 8,
+          "213": 8,
+          "227": 8
+        },
+        "total_cells": 243,
+        "rail": 31
+      },
+      "answers": {
+        "20": 3,
+        "27": 4,
+        "53": 7,
+        "58": 8,
+        "75": 10,
+        "89": 12,
+        "108": 18,
+        "111": 28,
+        "128": 16,
+        "140": 21,
+        "152": 20,
+        "168": 14,
+        "181": 23,
+        "188": 24,
+        "213": 27,
+        "227": 29
+      },
+      "misses": [
+        [
+          108,
+          18,
+          "How do I load the best-performing trained model back out of a finished run so I can predict with it?"
+        ],
+        [
+          111,
+          28,
+          "How are predictions generated for an entire dataset at once rather than one example at a time?"
+        ],
+        [
+          128,
+          16,
+          "How does the training run get wired up so that its metrics and artifacts are recorded by the tracking system?"
+        ],
+        [
+          140,
+          21,
+          "How well does the tuned model actually perform on data it never saw during training?"
+        ],
+        [
+          168,
+          14,
+          "Where do the ground-truth labels for the held-out data come from before scoring?"
+        ]
+      ]
+    },
+    "cohesion": {
+      "names": [
+        "Ray cluster setup and dataset.csv ingestion",
+        "tag value counts before splitting",
+        "Stratified train/val split and EDA imports",
+        "Tag distribution and title word cloud",
+        "text feature from title plus description",
+        "clean_text, DataFrame cleanup, and class_to_index encoding",
+        "decode indices back to tags",
+        "scibert BertTokenizer input_ids and attention_mask",
+        "tokenize batch into ids, masks, targets",
+        "preprocess function combining all steps",
+        "Ray Dataset stratify_split and map_batches preprocessing",
+        "set_seeds, load_data, CustomPreprocessor",
+        "torch.nn and BertModel imports",
+        "FinetunedLLM over pretrained scibert",
+        "collate_fn padded batches and train_step",
+        "eval_step and train_loop_per_worker",
+        "train_loop_config, scaling_config, run_config",
+        "TorchTrainer fit and TorchPredictor on holdout",
+        "precision, recall, f1 on test split",
+        "format_prob probabilities per class",
+        "predict_proba sample and MLflow tracking setup",
+        "MLflow-tracked training run and sorted_runs",
+        "best_run checkpoint loading from MLflow artifacts",
+        "Tuning trainer, dataset, and MLflow callback",
+        "HyperOptSearch param_space and AsyncHyperBandScheduler",
+        "Tuner fit and best trial metrics",
+        "Best trial hyperparameters and test performance",
+        "y_test, y_prob, and overall weighted metrics",
+        "Per-class precision, recall, f1 per tag",
+        "Tags sorted by f1",
+        "TP, FP, FN natural-language-processing samples",
+        "natural-language-processing indices for confidence learning",
+        "Low-confidence samples and cleanlab label issues",
+        "short_text slicing function",
+        "nlp_llm and short_text slices of test_df",
+        "Slice metrics and LIME classifier_fn",
+        "LIME explanation and invariance verb injection",
+        "Directional and minimum functionality behavioral tests",
+        "Batch inference with ActorPoolStrategy",
+        "ModelDeployment FastAPI service and predict query",
+        "Random noise query and serve shutdown",
+        "ModelDeploymentRobust threshold fallback to other"
+      ],
+      "score": {
+        "accuracy": 0.75,
+        "cells_to_read": 5.916666666666667,
+        "cost": 15.375,
+        "per_question": {
+          "20": 6,
+          "27": 10,
+          "53": 5,
+          "58": 7,
+          "75": 3,
+          "89": 3,
+          "108": 31,
+          "111": 112,
+          "128": 5,
+          "140": 27,
+          "152": 5,
+          "168": 6,
+          "181": 4,
+          "188": 10,
+          "213": 3,
+          "227": 9
+        },
+        "total_cells": 243,
+        "rail": 42
+      },
+      "answers": {
+        "20": 3,
+        "27": 4,
+        "53": 8,
+        "58": 10,
+        "75": 14,
+        "89": 16,
+        "108": 23,
+        "111": 39,
+        "128": 22,
+        "140": 27,
+        "152": 25,
+        "168": 28,
+        "181": 31,
+        "188": 33,
+        "213": 37,
+        "227": 40
+      },
+      "misses": [
+        [
+          53,
+          8,
+          "How does the raw text get converted into the numeric arrays the model actually consumes?"
+        ],
+        [
+          108,
+          23,
+          "How do I load the best-performing trained model back out of a finished run so I can predict with it?"
+        ],
+        [
+          111,
+          39,
+          "How are predictions generated for an entire dataset at once rather than one example at a time?"
+        ],
+        [
+          140,
+          27,
+          "How well does the tuned model actually perform on data it never saw during training?"
+        ]
+      ]
+    },
+    "hybrid": {
+      "names": [
+        "Made With ML lessons intro",
+        "Ray init, worker resources, EFS_DIR storage",
+        "pandas import for dataset ingestion",
+        "dataset.csv read into df",
+        "Stratified train/val split on tag",
+        "Tag distribution and title word cloud",
+        "nltk stopwords and regex preprocessing imports",
+        "text feature from title plus description",
+        "clean_text: lowercase, stopwords, non-alphanumeric stripping",
+        "DataFrame cleanup to text and tag",
+        "class_to_index label encoding and decode",
+        "scibert BertTokenizer and preprocess function",
+        "Ray Dataset stratify_split and distributed preprocessing",
+        "set_seeds, load_data, CustomPreprocessor",
+        "FinetunedLLM head over pretrained scibert",
+        "FinetunedLLM model initialization",
+        "collate_fn repadding of ids and masks",
+        "train_step over iter_torch_batches",
+        "eval_step and train_loop_per_worker",
+        "Optional class weights for imbalance",
+        "train_loop_config, scaling_config, run_config",
+        "Train/val datasets fit with CustomPreprocessor",
+        "TorchTrainer fit and best checkpoints",
+        "TorchPredictor from checkpoint on holdout dataset",
+        "y_true vs y_pred precision, recall, f1",
+        "predict_proba tag probabilities on sample project",
+        "MLflow tracking URI and MLflowLoggerCallback",
+        "MLflow-tracked run sorted by val_loss",
+        "MLflow dashboard server on port 8080",
+        "get_best_checkpoint from MLflow run artifacts",
+        "Ray Tune imports and num_runs trials",
+        "HyperOptSearch seeded with initial dropout_p and lr",
+        "param_space, AsyncHyperBandScheduler, Tuner fit",
+        "Best trial hyperparameters and checkpoint",
+        "Tuned model test performance and sample prediction",
+        "y_test, y_prob, and test_df predictions",
+        "Overall weighted precision, recall, f1",
+        "Per-class metrics sorted by f1",
+        "TP, FP, FN samples for natural-language-processing",
+        "Low-confidence samples and cleanlab label issues",
+        "nlp_llm slicing function",
+        "short_text slice and nlp_llm slice DataFrames",
+        "PandasSFApplier slices record array",
+        "Per-slice precision, recall, f1",
+        "LIME explanation of object detection text",
+        "Invariance, directional, and minimum functionality tests",
+        "Batch inference with ActorPoolStrategy over test_ds",
+        "ModelDeployment FastAPI service and noise query",
+        "ModelDeploymentRobust: other class below threshold"
+      ],
+      "score": {
+        "accuracy": 0.6875,
+        "cells_to_read": 6.909090909090909,
+        "cost": 16.5,
+        "per_question": {
+          "20": 6,
+          "27": 8,
+          "53": 10,
+          "58": 8,
+          "75": 4,
+          "89": 2,
+          "108": 34,
+          "111": 113,
+          "128": 9,
+          "140": 24,
+          "152": 5,
+          "168": 8,
+          "181": 5,
+          "188": 10,
+          "213": 6,
+          "227": 12
+        },
+        "total_cells": 243,
+        "rail": 49
+      },
+      "answers": {
+        "20": 5,
+        "27": 6,
+        "53": 12,
+        "58": 13,
+        "75": 15,
+        "89": 19,
+        "108": 30,
+        "111": 47,
+        "128": 27,
+        "140": 35,
+        "152": 33,
+        "168": 36,
+        "181": 39,
+        "188": 40,
+        "213": 45,
+        "227": 48
+      },
+      "misses": [
+        [
+          58,
+          13,
+          "What does one batch of training data look like after every cleaning and encoding step has been applied?"
+        ],
+        [
+          108,
+          30,
+          "How do I load the best-performing trained model back out of a finished run so I can predict with it?"
+        ],
+        [
+          111,
+          47,
+          "How are predictions generated for an entire dataset at once rather than one example at a time?"
+        ],
+        [
+          128,
+          27,
+          "How does the training run get wired up so that its metrics and artifacts are recorded by the tracking system?"
+        ],
+        [
+          140,
+          35,
+          "How well does the tuned model actually perform on data it never saw during training?"
+        ]
+      ]
+    },
+    "model": {
+      "names": [
+        "Ray cluster init and worker resources",
+        "Project tag dataset ingestion",
+        "Stratified train/val split by tag",
+        "Tag distribution and title word cloud",
+        "Text cleaning of title + description",
+        "Column drop to text and tag",
+        "Tag label encoding via class_to_index",
+        "SciBERT tokenizer over text batches",
+        "preprocess() combining all steps",
+        "Distributed stratify_split on Ray Dataset",
+        "set_seeds, load_data, CustomPreprocessor",
+        "FinetunedLLM over scibert BertModel",
+        "collate_fn repadding ids and masks",
+        "train_step and eval_step loops",
+        "train_loop_config, scaling, checkpoint configs",
+        "TorchTrainer fit on train/val shards",
+        "TorchPredictor holdout precision/recall/f1",
+        "predict_proba on sample title",
+        "MLflow callback and tracking URI",
+        "Training run logged to MLflow",
+        "MLflow dashboard server",
+        "Best checkpoint from MLflow run_id",
+        "HyperOptSearch trainer and MLflow setup",
+        "dropout_p and lr search space tuning",
+        "Best trial config and test evaluation",
+        "y_test and y_prob on test_df",
+        "Overall weighted precision/recall/f1",
+        "Per-class f1 sorted by tag",
+        "TP/FP/FN samples for natural-language-processing",
+        "Low-confidence NLP samples",
+        "cleanlab label issues on y_prob",
+        "nlp_llm and short_text slice metrics",
+        "LIME explanation of classifier_fn",
+        "INV, DIR, MFT behavioral checks",
+        "Batch inference with ActorPoolStrategy",
+        "FastAPI ModelDeployment predict endpoint",
+        "ModelDeploymentRobust other-class threshold"
+      ],
+      "score": {
+        "accuracy": 0.125,
+        "cells_to_read": 9.5,
+        "cost": 18.3125,
+        "per_question": {
+          "20": 8,
+          "27": 11,
+          "53": 11,
+          "58": 10,
+          "75": 10,
+          "89": 11,
+          "108": 28,
+          "111": 113,
+          "128": 14,
+          "140": 17,
+          "152": 11,
+          "168": 12,
+          "181": 8,
+          "188": 10,
+          "213": 7,
+          "227": 12
+        },
+        "total_cells": 243,
+        "rail": 37
+      },
+      "answers": {
+        "20": 3,
+        "27": 4,
+        "53": 8,
+        "58": 9,
+        "75": 12,
+        "89": 14,
+        "108": 22,
+        "111": 35,
+        "128": 19,
+        "140": 25,
+        "152": 24,
+        "168": 26,
+        "181": 29,
+        "188": 30,
+        "213": 33,
+        "227": 36
+      },
+      "misses": [
+        [
+          20,
+          3,
+          "How much of the data is set aside for validation, and is the split done so the category proportions stay the same?"
+        ],
+        [
+          27,
+          4,
+          "How evenly are the examples spread across the categories the model has to predict?"
+        ],
+        [
+          53,
+          8,
+          "How does the raw text get converted into the numeric arrays the model actually consumes?"
+        ],
+        [
+          58,
+          9,
+          "What does one batch of training data look like after every cleaning and encoding step has been applied?"
+        ],
+        [
+          75,
+          12,
+          "Which pretrained language model does this classifier build on top of, and how is its output size determined?"
+        ],
+        [
+          89,
+          14,
+          "How is the model scored on held-out data during training without its weights being updated?"
+        ],
+        [
+          108,
+          22,
+          "How do I load the best-performing trained model back out of a finished run so I can predict with it?"
+        ],
+        [
+          111,
+          35,
+          "How are predictions generated for an entire dataset at once rather than one example at a time?"
+        ],
+        [
+          128,
+          19,
+          "How does the training run get wired up so that its metrics and artifacts are recorded by the tracking system?"
+        ],
+        [
+          140,
+          25,
+          "How well does the tuned model actually perform on data it never saw during training?"
+        ],
+        [
+          152,
+          24,
+          "What ranges are searched over for each training setting during the hyperparameter search?"
+        ],
+        [
+          168,
+          26,
+          "Where do the ground-truth labels for the held-out data come from before scoring?"
+        ],
+        [
+          181,
+          29,
+          "How do they pull out which held-out examples the model got right, wrongly claimed, and missed for one particular category?"
+        ],
+        [
+          188,
+          30,
+          "How do they surface examples where the model was barely confident about the answer that was actually correct?"
+        ]
+      ]
+    },
+    "questions": {
+      "20": "How much of the data is set aside for validation, and is the split done so the category proportions stay the same?",
+      "27": "How evenly are the examples spread across the categories the model has to predict?",
+      "53": "How does the raw text get converted into the numeric arrays the model actually consumes?",
+      "58": "What does one batch of training data look like after every cleaning and encoding step has been applied?",
+      "75": "Which pretrained language model does this classifier build on top of, and how is its output size determined?",
+      "89": "How is the model scored on held-out data during training without its weights being updated?",
+      "108": "How do I load the best-performing trained model back out of a finished run so I can predict with it?",
+      "111": "How are predictions generated for an entire dataset at once rather than one example at a time?",
+      "128": "How does the training run get wired up so that its metrics and artifacts are recorded by the tracking system?",
+      "140": "How well does the tuned model actually perform on data it never saw during training?",
+      "152": "What ranges are searched over for each training setting during the hyperparameter search?",
+      "168": "Where do the ground-truth labels for the held-out data come from before scoring?",
+      "181": "How do they pull out which held-out examples the model got right, wrongly claimed, and missed for one particular category?",
+      "188": "How do they surface examples where the model was barely confident about the answer that was actually correct?",
+      "213": "How can I see which words in a given input pushed the model toward its prediction?",
+      "227": "Where is the web service that wraps the model declared, along with its name and version?"
+    }
+  },
+  "messy-adspend": {
+    "headings": {
+      "names": [
+        "Ad spend vs signups scratch: pandas, seaborn setup",
+        "Daily spend/signups by channel: cleanup, CPA, lag features",
+        "Ridge and gb signups models, leakage fix, residuals",
+        "Verdict: gb memorising Q1, don't ship",
+        "model_df CSV and gb.pkl exports, then scratch"
+      ],
+      "score": {
+        "accuracy": 0.9375,
+        "cells_to_read": 75.4,
+        "cost": 73.375,
+        "per_question": {
+          "19": 99,
+          "36": 99,
+          "46": 99,
+          "47": 99,
+          "60": 99,
+          "64": 99,
+          "80": 99,
+          "85": 99,
+          "91": 99,
+          "100": 43,
+          "106": 40,
+          "113": 40,
+          "120": 40,
+          "121": 40,
+          "133": 40,
+          "140": 40
+        },
+        "total_cells": 154,
+        "rail": 5
+      },
+      "answers": {
+        "19": 2,
+        "36": 2,
+        "46": 2,
+        "47": 2,
+        "60": 2,
+        "64": 2,
+        "80": 2,
+        "85": 2,
+        "91": 2,
+        "100": 3,
+        "106": 3,
+        "113": 3,
+        "120": 3,
+        "121": 3,
+        "133": 3,
+        "140": 3
+      },
+      "misses": [
+        [
+          100,
+          3,
+          "Which columns actually get handed to the model as inputs, and which are deliberately held out?"
+        ]
+      ]
+    },
+    "fixed8": {
+      "names": [
+        "spend.csv path hunt and plotting imports",
+        "spend_2025_q1_FINAL and signups.csv first look",
+        "channel vs source vocabulary and date ranges",
+        "Negative spend rows dropped, spend distribution",
+        "fb/goog/google ads channel name cleanup",
+        "source aliases and duplicate date/channel/campaign rows",
+        "Daily spend outer-merged with signups counts",
+        "Total spend vs signups, 7d rolling",
+        "Per-channel two_axis spend and signups plots",
+        "CPA by channel and >500 outliers",
+        "dow/week/month features and spend lags",
+        "spend_7d/28d saturation, organic zero-spend rows dropped",
+        "Ridge on channel dummies, TimeSeriesSplit r2",
+        "spend_7d leakage fixed with shift(1)",
+        "Ridge alpha sweep and coefficients",
+        "Gradient boosting fit, importances, actual vs fit",
+        "Residuals by channel, month, dow",
+        "Worst residuals and ridge vs gb MAE",
+        "model_df.csv and gb.pkl saved",
+        "Leftover scratch: del other, print ok"
+      ],
+      "score": {
+        "accuracy": 0.9375,
+        "cells_to_read": 8,
+        "cost": 9.8125,
+        "per_question": {
+          "19": 8,
+          "36": 8,
+          "46": 8,
+          "47": 8,
+          "60": 37,
+          "64": 8,
+          "80": 8,
+          "85": 8,
+          "91": 8,
+          "100": 8,
+          "106": 8,
+          "113": 8,
+          "120": 8,
+          "121": 8,
+          "133": 8,
+          "140": 8
+        },
+        "total_cells": 154,
+        "rail": 20
+      },
+      "answers": {
+        "19": 3,
+        "36": 5,
+        "46": 6,
+        "47": 6,
+        "60": 4,
+        "64": 9,
+        "80": 11,
+        "85": 11,
+        "91": 12,
+        "100": 13,
+        "106": 14,
+        "113": 15,
+        "120": 16,
+        "121": 16,
+        "133": 17,
+        "140": 18
+      },
+      "misses": [
+        [
+          60,
+          4,
+          "What is the overall shape of daily ad spending across the whole period?"
+        ]
+      ]
+    },
+    "cohesion": {
+      "names": [
+        "Ad spend vs signups scratch preamble",
+        "spend.csv read from data/",
+        "Hunting down ../data/spend_2025_q1_FINAL.csv",
+        "df shape, columns, dtypes",
+        "signups.csv loaded",
+        "df.channel vs signups.source vocabulary gap",
+        "date and created_at parsed to datetime",
+        "Date ranges and the 2025-01-01 cutoff",
+        "Negative spend rows dropped",
+        "Spend histogram, log1p, channel case cleanup",
+        "channel collapsed to facebook and google",
+        "signups.source collapsed to facebook and organic",
+        "referral and affiliate left unmatched",
+        "Duplicate date/channel/campaign rows summed into daily",
+        "daily spend outer-merged with signups into m",
+        "7d rolling spend vs signups per channel",
+        "cpa from spend over signups",
+        "Median cpa after nulling cpa above 500",
+        "week, month, is_weekend calendar columns",
+        "Weekend signups effect and spend lag columns",
+        "spend_7d and spend_28d rolling sums",
+        "saturation as spend_7d over spend_28d",
+        "Zero-spend organic rows dropped, features rebuilt",
+        "Ridge TimeSeriesSplit r2 and the spend_7d leakage",
+        "spend_7d and spend_28d shifted off today",
+        "Ridge alpha sweep from 1 to 300",
+        "Ridge coefficients at ALPHA 100",
+        "GradientBoosting signups fit and feature importances",
+        "from_marketing_dont_delete.xlsx peek",
+        "Marketing sheet columns, pred column added",
+        "Residual mean by channel",
+        "Residual seasonality by date, month, dow",
+        "Worst 20 residual rows",
+        "ridge vs gb MAE on signups",
+        "model_df.csv and gb.pkl saved, then scratch"
+      ],
+      "score": {
+        "accuracy": 0.8125,
+        "cells_to_read": 5,
+        "cost": 6.9375,
+        "per_question": {
+          "19": 3,
+          "36": 3,
+          "46": 6,
+          "47": 6,
+          "60": 30,
+          "64": 10,
+          "80": 3,
+          "85": 4,
+          "91": 7,
+          "100": 9,
+          "106": 3,
+          "113": 5,
+          "120": 7,
+          "121": 7,
+          "133": 5,
+          "140": 3
+        },
+        "total_cells": 154,
+        "rail": 35
+      },
+      "answers": {
+        "19": 6,
+        "36": 11,
+        "46": 14,
+        "47": 14,
+        "60": 10,
+        "64": 16,
+        "80": 19,
+        "85": 20,
+        "91": 23,
+        "100": 23,
+        "106": 25,
+        "113": 26,
+        "120": 28,
+        "121": 28,
+        "133": 32,
+        "140": 34
+      },
+      "misses": [
+        [
+          60,
+          10,
+          "What is the overall shape of daily ad spending across the whole period?"
+        ],
+        [
+          91,
+          23,
+          "Why are rows with zero spend showing up for a channel that was never paid for, and are they distorting the history-based features?"
+        ],
+        [
+          100,
+          23,
+          "Which columns actually get handed to the model as inputs, and which are deliberately held out?"
+        ]
+      ]
+    },
+    "hybrid": {
+      "names": [
+        "Ad spend vs signups scratch setup",
+        "Hunting down spend_2025_q1_FINAL.csv",
+        "Spend columns, dtypes and shape",
+        "signups.csv rows and shape",
+        "channel vs source vocabulary mismatch",
+        "date and created_at as daily datetimes",
+        "Spend date range trimmed to 2025",
+        "Negative spend rows dropped",
+        "Spend histogram, log1p, channel lowercasing",
+        "Channel aliases: fb, goog, google ads",
+        "Source aliases: fb, seo, organic search",
+        "Leftover referral and affiliate channels",
+        "Duplicate date/channel/campaign rows summed",
+        "Daily spend by date and channel",
+        "Daily signups outer-merged onto spend",
+        "Merge NaNs filled, total spend trend",
+        "Spend vs signups dual-axis plots per channel",
+        "cpa from spend over signups",
+        "CPA above 500 nulled, medians by channel",
+        "dow, week, month, is_weekend columns",
+        "Weekday signups, spend lags and rolling sums",
+        "saturation ratio and zero-spend organic rows",
+        "Rebuilt spend features into model_df X, y",
+        "Ridge CV r2 and spend_7d leakage",
+        "Shifted spend_7d, spend_28d, saturation",
+        "Ridge alpha sweep, 1 to 300",
+        "Ridge fit at ALPHA 100",
+        "Ridge coefficients, lowest and highest twelve",
+        "GradientBoosting r2, importances, actual vs fit",
+        "from_marketing_dont_delete.xlsx columns",
+        "gb residuals by channel",
+        "Residual seasonality, ridge vs gb MAE",
+        "model_df.csv, gb.pkl, and scratch"
+      ],
+      "score": {
+        "accuracy": 0.9375,
+        "cells_to_read": 6.333333333333333,
+        "cost": 6.25,
+        "per_question": {
+          "19": 3,
+          "36": 3,
+          "46": 4,
+          "47": 4,
+          "60": 5,
+          "64": 12,
+          "80": 3,
+          "85": 6,
+          "91": 3,
+          "100": 11,
+          "106": 3,
+          "113": 5,
+          "120": 7,
+          "121": 7,
+          "133": 12,
+          "140": 12
+        },
+        "total_cells": 154,
+        "rail": 33
+      },
+      "answers": {
+        "19": 5,
+        "36": 10,
+        "46": 13,
+        "47": 13,
+        "60": 16,
+        "64": 17,
+        "80": 20,
+        "85": 21,
+        "91": 22,
+        "100": 23,
+        "106": 25,
+        "113": 26,
+        "120": 29,
+        "121": 29,
+        "133": 32,
+        "140": 32
+      },
+      "misses": [
+        [
+          60,
+          16,
+          "What is the overall shape of daily ad spending across the whole period?"
+        ]
+      ]
+    },
+    "model": {
+      "names": [
+        "spend_2025_q1_FINAL.csv path hunt",
+        "spend and signups columns, dtypes, shapes",
+        "channel vs source vocabulary and date range",
+        "Negative spend rows and spend distribution",
+        "channel and source label normalization",
+        "Duplicate date/channel/campaign rows collapsed into daily spend",
+        "daily spend outer-merged with signups counts",
+        "Spend and signups time series per channel",
+        "two_axis spend/signups plotting helper",
+        "CPA per channel and >500 outliers",
+        "dow, week, month, is_weekend features",
+        "Spend lags, 7d/28d sums, saturation",
+        "Zero-spend organic rows poisoning the lags",
+        "Ridge baseline R\u00b2 over TimeSeriesSplit folds",
+        "spend_7d same-day leakage, shifted rolling windows",
+        "Ridge alpha sweep and coefficient extremes",
+        "GradientBoosting R\u00b2, feature importances, MAE fit",
+        "from_marketing_dont_delete.xlsx columns",
+        "Residuals by channel, month, dow, worst rows",
+        "ridge vs gb MAE comparison",
+        "model_df.csv and gb.pkl exports",
+        "Scratch checks on feats and X"
+      ],
+      "score": {
+        "accuracy": 0.9375,
+        "cells_to_read": 7.266666666666667,
+        "cost": 9,
+        "per_question": {
+          "19": 9,
+          "36": 12,
+          "46": 5,
+          "47": 5,
+          "60": 35,
+          "64": 9,
+          "80": 6,
+          "85": 6,
+          "91": 5,
+          "100": 9,
+          "106": 6,
+          "113": 7,
+          "120": 7,
+          "121": 7,
+          "133": 12,
+          "140": 4
+        },
+        "total_cells": 154,
+        "rail": 22
+      },
+      "answers": {
+        "19": 3,
+        "36": 5,
+        "46": 6,
+        "47": 6,
+        "60": 4,
+        "64": 8,
+        "80": 11,
+        "85": 12,
+        "91": 13,
+        "100": 14,
+        "106": 15,
+        "113": 16,
+        "120": 17,
+        "121": 17,
+        "133": 19,
+        "140": 20
+      },
+      "misses": [
+        [
+          60,
+          4,
+          "What is the overall shape of daily ad spending across the whole period?"
+        ]
+      ]
+    },
+    "questions": {
+      "19": "Do the two datasets even use the same names for marketing channels, and which ones only appear in one of them?",
+      "36": "Where do they collapse the different spellings and shorthands for the same ad platform into a single name?",
+      "46": "Are there repeated rows for the same day and campaign, and what do those duplicates actually look like?",
+      "47": "When the same campaign appears more than once on a single day, do they drop the extras or add them together?",
+      "60": "What is the overall shape of daily ad spending across the whole period?",
+      "64": "Can I see how each channel's signup trend compares against the others on one chart?",
+      "80": "Does anything tag each row with which week of the year it belongs to?",
+      "85": "Does the analysis account for money spent on earlier days still driving signups today?",
+      "91": "Why are rows with zero spend showing up for a channel that was never paid for, and are they distorting the history-based features?",
+      "100": "Which columns actually get handed to the model as inputs, and which are deliberately held out?",
+      "106": "How do they stop the trailing spend window from including the very day it is being used to predict?",
+      "113": "How much regularization is too much before the cross-validated score starts getting worse?",
+      "120": "Where is the tree-based model trained on the full dataset rather than just a validation fold?",
+      "121": "Which inputs does the tree-based model actually rely on most?",
+      "133": "Do the model's errors drift or bunch up at particular points in time?",
+      "140": "On average, how many signups off is the linear model's prediction?"
+    }
+  },
+  "handson-unsupervised": {
+    "questions": {
+      "9": "Where do they set the text sizes so every chart in the notebook comes out looking the same?",
+      "23": "How do I make up a synthetic dataset of blobs and then have a grouping algorithm assign every point to one?",
+      "54": "How can I check visually whether starting the search from hand-picked centers gave a sensible partition?",
+      "90": "How do I cluster a dataset that's too large to hold in memory all at once?",
+      "92": "How much grouping quality do I give up, and how much training time do I save, by using the incremental variant instead of the full one?",
+      "114": "What kind of data layout makes this grouping method fail, and can its own quality score end up preferring the worse answer?",
+      "133": "Where does a human actually type in the labels in this semi-supervised walkthrough?",
+      "138": "How do I spread a handful of hand-assigned labels out to every unlabeled point that landed in the same group?",
+      "155": "How do I predict which group a brand-new point belongs to when the density-based method offers no way to score new data?",
+      "168": "How does changing the width of the similarity measure change what the graph-based grouping method finds?",
+      "172": "How can I list everything a fitted estimator learned during training without digging through the documentation?",
+      "215": "How is the model-selection penalty actually computed by hand from the number of free parameters and the fit quality?",
+      "223": "What does the density and boundary picture look like when the algorithm is allowed to switch off the components it doesn't need?",
+      "238": "How do I shrink the face images down to far fewer features while keeping almost all of their variation?",
+      "254": "How do I turn each point's distances to the group centers into the input features for a classifier?",
+      "281": "What is the typical reconstruction error on ordinary images, so I have a baseline to compare suspicious ones against?"
+    },
+    "headings": {
+      "names": [
+        "Chapter 9 \u2013 Unsupervised Learning",
+        "Python 3.7+ and Scikit-Learn 1.0.1 version checks",
+        "save_fig() into images/unsupervised_learning",
+        "Iris petals: labeled classes vs unlabeled clusters",
+        "K-Means on five blobs: labels, centroids, Voronoi",
+        "The K-Means assign-and-update algorithm",
+        "Centroid movement per iteration and random-init variability",
+        "Inertia of the K-Means solutions",
+        "Multiple random initializations via n_init",
+        "kmeans_rnd_10_inits boundaries and inertia",
+        "K-Means++ centroid initialization",
+        "Elkan's accelerated K-Means",
+        "MiniBatchKMeans on MNIST memmap versus KMeans",
+        "Optimal k by inertia elbow and silhouette diagrams",
+        "K-Means on elongated, uneven-density blobs",
+        "Ladybug image download",
+        "Ladybug pixel array shape",
+        "Ladybug segmented into 2 to 10 colors",
+        "Digits logistic regression on 50 labeled instances",
+        "Representative digits and label propagation",
+        "Partially propagated label accuracy and active learning",
+        "DBSCAN on moons plus KNN on core samples",
+        "Other clustering algorithms, bonus material",
+        "SpectralClustering import",
+        "Spectral clustering with RBF gamma 100 vs 1",
+        "AgglomerativeClustering complete linkage and children_",
+        "GaussianMixture on three ellipsoids: EM parameters",
+        "Density contours, PDF integral, covariance_type constraints",
+        "covariance_type full versus diag",
+        "Anomalies below the 2nd-percentile density",
+        "gm.bic and gm.aic, computed by hand",
+        "BIC and AIC minimum over k",
+        "BayesianGaussianMixture zeroing unneeded components",
+        "Exercises 1 to 9",
+        "Clustering concept answers",
+        "Olivetti faces K-Means clusters at k=120",
+        "Cluster distances as RandomForest face features",
+        "Gaussian mixture faces: sampling and bad-face scores",
+        "PCA reconstruction error on modified faces"
+      ],
+      "score": {
+        "accuracy": 0.875,
+        "cells_to_read": 12.285714285714286,
+        "cost": 11.625,
+        "per_question": {
+          "9": 4,
+          "23": 25,
+          "54": 10,
+          "90": 15,
+          "92": 15,
+          "114": 3,
+          "133": 15,
+          "138": 15,
+          "155": 12,
+          "168": 5,
+          "172": 6,
+          "215": 9,
+          "223": 7,
+          "238": 21,
+          "254": 14,
+          "281": 10
+        },
+        "total_cells": 286,
+        "rail": 39
+      },
+      "answers": {
+        "9": 3,
+        "23": 5,
+        "54": 6,
+        "90": 13,
+        "92": 13,
+        "114": 15,
+        "133": 20,
+        "138": 20,
+        "155": 22,
+        "168": 25,
+        "172": 26,
+        "215": 31,
+        "223": 33,
+        "238": 36,
+        "254": 37,
+        "281": 39
+      },
+      "misses": [
+        [
+          9,
+          3,
+          "Where do they set the text sizes so every chart in the notebook comes out looking the same?"
+        ],
+        [
+          54,
+          6,
+          "How can I check visually whether starting the search from hand-picked centers gave a sensible partition?"
+        ]
+      ]
+    },
+    "fixed8": {
+      "names": [
+        "Chapter 9 setup: Python and Scikit-Learn version checks",
+        "Figure font defaults, save_fig, and iris petal scatter",
+        "Iris Gaussian mixture cluster-to-class mapping, then blob K-Means",
+        "Blobs plot, y_pred labels, and cluster_centers_",
+        "kmeans.labels_, X_new predictions, and the Voronoi decision boundaries",
+        "Soft clustering: transform() distances to the five centroids",
+        "K-Means iterations and random-init variability",
+        "Inertia of the K-Means solutions, and score()",
+        "n_init=10 multiple initializations picking lowest inertia",
+        "K-Means++ init, Elkan acceleration, and MiniBatchKMeans",
+        "MiniBatchKMeans inertia and the MNIST train/test split",
+        "MNIST memmap mini-batch versus K-Means inertia and time",
+        "Inertia versus k, with the elbow at 4",
+        "Silhouette score versus k and silhouette diagrams",
+        "K-Means limits on elongated blobs; ladybug image",
+        "Ladybug color segmentation and 50-label digits logistic regression",
+        "Representative digits from 50 clusters, manually labeled",
+        "Label propagation and 99th-percentile partial propagation",
+        "Propagated-label accuracy, then DBSCAN on the moons",
+        "DBSCAN eps comparison and KNN on core samples",
+        "Spectral clustering affinity matrix at two RBF gammas",
+        "Agglomerative clustering children_ and learned parameters",
+        "Gaussian mixture weights_ and means_ on three ellipsoids",
+        "EM convergence, n_iter_, predict and predict_proba",
+        "Sampling new instances and integrating the PDF",
+        "Density contours, covariance_type variants, and 2% anomaly threshold",
+        "BIC and AIC for the 3-component mixture",
+        "BIC versus k and BayesianGaussianMixture weight pruning",
+        "BGM on moons, exercise answers, Olivetti faces",
+        "Stratified Olivetti splits and PCA keeping 99% variance",
+        "K-Means over k on faces: best_k of 120",
+        "Face clusters visualized; RandomForest on PCA versus cluster distances",
+        "Tuning n_clusters in the pipeline and extended features",
+        "Olivetti Gaussian mixture: generated faces and modified faces",
+        "score_samples on bad faces versus training faces",
+        "PCA reconstruction error on bad faces"
+      ],
+      "score": {
+        "accuracy": 0.875,
+        "cells_to_read": 7.857142857142857,
+        "cost": 9.0625,
+        "per_question": {
+          "9": 8,
+          "23": 8,
+          "54": 26,
+          "90": 8,
+          "92": 8,
+          "114": 8,
+          "133": 8,
+          "138": 8,
+          "155": 8,
+          "168": 9,
+          "172": 8,
+          "215": 8,
+          "223": 8,
+          "238": 8,
+          "254": 8,
+          "281": 6
+        },
+        "total_cells": 286,
+        "rail": 36
+      },
+      "answers": {
+        "9": 2,
+        "23": 3,
+        "54": 10,
+        "90": 12,
+        "92": 12,
+        "114": 15,
+        "133": 17,
+        "138": 18,
+        "155": 20,
+        "168": 21,
+        "172": 22,
+        "215": 27,
+        "223": 28,
+        "238": 30,
+        "254": 32,
+        "281": 36
+      },
+      "misses": [
+        [
+          54,
+          10,
+          "How can I check visually whether starting the search from hand-picked centers gave a sensible partition?"
+        ],
+        [
+          168,
+          21,
+          "How does changing the width of the similarity measure change what the graph-based grouping method finds?"
+        ]
+      ]
+    },
+    "cohesion": {
+      "names": [
+        "Python and Scikit-Learn version checks, figure fonts",
+        "save_fig into images/unsupervised_learning",
+        "Iris petal clusters, then K-Means on blobs",
+        "Blob centroids, labels, and predictions for X_new",
+        "Voronoi decision boundaries around the five centroids",
+        "Misassigned instances near cluster edges",
+        "Soft clustering: X_new distances to each centroid",
+        "Centroid movement over 1, 2, 3 iterations",
+        "K-Means variability across random inits versus good_init",
+        "Inertia and score of the K-Means solutions",
+        "n_init=10 restarts, lowest-inertia solution",
+        "K-Means++ init, Elkan speedup, MiniBatchKMeans on blobs",
+        "Mini-batch inertia and the MNIST fetch",
+        "MNIST split into X_train and X_test",
+        "Mini-batch vs K-Means inertia, time, elbow k",
+        "Elbow at k=4 and its decision boundaries",
+        "Silhouette score of the k=5 labels",
+        "Silhouette scores and silhouette diagrams across k",
+        "Elongated blobs, ladybug color segmentation, digits dataset",
+        "Logistic regression on 50 labels; representative digits",
+        "Representative digit images labeled by hand",
+        "Representative-label training, then propagation to clusters",
+        "Partial propagation dropping the farthest 1%",
+        "Propagated-label accuracy, then DBSCAN on moons",
+        "DBSCAN cores at two eps, KNN predictions",
+        "Spectral RBF gamma, agglomerative linkage, gaussian mixture fit",
+        "EM-estimated mixture weights and means",
+        "Mixture covariances, convergence, and hard predictions",
+        "Cluster probabilities and instances sampled from gm",
+        "Sequential sampling and the log PDF",
+        "Log PDF score_samples at each instance",
+        "Grid PDF probabilities summing to one",
+        "Density contours, covariance_type variants, 2% anomalies",
+        "BIC and AIC versus number of components",
+        "BayesianGaussianMixture weights on blobs and moons",
+        "Olivetti faces split, PCA 99%, K-Means per k",
+        "Silhouette score across k for Olivetti faces",
+        "Best k=120 clusters shown as face grids",
+        "RandomForestClassifier baseline on PCA faces",
+        "Centroid distances as reduced classifier features",
+        "n_clusters search inside the K-Means pipeline",
+        "PCA features extended with cluster distances",
+        "Forty-component gaussian mixture on faces",
+        "Generated faces and scores for rotated, flipped, darkened",
+        "PCA reconstruction error function",
+        "Reconstruction error: training faces versus bad faces"
+      ],
+      "score": {
+        "accuracy": 0.8125,
+        "cells_to_read": 9.923076923076923,
+        "cost": 10.5,
+        "per_question": {
+          "9": 11,
+          "23": 14,
+          "54": 6,
+          "90": 24,
+          "92": 12,
+          "114": 13,
+          "133": 4,
+          "138": 6,
+          "155": 14,
+          "168": 16,
+          "172": 11,
+          "215": 8,
+          "223": 11,
+          "238": 9,
+          "254": 3,
+          "281": 6
+        },
+        "total_cells": 286,
+        "rail": 46
+      },
+      "answers": {
+        "9": 1,
+        "23": 3,
+        "54": 9,
+        "90": 12,
+        "92": 15,
+        "114": 19,
+        "133": 21,
+        "138": 22,
+        "155": 25,
+        "168": 26,
+        "172": 27,
+        "215": 34,
+        "223": 35,
+        "238": 36,
+        "254": 40,
+        "281": 46
+      },
+      "misses": [
+        [
+          90,
+          12,
+          "How do I cluster a dataset that's too large to hold in memory all at once?"
+        ],
+        [
+          133,
+          21,
+          "Where does a human actually type in the labels in this semi-supervised walkthrough?"
+        ],
+        [
+          172,
+          27,
+          "How can I list everything a fitted estimator learned during training without digging through the documentation?"
+        ]
+      ]
+    },
+    "hybrid": {
+      "names": [
+        "Chapter 9 \u2013 Unsupervised Learning notebook",
+        "Python and Scikit-Learn version asserts, font sizes",
+        "images/unsupervised_learning folder and save_fig()",
+        "Iris petals: classification vs clustering",
+        "K-Means on five blobs",
+        "Centroids, labels, and predictions for X_new",
+        "Voronoi decision boundaries of kmeans",
+        "Instances near cluster edges misassigned",
+        "Soft clustering distances via transform()",
+        "Euclidean distance to each centroid",
+        "Centroid movement over three K-Means iterations",
+        "K-Means variability across random initializations",
+        "Inertia as squared distance to centroids",
+        "Multiple initializations via n_init",
+        "Best solution from ten random inits",
+        "K-Means++ centroid initialization",
+        "Elkan's accelerated K-Means",
+        "MiniBatchKMeans on the blobs",
+        "MiniBatchKMeans inertia and MNIST download",
+        "MNIST memmap: mini-batch inertia and training time",
+        "K-Means with k=3 versus k=8",
+        "Elbow in inertia versus k",
+        "k=4 boundaries and the silhouette coefficient",
+        "Silhouette score of kmeans labels",
+        "Silhouette diagrams for k=3 to 6",
+        "K-Means on elongated blobs and varying densities",
+        "Ladybug image download and shape",
+        "Ladybug segmented into 8 color clusters",
+        "Ladybug segmented with 10 to 2 colors",
+        "Logistic regression on 50 labeled digits",
+        "Representative digits per cluster, labeled manually",
+        "Accuracy gain from representative instances",
+        "Label propagation across each cluster",
+        "Propagation excluding the farthest 1%",
+        "Propagated label accuracy and active learning",
+        "DBSCAN on moons, then KNN prediction",
+        "Bonus clustering algorithms",
+        "SpectralClustering with gamma=100",
+        "Affinity matrix and RBF gamma comparison",
+        "Agglomerative clustering children_ on four points",
+        "Gaussian mixture on three ellipsoid blobs",
+        "EM-estimated weights, means, covariances, convergence",
+        "predict_proba and sampled new instances",
+        "Gaussian mixture PDF and density contours",
+        "covariance_type: tied, spherical, full, diag",
+        "Anomalies below the 2% density threshold",
+        "BIC and AIC from the likelihood",
+        "BIC and AIC versus k",
+        "BayesianGaussianMixture zeroing unnecessary components",
+        "Answers to clustering questions 1\u20139",
+        "Olivetti faces split, PCA, K-Means per k",
+        "Silhouette score across k for faces",
+        "k=120 clusters shown as faces",
+        "Random forest on PCA faces",
+        "Random forest on centroid-distance features",
+        "Tuning n_clusters in the KMeans\u2013RandomForest pipeline",
+        "PCA features extended with cluster distances",
+        "Generated faces and score_samples for bad faces",
+        "PCA reconstruction error on bad faces"
+      ],
+      "score": {
+        "accuracy": 0.9375,
+        "cells_to_read": 7.333333333333333,
+        "cost": 7.5,
+        "per_question": {
+          "9": 8,
+          "23": 9,
+          "54": 10,
+          "90": 8,
+          "92": 8,
+          "114": 3,
+          "133": 7,
+          "138": 3,
+          "155": 12,
+          "168": 5,
+          "172": 6,
+          "215": 9,
+          "223": 8,
+          "238": 11,
+          "254": 3,
+          "281": 10
+        },
+        "total_cells": 286,
+        "rail": 59
+      },
+      "answers": {
+        "9": 2,
+        "23": 5,
+        "54": 11,
+        "90": 20,
+        "92": 20,
+        "114": 26,
+        "133": 31,
+        "138": 33,
+        "155": 36,
+        "168": 39,
+        "172": 40,
+        "215": 47,
+        "223": 49,
+        "238": 51,
+        "254": 55,
+        "281": 59
+      },
+      "misses": [
+        [
+          54,
+          11,
+          "How can I check visually whether starting the search from hand-picked centers gave a sensible partition?"
+        ]
+      ]
+    },
+    "model": {
+      "names": [
+        "Chapter 9 setup: sklearn version, save_fig, font sizes",
+        "Iris petals: classification vs clustering, GaussianMixture cluster-to-class mapping",
+        "K-Means on five blobs: labels, centroids, predictions",
+        "Voronoi decision boundaries of the blob centroids",
+        "Soft clustering: transform() distances to the five centroids",
+        "Centroid movement over 1, 2, 3 K-Means iterations",
+        "K-Means variability across random inits, and good_init",
+        "Inertia of each K-Means solution, and score()",
+        "n_init=10 random initializations picking lowest inertia",
+        "K-Means++ centroid initialization and Elkan's accelerated variant",
+        "MiniBatchKMeans on the blobs",
+        "MNIST memmap MiniBatchKMeans, inertia and training-time vs k",
+        "Elbow in inertia vs k at k=4",
+        "Silhouette score vs k and silhouette diagrams",
+        "K-Means on elongated blobs: good vs bad inertia",
+        "Ladybug image segmentation into 2\u201310 color clusters",
+        "Digits dataset: logistic regression on 50 labeled instances",
+        "Representative digit per cluster, manually labeled",
+        "Label propagation within clusters, minus the farthest 1%",
+        "DBSCAN on make_moons: eps, core samples, components_",
+        "KNN over DBSCAN core samples predicting X_new, anomalies",
+        "SpectralClustering on the moons at gamma=100 and 1",
+        "AgglomerativeClustering with complete linkage, children_",
+        "GaussianMixture on three ellipsoids: weights_, means_, covariances_",
+        "Cluster probabilities, sampled instances, and PDF integrating to 1",
+        "Gaussian mixture density contours across covariance_type settings",
+        "Anomalies below the 2nd-percentile density threshold",
+        "BIC and AIC vs k for the mixture",
+        "BayesianGaussianMixture zeroing unnecessary components, and moons",
+        "Exercise answers 1\u20139 on clustering and mixtures",
+        "Olivetti faces: stratified train/valid/test split and PCA",
+        "K-Means clusters of Olivetti faces, silhouette-best k=120",
+        "RandomForestClassifier on PCA vs cluster-distance features",
+        "PCA features extended with cluster distances",
+        "GaussianMixture on faces generating new faces",
+        "Rotated, flipped, darkened faces scored as anomalies",
+        "PCA reconstruction error on normal vs bad faces"
+      ],
+      "score": {
+        "accuracy": 1.0,
+        "cells_to_read": 8.9375,
+        "cost": 8.9375,
+        "per_question": {
+          "9": 13,
+          "23": 16,
+          "54": 5,
+          "90": 10,
+          "92": 10,
+          "114": 3,
+          "133": 8,
+          "138": 11,
+          "155": 5,
+          "168": 9,
+          "172": 6,
+          "215": 10,
+          "223": 7,
+          "238": 10,
+          "254": 10,
+          "281": 10
+        },
+        "total_cells": 286,
+        "rail": 37
+      },
+      "answers": {
+        "9": 1,
+        "23": 3,
+        "54": 7,
+        "90": 12,
+        "92": 12,
+        "114": 15,
+        "133": 18,
+        "138": 19,
+        "155": 21,
+        "168": 22,
+        "172": 23,
+        "215": 28,
+        "223": 29,
+        "238": 31,
+        "254": 33,
+        "281": 37
+      },
+      "misses": []
+    }
+  },
+  "orie4741-eda": {
+    "questions": {
+      "4": "Where does this notebook get its survey data from?",
+      "6": "How do they avoid pulling in the whole two-hundred-megabyte file when they load it?",
+      "9": "How do they pull out a single variable to work with on its own?",
+      "17": "How can I tell which entries in a column have no value recorded?",
+      "18": "How do they get a total count of blanks in a column?",
+      "19": "How do they get a first visual sense of how the values in a column are spread out?",
+      "22": "How do they flag the rows whose values aren't the placeholder used for absurdly large amounts?",
+      "31": "How do they split one variable's distribution into separate panels according to another variable?",
+      "34": "How do they get overlaid smooth curves comparing a distribution across groups instead of side-by-side bars?",
+      "38": "Where do they switch over to the version of the data that's already been cleaned up?",
+      "41": "Do they have to strip out the blanks before they can chart a column?",
+      "45": "How do they compare the earnings spread between people who are employed and people who aren't?",
+      "47": "What share of the sample is actually employed?",
+      "48": "How do they lay out a grid of small charts broken down by two variables at once?",
+      "49": "How do they show the full shape of a distribution at each level of a category, not just its summary numbers?",
+      "50": "How do they compare medians and spread across categories in a compact side-by-side chart?"
+    },
+    "headings": {
+      "names": [
+        "ORIE 4741 EDA demo imports: pandas, seaborn",
+        "acs_2013.csv course download url",
+        "acs read from url, 10000 rows",
+        "acs.shape and HHINCOME mean, std, max",
+        "HHINCOME distribution under 9999999, split by FOODSTMP",
+        "Cleaned acs: HHINCOME by LABFORCE and EDUC",
+        "MatPlotLib, Seaborn, ggplot2, D3 links"
+      ],
+      "score": {
+        "accuracy": 0.8125,
+        "cells_to_read": 14.692307692307692,
+        "cost": 15.0625,
+        "per_question": {
+          "4": 4,
+          "6": 1,
+          "9": 8,
+          "17": 11,
+          "18": 12,
+          "19": 22,
+          "22": 22,
+          "31": 22,
+          "34": 22,
+          "38": 15,
+          "41": 27,
+          "45": 15,
+          "47": 15,
+          "48": 15,
+          "49": 15,
+          "50": 15
+        },
+        "total_cells": 54,
+        "rail": 7
+      },
+      "answers": {
+        "4": 2,
+        "6": 3,
+        "9": 4,
+        "17": 4,
+        "18": 4,
+        "19": 5,
+        "22": 5,
+        "31": 5,
+        "34": 5,
+        "38": 6,
+        "41": 5,
+        "45": 6,
+        "47": 6,
+        "48": 6,
+        "49": 6,
+        "50": 6
+      },
+      "misses": [
+        [
+          17,
+          4,
+          "How can I tell which entries in a column have no value recorded?"
+        ],
+        [
+          18,
+          4,
+          "How do they get a total count of blanks in a column?"
+        ],
+        [
+          41,
+          5,
+          "Do they have to strip out the blanks before they can chart a column?"
+        ]
+      ]
+    },
+    "fixed8": {
+      "names": [
+        "ACS 2013 census extract from course URL",
+        "HHINCOME mean, standard deviation, and max",
+        "Missing HHINCOME and the 9999999 cutoff",
+        "acs99 summary and HHINCOME by FOODSTMP",
+        "Log-scaled INCOME+1 plots, then cleaned acs_2013",
+        "Cleaned HHINCOME, COSTGAS, EDUC, LABFORCE share",
+        "HHINCOME against EDUC: violin, box, scatter"
+      ],
+      "score": {
+        "accuracy": 0.875,
+        "cells_to_read": 7.714285714285714,
+        "cost": 8.125,
+        "per_question": {
+          "4": 8,
+          "6": 8,
+          "9": 8,
+          "17": 8,
+          "18": 8,
+          "19": 13,
+          "22": 8,
+          "31": 8,
+          "34": 8,
+          "38": 8,
+          "41": 8,
+          "45": 8,
+          "47": 8,
+          "48": 9,
+          "49": 6,
+          "50": 6
+        },
+        "total_cells": 54,
+        "rail": 7
+      },
+      "answers": {
+        "4": 1,
+        "6": 1,
+        "9": 2,
+        "17": 3,
+        "18": 3,
+        "19": 4,
+        "22": 3,
+        "31": 4,
+        "34": 5,
+        "38": 5,
+        "41": 6,
+        "45": 6,
+        "47": 6,
+        "48": 6,
+        "49": 7,
+        "50": 7
+      },
+      "misses": [
+        [
+          19,
+          4,
+          "How do they get a first visual sense of how the values in a column are spread out?"
+        ],
+        [
+          48,
+          6,
+          "How do they lay out a grid of small charts broken down by two variables at once?"
+        ]
+      ]
+    },
+    "cohesion": {
+      "names": [
+        "ACS 2013 household data, first 10000 rows",
+        "HHINCOME mean, std, and max",
+        "Missing HHINCOME values",
+        "Raw HHINCOME histogram",
+        "acs99: incomes below 9999999",
+        "acs99 shape and HHINCOME summary",
+        "HHINCOME by FOODSTMP on log scale",
+        "Cleaned acs_2013 HHINCOME summary",
+        "Cleaned HHINCOME, COSTGAS, EDUC histograms",
+        "HHINCOME by LABFORCE and EDUC"
+      ],
+      "score": {
+        "accuracy": 0.9375,
+        "cells_to_read": 6.8,
+        "cost": 7.8125,
+        "per_question": {
+          "4": 9,
+          "6": 9,
+          "9": 8,
+          "17": 2,
+          "18": 2,
+          "19": 2,
+          "22": 4,
+          "31": 9,
+          "34": 9,
+          "38": 3,
+          "41": 23,
+          "45": 9,
+          "47": 9,
+          "48": 9,
+          "49": 9,
+          "50": 9
+        },
+        "total_cells": 54,
+        "rail": 10
+      },
+      "answers": {
+        "4": 1,
+        "6": 1,
+        "9": 2,
+        "17": 3,
+        "18": 3,
+        "19": 4,
+        "22": 5,
+        "31": 7,
+        "34": 7,
+        "38": 8,
+        "41": 4,
+        "45": 10,
+        "47": 10,
+        "48": 10,
+        "49": 10,
+        "50": 10
+      },
+      "misses": [
+        [
+          41,
+          4,
+          "Do they have to strip out the blanks before they can chart a column?"
+        ]
+      ]
+    },
+    "hybrid": {
+      "names": [
+        "numpy, pandas, matplotlib, seaborn imports",
+        "acs_2013.csv download URL",
+        "First 10,000 rows of acs_2013.csv",
+        "acs shape and HHINCOME mean, std, max",
+        "income.describe() and missing HHINCOME count",
+        "income histogram at 200 bins",
+        "lower_income filter below 9999999",
+        "acs99 shape, head, HHINCOME describe",
+        "acs99 HHINCOME by FOODSTMP, log scale",
+        "acs_2013_cleaned.csv HHINCOME",
+        "HHINCOME, COSTGAS, EDUC histograms",
+        "HHINCOME by LABFORCE and EDUC",
+        "Matplotlib, Seaborn, ggplot2, D3 links"
+      ],
+      "score": {
+        "accuracy": 0.875,
+        "cells_to_read": 5.285714285714286,
+        "cost": 6.6875,
+        "per_question": {
+          "4": 4,
+          "6": 1,
+          "9": 10,
+          "17": 4,
+          "18": 4,
+          "19": 2,
+          "22": 4,
+          "31": 8,
+          "34": 8,
+          "38": 4,
+          "41": 23,
+          "45": 7,
+          "47": 7,
+          "48": 7,
+          "49": 7,
+          "50": 7
+        },
+        "total_cells": 54,
+        "rail": 13
+      },
+      "answers": {
+        "4": 2,
+        "6": 3,
+        "9": 5,
+        "17": 5,
+        "18": 5,
+        "19": 6,
+        "22": 7,
+        "31": 9,
+        "34": 9,
+        "38": 10,
+        "41": 6,
+        "45": 12,
+        "47": 12,
+        "48": 12,
+        "49": 12,
+        "50": 12
+      },
+      "misses": [
+        [
+          9,
+          5,
+          "How do they pull out a single variable to work with on its own?"
+        ],
+        [
+          41,
+          6,
+          "Do they have to strip out the blanks before they can chart a column?"
+        ]
+      ]
+    },
+    "model": {
+      "names": [
+        "ORIE 4741 EDA imports",
+        "Reading acs_2013.csv into acs",
+        "HHINCOME mean, std, and max",
+        "Missing HHINCOME and the 9999999 code",
+        "acs99 without the 9999999 incomes",
+        "INCOME+1 log-scale histogram by FOODSTMP",
+        "Recoded acs_2013_cleaned.csv distributions",
+        "HHINCOME by LABFORCE and EDUC",
+        "HHINCOME violin, box, and scatter by EDUC",
+        "Plotting library links"
+      ],
+      "score": {
+        "accuracy": 0.75,
+        "cells_to_read": 5.833333333333333,
+        "cost": 7.3125,
+        "per_question": {
+          "4": 5,
+          "6": 5,
+          "9": 8,
+          "17": 7,
+          "18": 7,
+          "19": 12,
+          "22": 9,
+          "31": 6,
+          "34": 10,
+          "38": 7,
+          "41": 20,
+          "45": 4,
+          "47": 4,
+          "48": 5,
+          "49": 4,
+          "50": 4
+        },
+        "total_cells": 54,
+        "rail": 10
+      },
+      "answers": {
+        "4": 2,
+        "6": 2,
+        "9": 3,
+        "17": 4,
+        "18": 4,
+        "19": 5,
+        "22": 5,
+        "31": 6,
+        "34": 7,
+        "38": 7,
+        "41": 5,
+        "45": 8,
+        "47": 8,
+        "48": 8,
+        "49": 9,
+        "50": 9
+      },
+      "misses": [
+        [
+          19,
+          5,
+          "How do they get a first visual sense of how the values in a column are spread out?"
+        ],
+        [
+          34,
+          7,
+          "How do they get overlaid smooth curves comparing a distribution across groups instead of side-by-side bars?"
+        ],
+        [
+          41,
+          5,
+          "Do they have to strip out the blanks before they can chart a column?"
+        ],
+        [
+          48,
+          8,
+          "How do they lay out a grid of small charts broken down by two variables at once?"
+        ]
+      ]
+    }
+  },
+  "revenue-recovery-eda": {
+    "questions": {
+      "5": "Do they strip the leftover row-number column that came along when the saved file was read back in?",
+      "10": "How do they decide which accounts count as having paid versus never having paid at all?",
+      "15": "Where do they tally how many accounts fall into each age bracket for the paying, non-paying, and overall groups?",
+      "21": "Which age brackets carry the largest number of accounts that never paid?",
+      "22": "How do they work out what share of the accounts in each age bracket ended up paying?",
+      "25": "How much is owed on average by each age bracket across the whole portfolio?",
+      "38": "For the age bracket with the most activity, how do the paying accounts break down by who referred the debt and by income level?",
+      "39": "What are the overall account counts for that same bracket broken out the same way, so the paying figures have a denominator?",
+      "45": "Where do they attach a local joblessness band to each account in both the paying and non-paying groups?",
+      "49": "How do they turn the two raw counts into a comparable recovery rate for each group?",
+      "51": "For the early-thirties bracket, which local joblessness bands show the strongest recovery rates?",
+      "64": "Where do they attach a workforce-participation band to each account in both groups?",
+      "65": "How do they tally paying and non-paying accounts for every combination of age, joblessness, workforce participation, and income?",
+      "67": "How do they get the paying and non-paying tallies for the same attribute combination lined up side by side in one table?",
+      "72": "Which attribute combinations within the largest age bracket each account for at least a thousand accounts that paid?",
+      "81": "Once college attainment is folded into the mix, how do they get a recovery rate for each combination?"
+    },
+    "headings": {
+      "names": [
+        "EDA",
+        "Goal: paid vs. unpaid accounts, Data_cleaned.csv sources",
+        "pandas, pandas_profiling, matplotlib imports",
+        "Data_June24.csv columns after dropping Unnamed: 0",
+        "Age bins and paid/unpaid Closure_Type split",
+        "Age_range account counts for paid, unpaid, total",
+        "Quantity of accounts by Age_range",
+        "Total, paid, unpaid, and percent-paid bars by Age_range",
+        "Avg. Invoice_bal by Age_range, all accounts",
+        "Avg. Invoice_bal by Age_range, paid accounts",
+        "Avg. Total_Paid by Age_range",
+        "Total Total_Paid by Age_range",
+        "Observations: 45-49 leads, 30-34 collections",
+        "Age 45-49 by Seller_Type and Income_level",
+        "Percent_Paid by Age_range and Unemply_rate_range",
+        "Age_range 30-34 ranked by Percent_Paid",
+        "Age_range 45-49 and every age by Total_Paid_Count",
+        "Null values",
+        "Nulls dropped from paid dataset",
+        "Labor_force_part_range and Income_level combinations for 45-49",
+        "Education_college combinations for age 45-49",
+        "Seller_Type comparison"
+      ],
+      "score": {
+        "accuracy": 1.0,
+        "cells_to_read": 7.6875,
+        "cost": 7.6875,
+        "per_question": {
+          "5": 3,
+          "10": 4,
+          "15": 6,
+          "21": 6,
+          "22": 6,
+          "25": 2,
+          "38": 7,
+          "39": 7,
+          "45": 7,
+          "49": 7,
+          "51": 2,
+          "64": 15,
+          "65": 15,
+          "67": 15,
+          "72": 15,
+          "81": 6
+        },
+        "total_cells": 87,
+        "rail": 22
+      },
+      "answers": {
+        "5": 4,
+        "10": 5,
+        "15": 6,
+        "21": 8,
+        "22": 8,
+        "25": 9,
+        "38": 14,
+        "39": 14,
+        "45": 15,
+        "49": 15,
+        "51": 16,
+        "64": 20,
+        "65": 20,
+        "67": 20,
+        "72": 20,
+        "81": 21
+      },
+      "misses": []
+    },
+    "fixed8": {
+      "names": [
+        "Cleaned Data_June24 accounts for paid-vs-unpaid EDA",
+        "Paid and unpaid accounts split by Age_range",
+        "Account quantity and percent paid by Age_range",
+        "Avg. Invoice_bal and Total_Paid by Age_range",
+        "Total_Paid sum by Age_range, then 45-49 detail",
+        "AMBULANCE 45-49 counts and Unemply_rate_range bins",
+        "Percent_Paid by Age_range and Unemply_rate_range",
+        "Paid nulls dropped, Labor_force_part_range bins",
+        "Labor_force_part_range and Income_level Percent_Paid for 45-49",
+        "Top 45-49 combinations, then Education_college bins",
+        "Education_college Percent_Paid and Seller_Type comparison"
+      ],
+      "score": {
+        "accuracy": 0.75,
+        "cells_to_read": 7.916666666666667,
+        "cost": 8.625,
+        "per_question": {
+          "5": 8,
+          "10": 11,
+          "15": 8,
+          "21": 14,
+          "22": 8,
+          "25": 8,
+          "38": 8,
+          "39": 9,
+          "45": 8,
+          "49": 8,
+          "51": 8,
+          "64": 9,
+          "65": 8,
+          "67": 8,
+          "72": 8,
+          "81": 7
+        },
+        "total_cells": 87,
+        "rail": 11
+      },
+      "answers": {
+        "5": 1,
+        "10": 1,
+        "15": 2,
+        "21": 2,
+        "22": 3,
+        "25": 4,
+        "38": 5,
+        "39": 6,
+        "45": 6,
+        "49": 7,
+        "51": 7,
+        "64": 8,
+        "65": 9,
+        "67": 9,
+        "72": 10,
+        "81": 11
+      },
+      "misses": [
+        [
+          10,
+          1,
+          "How do they decide which accounts count as having paid versus never having paid at all?"
+        ],
+        [
+          21,
+          2,
+          "Which age brackets carry the largest number of accounts that never paid?"
+        ],
+        [
+          39,
+          6,
+          "What are the overall account counts for that same bracket broken out the same way, so the paying figures have a denominator?"
+        ],
+        [
+          64,
+          8,
+          "Where do they attach a workforce-participation band to each account in both groups?"
+        ]
+      ]
+    },
+    "cohesion": {
+      "names": [
+        "Cleaned account data from Data_June24.csv",
+        "Age_range bins from 18-21 to 90+",
+        "Paid vs unpaid split by Closure_Type",
+        "Percent paid of total accounts by Age_range",
+        "Avg. Invoice_bal and Total_Paid by Age_range",
+        "Age 45-49 by Seller_Type and Income_level",
+        "Ambulance accounts within age 45-49",
+        "Percent_Paid by Age_range and Unemply_rate_range",
+        "Null values in the paid dataset",
+        "Null-free paid data and Labor_force_part_range bins",
+        "Top 45-49 unemployment, labor force, income combinations",
+        "Education_college combinations for age 45-49",
+        "Seller_Type comparison"
+      ],
+      "score": {
+        "accuracy": 0.875,
+        "cells_to_read": 10.071428571428571,
+        "cost": 9.75,
+        "per_question": {
+          "5": 7,
+          "10": 8,
+          "15": 10,
+          "21": 7,
+          "22": 7,
+          "25": 12,
+          "38": 5,
+          "39": 5,
+          "45": 14,
+          "49": 14,
+          "51": 14,
+          "64": 5,
+          "65": 14,
+          "67": 14,
+          "72": 14,
+          "81": 6
+        },
+        "total_cells": 87,
+        "rail": 13
+      },
+      "answers": {
+        "5": 1,
+        "10": 3,
+        "15": 4,
+        "21": 4,
+        "22": 4,
+        "25": 5,
+        "38": 6,
+        "39": 6,
+        "45": 8,
+        "49": 8,
+        "51": 8,
+        "64": 10,
+        "65": 11,
+        "67": 11,
+        "72": 11,
+        "81": 12
+      },
+      "misses": [
+        [
+          15,
+          4,
+          "Where do they tally how many accounts fall into each age bracket for the paying, non-paying, and overall groups?"
+        ],
+        [
+          64,
+          10,
+          "Where do they attach a workforce-participation band to each account in both groups?"
+        ]
+      ]
+    },
+    "hybrid": {
+      "names": [
+        "Paid vs unpaid accounts, from Data_cleaned.csv",
+        "pandas, numpy, matplotlib imports",
+        "Data_June24.csv loaded, Unnamed: 0 dropped",
+        "Paid/unpaid split by Closure_Type, 16 Age_range bins",
+        "Total account counts by Age_range",
+        "Paid, unpaid, and percent_paid by Age_range",
+        "Avg. Invoice_bal of total accounts by Age_range",
+        "Avg. Invoice_bal of paid accounts by Age_range",
+        "Avg. Total_Paid by Age_range",
+        "Total_Paid sum by Age_range, 45-49 leading",
+        "45-49 counts by Seller_Type and Income_level",
+        "Percent_Paid by Age_range and Unemply_rate_range",
+        "Age_range 30-34 rows ranked by Percent_Paid",
+        "Every Age_range ranked by Total_Paid_Count",
+        "Null rows dropped from paid",
+        "45-49 by Labor_force_part_range and Income_level",
+        "Thirteen combinations holding 39% of 45-49 payers",
+        "Education_college in the 45-49 Percent_Paid breakdown",
+        "Seller_Type comparison"
+      ],
+      "score": {
+        "accuracy": 0.9375,
+        "cells_to_read": 5.866666666666666,
+        "cost": 8.5,
+        "per_question": {
+          "5": 3,
+          "10": 4,
+          "15": 7,
+          "21": 6,
+          "22": 6,
+          "25": 2,
+          "38": 7,
+          "39": 48,
+          "45": 7,
+          "49": 7,
+          "51": 2,
+          "64": 8,
+          "65": 8,
+          "67": 8,
+          "72": 7,
+          "81": 6
+        },
+        "total_cells": 87,
+        "rail": 19
+      },
+      "answers": {
+        "5": 3,
+        "10": 4,
+        "15": 5,
+        "21": 6,
+        "22": 6,
+        "25": 7,
+        "38": 11,
+        "39": 19,
+        "45": 12,
+        "49": 12,
+        "51": 13,
+        "64": 16,
+        "65": 16,
+        "67": 16,
+        "72": 17,
+        "81": 18
+      },
+      "misses": [
+        [
+          39,
+          19,
+          "What are the overall account counts for that same bracket broken out the same way, so the paying figures have a denominator?"
+        ]
+      ]
+    },
+    "model": {
+      "names": [
+        "Data_June24.csv accounts, paid vs unpaid goal",
+        "Paid/unpaid split and account counts by Age_range",
+        "Quantity and percent paid bars by Age_range",
+        "Avg Invoice_bal and Total_Paid by Age_range",
+        "Age 45-49 paid counts by Seller_Type and Income_level",
+        "Unemply_rate_range bins and Percent_Paid by Age_range",
+        "Percent_Paid tables for 30-34, 45-49, all ages",
+        "Nulls in the paid dataset",
+        "Labor_force_part_range bins with Income_level Percent_Paid",
+        "45-49 feature combinations holding 39% of paid accounts",
+        "Education_college bins and Percent_Paid at 45-49",
+        "Seller_Type comparison"
+      ],
+      "score": {
+        "accuracy": 0.875,
+        "cells_to_read": 7.785714285714286,
+        "cost": 11.3125,
+        "per_question": {
+          "5": 57,
+          "10": 10,
+          "15": 10,
+          "21": 15,
+          "22": 7,
+          "25": 11,
+          "38": 8,
+          "39": 8,
+          "45": 7,
+          "49": 7,
+          "51": 6,
+          "64": 7,
+          "65": 7,
+          "67": 7,
+          "72": 8,
+          "81": 6
+        },
+        "total_cells": 87,
+        "rail": 12
+      },
+      "answers": {
+        "5": 8,
+        "10": 2,
+        "15": 2,
+        "21": 2,
+        "22": 3,
+        "25": 4,
+        "38": 5,
+        "39": 5,
+        "45": 6,
+        "49": 6,
+        "51": 7,
+        "64": 9,
+        "65": 9,
+        "67": 9,
+        "72": 10,
+        "81": 11
+      },
+      "misses": [
+        [
+          5,
+          8,
+          "Do they strip the leftover row-number column that came along when the saved file was read back in?"
+        ],
+        [
+          21,
+          2,
+          "Which age brackets carry the largest number of accounts that never paid?"
+        ]
+      ]
+    }
+  },
+  "fraud-eda": {
+    "questions": {
+      "1": "What data files does this dataset actually ship with, and how do I list them?",
+      "2": "Where do they read the raw data files off disk into memory?",
+      "3": "How are the separate transaction-level and identity-level tables joined into one table per split, and what happens to rows with no match?",
+      "5": "Are there reusable helpers here for plotting a feature's distribution, comparing two features, and summarizing missing values?",
+      "7": "How many rows and columns does each raw table have before anything is joined?",
+      "8": "How big is the dataset once the tables have been joined together?",
+      "15": "Does the fraud rate differ depending on which product category the purchase falls into?",
+      "16": "Is fraud more common on some kinds of devices than others?",
+      "17": "Which numeric features are most strongly correlated with whether a transaction is fraudulent?",
+      "19": "Where does the cleaned, joined data get written out so later notebooks can pick it up?"
+    },
+    "headings": {
+      "names": [
+        "EDA imports and input file listing",
+        "train/test transaction\u2013identity merge",
+        "Univariate, bivariate, and null-count helpers",
+        "Shapes, nulls, and isFraud breakdowns",
+        "Export merged frames",
+        "train.csv and test.csv written"
+      ],
+      "score": {
+        "accuracy": 1.0,
+        "cells_to_read": 7,
+        "cost": 7,
+        "per_question": {
+          "1": 2,
+          "2": 2,
+          "3": 2,
+          "5": 2,
+          "7": 12,
+          "8": 12,
+          "15": 12,
+          "16": 12,
+          "17": 12,
+          "19": 2
+        },
+        "total_cells": 21,
+        "rail": 6
+      },
+      "answers": {
+        "1": 1,
+        "2": 2,
+        "3": 2,
+        "5": 3,
+        "7": 4,
+        "8": 4,
+        "15": 4,
+        "16": 4,
+        "17": 4,
+        "19": 6
+      },
+      "misses": []
+    },
+    "fixed8": {
+      "names": [
+        "Merged train/test transaction and identity frames",
+        "Null counts and isFraud by ProductCD, DeviceType",
+        "isFraud correlations and merged CSV export"
+      ],
+      "score": {
+        "accuracy": 0.7,
+        "cells_to_read": 7.142857142857143,
+        "cost": 7.9,
+        "per_question": {
+          "1": 8,
+          "2": 8,
+          "3": 8,
+          "5": 11,
+          "7": 8,
+          "8": 9,
+          "15": 8,
+          "16": 9,
+          "17": 5,
+          "19": 5
+        },
+        "total_cells": 21,
+        "rail": 3
+      },
+      "answers": {
+        "1": 1,
+        "2": 1,
+        "3": 1,
+        "5": 2,
+        "7": 1,
+        "8": 1,
+        "15": 2,
+        "16": 2,
+        "17": 3,
+        "19": 3
+      },
+      "misses": [
+        [
+          5,
+          2,
+          "Are there reusable helpers here for plotting a feature's distribution, comparing two features, and summarizing missing values?"
+        ],
+        [
+          8,
+          1,
+          "How big is the dataset once the tables have been joined together?"
+        ],
+        [
+          16,
+          2,
+          "Is fraud more common on some kinds of devices than others?"
+        ]
+      ]
+    },
+    "cohesion": {
+      "names": [
+        "Merged train/test transaction and identity frames",
+        "Test null counts and isFraud class balance",
+        "isFraud vs ProductCD, DeviceType, correlations, CSV export"
+      ],
+      "score": {
+        "accuracy": 0.9,
+        "cells_to_read": 9.11111111111111,
+        "cost": 10.3,
+        "per_question": {
+          "1": 10,
+          "2": 10,
+          "3": 10,
+          "5": 21,
+          "7": 10,
+          "8": 10,
+          "15": 8,
+          "16": 8,
+          "17": 8,
+          "19": 8
+        },
+        "total_cells": 21,
+        "rail": 3
+      },
+      "answers": {
+        "1": 1,
+        "2": 1,
+        "3": 1,
+        "5": -1,
+        "7": 1,
+        "8": 1,
+        "15": 3,
+        "16": 3,
+        "17": 3,
+        "19": 3
+      },
+      "misses": [
+        [
+          5,
+          -1,
+          "Are there reusable helpers here for plotting a feature's distribution, comparing two features, and summarizing missing values?"
+        ]
+      ]
+    },
+    "hybrid": {
+      "names": [
+        "Imports, options, and input file listing",
+        "train/test transaction and identity CSVs",
+        "Univariate, bivariate, null-count, countplot helpers",
+        "Merged train/test shapes, nulls, isFraud breakdowns",
+        "train.csv and test.csv export"
+      ],
+      "score": {
+        "accuracy": 0.8,
+        "cells_to_read": 7.5,
+        "cost": 8.2,
+        "per_question": {
+          "1": 2,
+          "2": 2,
+          "3": 16,
+          "5": 2,
+          "7": 6,
+          "8": 13,
+          "15": 13,
+          "16": 13,
+          "17": 13,
+          "19": 2
+        },
+        "total_cells": 21,
+        "rail": 5
+      },
+      "answers": {
+        "1": 1,
+        "2": 2,
+        "3": 4,
+        "5": 3,
+        "7": 2,
+        "8": 4,
+        "15": 4,
+        "16": 4,
+        "17": 4,
+        "19": 5
+      },
+      "misses": [
+        [
+          3,
+          4,
+          "How are the separate transaction-level and identity-level tables joined into one table per split, and what happens to rows with no match?"
+        ],
+        [
+          7,
+          2,
+          "How many rows and columns does each raw table have before anything is joined?"
+        ]
+      ]
+    },
+    "model": {
+      "names": [
+        "IEEE fraud transaction and identity merge",
+        "Univariate, bivariate, null-count plotting helpers",
+        "Train/test shapes, heads, nulls, isFraud counts",
+        "isFraud by ProductCD, DeviceType, and correlations",
+        "Merged train.csv and test.csv export"
+      ],
+      "score": {
+        "accuracy": 0.9,
+        "cells_to_read": 4.333333333333333,
+        "cost": 4.7,
+        "per_question": {
+          "1": 4,
+          "2": 4,
+          "3": 4,
+          "5": 2,
+          "7": 8,
+          "8": 7,
+          "15": 5,
+          "16": 5,
+          "17": 5,
+          "19": 3
+        },
+        "total_cells": 21,
+        "rail": 5
+      },
+      "answers": {
+        "1": 1,
+        "2": 1,
+        "3": 1,
+        "5": 2,
+        "7": 1,
+        "8": 3,
+        "15": 4,
+        "16": 4,
+        "17": 4,
+        "19": 5
+      },
+      "misses": [
+        [
+          7,
+          1,
+          "How many rows and columns does each raw table have before anything is joined?"
+        ]
+      ]
+    }
+  },
+  "simulation-sweep": {
+    "questions": {
+      "2": "What population size, starting infection, and recovery speed is the whole outbreak study built on, and how wide a range of contagiousness does it cover?",
+      "3": "Where is the actual epidemic model written down \u2014 the rules for how people move from healthy to sick to recovered?",
+      "4": "How do they run a single outbreak forward in time, and how many days does each run cover?",
+      "5": "How do they work out when the outbreak peaks and how many people are sick at that moment?",
+      "7": "Where does the batch of scenarios actually get simulated, one for each contagiousness level?",
+      "8": "Where are the peak timings and heights pulled out for every scenario at once?",
+      "9": "Can I see the peak day and peak case count for each scenario printed out as plain numbers?",
+      "10": "Is there a chart overlaying the infection curves for all the contagiousness levels so I can compare their shapes?",
+      "12": "What share of the population ends up having been infected by the end, for each contagiousness level?",
+      "13": "Is there a plot showing how the final infected share rises with contagiousness?",
+      "14": "How do they model a control measure that kicks in partway through and cuts transmission?",
+      "15": "Where do they pick which start dates for the control measure to compare?",
+      "16": "Can I see how the outbreak curve changes depending on how early the control measure starts?",
+      "17": "Where do they bundle the headline numbers for one run \u2014 peak timing, peak size, and final infected share \u2014 into a single record?",
+      "18": "Is there a side-by-side table comparing the outcomes of the different intervention start dates?",
+      "19": "Where do the sweep results get written out to a file for later use?"
+    },
+    "headings": {
+      "names": [
+        "SIR model setup and solver",
+        "R0 sweep peaks, attack rates, intervention timing",
+        "Unimplemented parameter sensitivity stub"
+      ],
+      "score": {
+        "accuracy": 0.875,
+        "cells_to_read": 13.428571428571429,
+        "cost": 13.375,
+        "per_question": {
+          "2": 4,
+          "3": 4,
+          "4": 5,
+          "5": 15,
+          "7": 15,
+          "8": 15,
+          "9": 15,
+          "10": 15,
+          "12": 15,
+          "13": 15,
+          "14": 15,
+          "15": 15,
+          "16": 15,
+          "17": 15,
+          "18": 15,
+          "19": 21
+        },
+        "total_cells": 21,
+        "rail": 3
+      },
+      "answers": {
+        "2": 1,
+        "3": 1,
+        "4": 1,
+        "5": 2,
+        "7": 2,
+        "8": 2,
+        "9": 2,
+        "10": 2,
+        "12": 2,
+        "13": 2,
+        "14": 2,
+        "15": 2,
+        "16": 2,
+        "17": 2,
+        "18": 2,
+        "19": -1
+      },
+      "misses": [
+        [
+          4,
+          1,
+          "How do they run a single outbreak forward in time, and how many days does each run cover?"
+        ],
+        [
+          19,
+          -1,
+          "Where do the sweep results get written out to a file for later use?"
+        ]
+      ]
+    },
+    "fixed8": {
+      "names": [
+        "R0_grid sweep of SIR epidemic curves",
+        "Peak I and attack rate per R0",
+        "Intervention start-day curves and summary table"
+      ],
+      "score": {
+        "accuracy": 0.6875,
+        "cells_to_read": 7.181818181818182,
+        "cost": 8.4375,
+        "per_question": {
+          "2": 8,
+          "3": 8,
+          "4": 8,
+          "5": 11,
+          "7": 8,
+          "8": 8,
+          "9": 8,
+          "10": 11,
+          "12": 8,
+          "13": 8,
+          "14": 7,
+          "15": 6,
+          "16": 5,
+          "17": 5,
+          "18": 5,
+          "19": 21
+        },
+        "total_cells": 21,
+        "rail": 3
+      },
+      "answers": {
+        "2": 1,
+        "3": 1,
+        "4": 1,
+        "5": 2,
+        "7": 1,
+        "8": 2,
+        "9": 2,
+        "10": 1,
+        "12": 2,
+        "13": 2,
+        "14": 3,
+        "15": 3,
+        "16": 3,
+        "17": 3,
+        "18": 3,
+        "19": -1
+      },
+      "misses": [
+        [
+          5,
+          2,
+          "How do they work out when the outbreak peaks and how many people are sick at that moment?"
+        ],
+        [
+          10,
+          1,
+          "Is there a chart overlaying the infection curves for all the contagiousness levels so I can compare their shapes?"
+        ],
+        [
+          14,
+          3,
+          "How do they model a control measure that kicks in partway through and cuts transmission?"
+        ],
+        [
+          15,
+          3,
+          "Where do they pick which start dates for the control measure to compare?"
+        ],
+        [
+          19,
+          -1,
+          "Where do the sweep results get written out to a file for later use?"
+        ]
+      ]
+    },
+    "cohesion": {
+      "names": [
+        "SIR outbreak sweep: numpy, solve_ivp, matplotlib imports",
+        "N, I0, R0_grid, gamma and sir/run/peak_of",
+        "Sweep results with peak day and peak I",
+        "Infected curves and attack rate across R0",
+        "Intervention start days and sweep_peaks.npy export"
+      ],
+      "score": {
+        "accuracy": 1.0,
+        "cells_to_read": 5.125,
+        "cost": 5.125,
+        "per_question": {
+          "2": 4,
+          "3": 4,
+          "4": 4,
+          "5": 4,
+          "7": 4,
+          "8": 4,
+          "9": 4,
+          "10": 4,
+          "12": 4,
+          "13": 4,
+          "14": 7,
+          "15": 7,
+          "16": 7,
+          "17": 7,
+          "18": 7,
+          "19": 7
+        },
+        "total_cells": 21,
+        "rail": 5
+      },
+      "answers": {
+        "2": 2,
+        "3": 2,
+        "4": 2,
+        "5": 2,
+        "7": 3,
+        "8": 3,
+        "9": 3,
+        "10": 4,
+        "12": 4,
+        "13": 4,
+        "14": 5,
+        "15": 5,
+        "16": 5,
+        "17": 5,
+        "18": 5,
+        "19": 5
+      },
+      "misses": []
+    },
+    "hybrid": {
+      "names": [
+        "SIR equations and R0 grid parameters",
+        "solve_ivp runner and peak I finder",
+        "R0 sweep results and peak days",
+        "Infection curves and attack rate by R0",
+        "Intervention start-day scenarios at R0 2.4",
+        "Intervention summary table of peak and attack",
+        "Saved sweep_peaks.npy and sensitivity stub"
+      ],
+      "score": {
+        "accuracy": 0.9375,
+        "cells_to_read": 3.2,
+        "cost": 3.875,
+        "per_question": {
+          "2": 4,
+          "3": 4,
+          "4": 3,
+          "5": 3,
+          "7": 3,
+          "8": 3,
+          "9": 3,
+          "10": 4,
+          "12": 4,
+          "13": 4,
+          "14": 3,
+          "15": 3,
+          "16": 3,
+          "17": 14,
+          "18": 2,
+          "19": 2
+        },
+        "total_cells": 21,
+        "rail": 7
+      },
+      "answers": {
+        "2": 1,
+        "3": 1,
+        "4": 2,
+        "5": 2,
+        "7": 3,
+        "8": 3,
+        "9": 3,
+        "10": 4,
+        "12": 4,
+        "13": 4,
+        "14": 5,
+        "15": 5,
+        "16": 5,
+        "17": 2,
+        "18": 6,
+        "19": 7
+      },
+      "misses": [
+        [
+          17,
+          2,
+          "Where do they bundle the headline numbers for one run \u2014 peak timing, peak size, and final infected share \u2014 into a single record?"
+        ]
+      ]
+    },
+    "model": {
+      "names": [
+        "SIR model, R0 grid, peak_of helper",
+        "R0 sweep peak day and peak I",
+        "Infection curves across the R0 grid",
+        "Attack rate versus R0",
+        "Intervention start-day curves at R0=2.4",
+        "Peak and attack summary per intervention start",
+        "Saved sweep_peaks and sensitivity stub"
+      ],
+      "score": {
+        "accuracy": 1.0,
+        "cells_to_read": 3.625,
+        "cost": 3.625,
+        "per_question": {
+          "2": 6,
+          "3": 6,
+          "4": 6,
+          "5": 6,
+          "7": 4,
+          "8": 4,
+          "9": 4,
+          "10": 1,
+          "12": 3,
+          "13": 3,
+          "14": 3,
+          "15": 3,
+          "16": 3,
+          "17": 2,
+          "18": 2,
+          "19": 2
+        },
+        "total_cells": 21,
+        "rail": 7
+      },
+      "answers": {
+        "2": 1,
+        "3": 1,
+        "4": 1,
+        "5": 1,
+        "7": 2,
+        "8": 2,
+        "9": 2,
+        "10": 3,
+        "12": 4,
+        "13": 4,
+        "14": 5,
+        "15": 5,
+        "16": 5,
+        "17": 6,
+        "18": 6,
+        "19": 7
+      },
+      "misses": []
+    }
+  },
+  "tidy-phased": {
+    "questions": {
+      "3": "Where do I point this at my own copy of the data instead of the default location?",
+      "8": "How do the customer support records get pulled in, given they're not a flat table?",
+      "22": "How do they deal with sign-up dates that aren't valid dates?",
+      "24": "What happens to accounts whose plan tier is blank or inconsistently capitalized?",
+      "30": "How far ahead does the model look, and as of what date, when deciding someone left?",
+      "40": "How do the different types of user activity each become their own column?",
+      "41": "Where does the per-customer table and the per-activity summary get stitched into one table?",
+      "50": "How is a customer's recent payment history summarized into a few numbers?",
+      "58": "Which of the inputs actually move together with leaving, before any model is fit?",
+      "62": "How is the plan tier, which is text, turned into something the model can consume?",
+      "76": "How do they show the forest is memorizing the training data?",
+      "78": "According to the tree model, which inputs matter most?",
+      "85": "How well does the final model do on each of the two outcomes separately, not just overall?",
+      "93": "Are the predicted probabilities honest \u2014 does a 30% prediction actually mean 30%?",
+      "103": "How many of the customers who actually left did the model fail to flag?",
+      "109": "Where do the per-customer risk scores get written out for downstream use?"
+    },
+    "headings": {
+      "names": [
+        "Imports, display options, and raw data paths",
+        "Load heading",
+        "accounts, events, billing, support shapes and dtypes",
+        "Null rates and missing plan values",
+        "Cleaned accounts: sparse columns, types, duplicates",
+        "churned label from billing 60-day horizon",
+        "90-day event counts, active days, recency",
+        "tickets_180d and escalations_180d support features",
+        "Last-three-period billing mean, std, delta",
+        "Recency, churn-by-plan, active-days plots and correlations",
+        "One-hot plan matrix, train/test split, StratifiedKFold",
+        "Logistic regression heading and pipeline imports",
+        "Logistic regression AUC, CV score, coefficients",
+        "Random forest train/test gap and shallow variant",
+        "HistGradientBoosting hyperparameters, fit, AUC, classification report",
+        "Precision/recall threshold sweep and THRESHOLD = 0.42",
+        "Calibration curve and isotonic CalibratedClassifierCV",
+        "Per-segment AUC by plan, mrr, seats",
+        "False negatives and false positives profile",
+        "Export heading",
+        "churn_gbm.joblib and scored_holdout.csv artifacts",
+        "model_card.json and interim directory listing",
+        "Scratch: feat columns, leakage assert, cleanup"
+      ],
+      "score": {
+        "accuracy": 0.875,
+        "cells_to_read": 6.285714285714286,
+        "cost": 14.625,
+        "per_question": {
+          "3": 4,
+          "8": 7,
+          "22": 10,
+          "24": 10,
+          "30": 6,
+          "40": 8,
+          "41": 24,
+          "50": 5,
+          "58": 7,
+          "62": 5,
+          "76": 7,
+          "78": 122,
+          "85": 7,
+          "93": 5,
+          "103": 5,
+          "109": 2
+        },
+        "total_cells": 122,
+        "rail": 23
+      },
+      "answers": {
+        "3": 1,
+        "8": 3,
+        "22": 5,
+        "24": 5,
+        "30": 6,
+        "40": 7,
+        "41": 11,
+        "50": 9,
+        "58": 10,
+        "62": 11,
+        "76": 14,
+        "78": -1,
+        "85": 15,
+        "93": 17,
+        "103": 19,
+        "109": 21
+      },
+      "misses": [
+        [
+          41,
+          11,
+          "Where does the per-customer table and the per-activity summary get stitched into one table?"
+        ],
+        [
+          78,
+          -1,
+          "According to the tree model, which inputs matter most?"
+        ]
+      ]
+    },
+    "fixed8": {
+      "names": [
+        "Raw accounts, events, billing, support loads",
+        "Null fractions across accounts, events, billing",
+        "Sparse column drop and signup_date coercion",
+        "Plan, seats, mrr cleanup; churn cut definition",
+        "Churn label merge and 90-day event aggregates",
+        "Event kind counts and 180-day ticket signal",
+        "Last-three-bill trend features and recency histogram",
+        "Churn correlations and stratified train/test split",
+        "Logistic regression AUC and coefficients",
+        "Random forest overfit gap and shallow retune",
+        "HistGradientBoosting fit, scores, threshold sweep",
+        "Threshold 0.42 and isotonic calibration",
+        "Segment AUC by plan, mrr, seats",
+        "False negatives, false positives, and model export",
+        "Scratch: feat columns and post-cut leakage assert",
+        "Dropping rf and done marker"
+      ],
+      "score": {
+        "accuracy": 0.75,
+        "cells_to_read": 8,
+        "cost": 9.4375,
+        "per_question": {
+          "3": 8,
+          "8": 9,
+          "22": 8,
+          "24": 8,
+          "30": 8,
+          "40": 8,
+          "41": 10,
+          "50": 8,
+          "58": 8,
+          "62": 8,
+          "76": 8,
+          "78": 8,
+          "85": 27,
+          "93": 8,
+          "103": 9,
+          "109": 8
+        },
+        "total_cells": 122,
+        "rail": 16
+      },
+      "answers": {
+        "3": 1,
+        "8": 1,
+        "22": 3,
+        "24": 4,
+        "30": 4,
+        "40": 6,
+        "41": 5,
+        "50": 7,
+        "58": 8,
+        "62": 8,
+        "76": 10,
+        "78": 10,
+        "85": 14,
+        "93": 12,
+        "103": 14,
+        "109": 14
+      },
+      "misses": [
+        [
+          8,
+          1,
+          "How do the customer support records get pulled in, given they're not a flat table?"
+        ],
+        [
+          41,
+          5,
+          "Where does the per-customer table and the per-activity summary get stitched into one table?"
+        ],
+        [
+          85,
+          14,
+          "How well does the final model do on each of the two outcomes separately, not just overall?"
+        ],
+        [
+          103,
+          14,
+          "How many of the customers who actually left did the model fail to flag?"
+        ]
+      ]
+    },
+    "cohesion": {
+      "names": [
+        "Imports, seeds, and RAW/INTERIM paths",
+        "Accounts, events, billing, support tables loaded",
+        "Event dtypes and billing column summaries",
+        "Null rates across tables; missing plan",
+        "Sparse column drop, signup_date and plan cleanup",
+        "Seats and mrr cleanup; 60-day churn label",
+        "90-day event counts, active days, recency, kinds",
+        "180-day tickets and escalations against churn",
+        "Last-three-period bill mean, std, delta",
+        "Recency, plan churn, active-days plots and correlations",
+        "Strongest positive churn correlations",
+        "plan dummies, train/test split, logistic regression coefficients",
+        "Random forest train/test AUC gap, shallow retry",
+        "HistGradientBoosting hyperparameters",
+        "GBM fit, AUC, threshold precision/recall sweep",
+        "Best-F1 threshold at 0.42",
+        "Isotonic calibration of p_gbm",
+        "Segment AUC by plan, mrr, seats",
+        "False negatives and false positives at THRESHOLD",
+        "Exported gbm, scored holdout, model card",
+        "Scratch column dumps and billing leakage assert"
+      ],
+      "score": {
+        "accuracy": 0.875,
+        "cells_to_read": 6.571428571428571,
+        "cost": 13.5625,
+        "per_question": {
+          "3": 4,
+          "8": 6,
+          "22": 5,
+          "24": 5,
+          "30": 11,
+          "40": 7,
+          "41": 7,
+          "50": 4,
+          "58": 3,
+          "62": 13,
+          "76": 7,
+          "78": 122,
+          "85": 5,
+          "93": 6,
+          "103": 6,
+          "109": 6
+        },
+        "total_cells": 122,
+        "rail": 21
+      },
+      "answers": {
+        "3": 1,
+        "8": 2,
+        "22": 5,
+        "24": 5,
+        "30": 6,
+        "40": 7,
+        "41": 7,
+        "50": 9,
+        "58": 11,
+        "62": 12,
+        "76": 13,
+        "78": -1,
+        "85": 15,
+        "93": 17,
+        "103": 19,
+        "109": 20
+      },
+      "misses": [
+        [
+          58,
+          11,
+          "Which of the inputs actually move together with leaving, before any model is fit?"
+        ],
+        [
+          78,
+          -1,
+          "According to the tree model, which inputs matter most?"
+        ]
+      ]
+    },
+    "hybrid": {
+      "names": [
+        "Imports, pandas display options, RAW and INTERIM paths",
+        "accounts, events, billing, support tickets loaded",
+        "Null rates and plan value counts",
+        "Cleaned accounts: sparse columns, dtypes, duplicate account_id",
+        "Churn label: no billing within 60 days of CUT",
+        "events_90d, active_days_90d, recency_days, per-kind counts",
+        "tickets_180d and escalations_180d support features",
+        "bill_mean, bill_std, bill_delta over last three periods",
+        "Recency, churn-by-plan, and churned correlations",
+        "X/y matrix, stratified train/test split, 5-fold CV",
+        "Logistic regression imports: pipeline and StandardScaler",
+        "Scaled logistic regression AUC and coefficients",
+        "Random forest train/test AUC gap, shallow refit",
+        "HistGradientBoosting churn model and holdout report",
+        "Precision/recall threshold sweep, THRESHOLD 0.42",
+        "Calibration curve and isotonic CalibratedClassifierCV",
+        "Test-set AUC by plan, mrr quartile, seats",
+        "False negatives and false positives at THRESHOLD",
+        "churn_gbm.joblib and scored_holdout.csv artifacts",
+        "model_card.json with threshold, auc, n_train",
+        "Scratch: feat column list, leakage assert, gc"
+      ],
+      "score": {
+        "accuracy": 0.875,
+        "cells_to_read": 6.428571428571429,
+        "cost": 14.75,
+        "per_question": {
+          "3": 5,
+          "8": 7,
+          "22": 10,
+          "24": 10,
+          "30": 6,
+          "40": 8,
+          "41": 24,
+          "50": 5,
+          "58": 7,
+          "62": 5,
+          "76": 7,
+          "78": 122,
+          "85": 7,
+          "93": 5,
+          "103": 6,
+          "109": 2
+        },
+        "total_cells": 122,
+        "rail": 21
+      },
+      "answers": {
+        "3": 1,
+        "8": 2,
+        "22": 4,
+        "24": 4,
+        "30": 5,
+        "40": 6,
+        "41": 10,
+        "50": 8,
+        "58": 9,
+        "62": 10,
+        "76": 13,
+        "78": -1,
+        "85": 14,
+        "93": 16,
+        "103": 18,
+        "109": 19
+      },
+      "misses": [
+        [
+          41,
+          10,
+          "Where does the per-customer table and the per-activity summary get stitched into one table?"
+        ],
+        [
+          78,
+          -1,
+          "According to the tree model, which inputs matter most?"
+        ]
+      ]
+    },
+    "model": {
+      "names": [
+        "Churn notebook setup, seeds, and data paths",
+        "accounts, events, billing, support tables loaded",
+        "Null rates and plan coverage",
+        "Cleaned accounts: sparse columns, types, duplicates",
+        "60-day churn label from billing periods",
+        "90-day event counts, active days, recency",
+        "180-day tickets and escalations",
+        "Last-three-period billing mean, std, delta",
+        "Recency, plan churn plots and churned correlations",
+        "Feature matrix X and stratified split",
+        "Logistic regression AUC and coefficients",
+        "Random forest overfitting and shallow variant",
+        "HistGradientBoosting churn model and holdout AUC",
+        "Precision/recall threshold sweep, THRESHOLD 0.42",
+        "Calibration curve and isotonic recalibration",
+        "Segment AUC by plan, mrr, seats",
+        "False negatives and false positives at threshold",
+        "Exported gbm, scored holdout, model card",
+        "Scratch: feat columns, leakage assert, cleanup"
+      ],
+      "score": {
+        "accuracy": 0.875,
+        "cells_to_read": 6.571428571428571,
+        "cost": 8.625,
+        "per_question": {
+          "3": 4,
+          "8": 8,
+          "22": 10,
+          "24": 10,
+          "30": 6,
+          "40": 8,
+          "41": 24,
+          "50": 5,
+          "58": 7,
+          "62": 5,
+          "76": 7,
+          "78": 7,
+          "85": 22,
+          "93": 5,
+          "103": 5,
+          "109": 5
+        },
+        "total_cells": 122,
+        "rail": 19
+      },
+      "answers": {
+        "3": 1,
+        "8": 2,
+        "22": 4,
+        "24": 4,
+        "30": 5,
+        "40": 6,
+        "41": 10,
+        "50": 8,
+        "58": 9,
+        "62": 10,
+        "76": 12,
+        "78": 12,
+        "85": 17,
+        "93": 15,
+        "103": 17,
+        "109": 18
+      },
+      "misses": [
+        [
+          41,
+          10,
+          "Where does the per-customer table and the per-activity summary get stitched into one table?"
+        ],
+        [
+          85,
+          17,
+          "How well does the final model do on each of the two outcomes separately, not just overall?"
+        ]
+      ]
+    }
+  }
+}

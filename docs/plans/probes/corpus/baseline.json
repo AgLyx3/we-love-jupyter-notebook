@@ -1,0 +1,1118 @@
+[
+  {
+    "notebook": "madewithml",
+    "cells": 243,
+    "headings": 36,
+    "deterministic": {
+      "blocks": 44,
+      "min": 1,
+      "median": 5.0,
+      "max": 22,
+      "cv": 0.7049780293838976,
+      "one_cell": 3,
+      "over_12": 2,
+      "hdep": 0.8372093023255814,
+      "valid": true
+    },
+    "deterministic_no_headings": 8,
+    "model": {
+      "blocks": 37,
+      "min": 2,
+      "median": 6,
+      "max": 13,
+      "cv": 0.36195281361804155,
+      "one_cell": 0,
+      "over_12": 1,
+      "hdep": 0.8333333333333334,
+      "valid": true,
+      "problems": [],
+      "seconds": 22.8,
+      "names": [
+        "Made With ML notebook intro",
+        "Ray init, worker resources, EFS_DIR",
+        "dataset.csv ingestion into df",
+        "Stratified train_df/val_df split on tag",
+        "Tag distribution and title word cloud",
+        "text feature from title + description, clean_text",
+        "Drop id, created_on, title, description columns",
+        "class_to_index label encoding and decode",
+        "scibert BertTokenizer, tokenize batches",
+        "preprocess function combining all steps",
+        "Ray Dataset ingestion, stratify_split, map_batches",
+        "set_seeds, load_data, CustomPreprocessor",
+        "FinetunedLLM over scibert BertModel",
+        "pad_array and collate_fn for variable-length batches",
+        "train_step, eval_step, train_loop_per_worker",
+        "train_loop_config, ScalingConfig, RunConfig",
+        "TorchTrainer fit and best checkpoints",
+        "TorchPredictor and holdout precision/recall/f1",
+        "predict_proba on a sample project",
+        "MLflow tracking URI and MLflowLoggerCallback",
+        "Tracked training run and best_run by val_loss",
+        "MLflow dashboard walkthrough",
+        "get_best_checkpoint from MLflow run artifacts",
+        "Tuner trainer, MLflow callback, run config",
+        "HyperOptSearch space, AsyncHyperBandScheduler, tuner.fit",
+        "Best trial hyperparameters and test evaluation",
+        "y_test, y_prob and test_df predictions",
+        "Overall weighted precision, recall, f1",
+        "Per-class metrics sorted by f1",
+        "TP, FP, FN samples for natural-language-processing",
+        "Low-confidence samples and cleanlab label issues",
+        "nlp_llm and short_text slicing functions, slice metrics",
+        "LimeTextExplainer feature importance on a prediction",
+        "INV, DIR, MFT behavioral tests",
+        "Batch inference with ActorPoolStrategy",
+        "FastAPI ModelDeployment serve.run and queries",
+        "ModelDeploymentRobust with other-class threshold"
+      ],
+      "ranges": [
+        [
+          0,
+          4
+        ],
+        [
+          5,
+          12
+        ],
+        [
+          13,
+          16
+        ],
+        [
+          17,
+          22
+        ],
+        [
+          23,
+          30
+        ],
+        [
+          31,
+          40
+        ],
+        [
+          41,
+          42
+        ],
+        [
+          43,
+          48
+        ],
+        [
+          49,
+          54
+        ],
+        [
+          55,
+          58
+        ],
+        [
+          59,
+          65
+        ],
+        [
+          66,
+          72
+        ],
+        [
+          73,
+          78
+        ],
+        [
+          79,
+          85
+        ],
+        [
+          86,
+          91
+        ],
+        [
+          92,
+          96
+        ],
+        [
+          97,
+          104
+        ],
+        [
+          105,
+          114
+        ],
+        [
+          115,
+          119
+        ],
+        [
+          120,
+          125
+        ],
+        [
+          126,
+          132
+        ],
+        [
+          133,
+          135
+        ],
+        [
+          136,
+          141
+        ],
+        [
+          142,
+          150
+        ],
+        [
+          151,
+          156
+        ],
+        [
+          157,
+          163
+        ],
+        [
+          164,
+          171
+        ],
+        [
+          172,
+          173
+        ],
+        [
+          174,
+          178
+        ],
+        [
+          179,
+          183
+        ],
+        [
+          184,
+          193
+        ],
+        [
+          194,
+          206
+        ],
+        [
+          207,
+          213
+        ],
+        [
+          214,
+          218
+        ],
+        [
+          219,
+          223
+        ],
+        [
+          224,
+          235
+        ],
+        [
+          236,
+          242
+        ]
+      ]
+    }
+  },
+  {
+    "notebook": "handson-unsupervised",
+    "cells": 286,
+    "headings": 27,
+    "deterministic": {
+      "blocks": 39,
+      "min": 1,
+      "median": 5,
+      "max": 25,
+      "cv": 0.8224442197476451,
+      "one_cell": 3,
+      "over_12": 7,
+      "hdep": 0.7105263157894737,
+      "valid": true
+    },
+    "deterministic_no_headings": 12,
+    "model": {
+      "blocks": 37,
+      "min": 3,
+      "median": 7,
+      "max": 16,
+      "cv": 0.39749570604537937,
+      "one_cell": 0,
+      "over_12": 3,
+      "hdep": 0.6388888888888888,
+      "valid": true,
+      "problems": [],
+      "seconds": 20.5,
+      "names": [
+        "Setup: sklearn version check, save_fig, plot fonts",
+        "Iris petals: classification vs clustering, GaussianMixture match rate",
+        "KMeans on 5 blobs: labels_ and cluster_centers_",
+        "Voronoi decision boundaries for the blob clusters",
+        "Soft clustering: kmeans.transform() distances to centroids",
+        "Centroids moving over 1, 2 and 3 iterations",
+        "Random init variability and a good_init fix",
+        "Inertia and score() for the fitted models",
+        "n_init=10 runs pick the lowest-inertia solution",
+        "K-Means++ init and Elkan accelerated variants",
+        "MiniBatchKMeans on the blobs",
+        "MNIST memmap MiniBatchKMeans: inertia and timing vs KMeans",
+        "Inertia elbow curve for choosing k",
+        "Silhouette scores and silhouette diagrams per k",
+        "Elongated blobs where KMeans inertia picks badly",
+        "Ladybug image color segmentation by cluster centers",
+        "Digits logistic regression on 50 labeled instances",
+        "50 representative digits labeled by hand",
+        "Label propagation within clusters, trimming the farthest 1%",
+        "DBSCAN on make_moons: core samples and eps",
+        "KNeighborsClassifier over DBSCAN cores, with distance cutoff",
+        "SpectralClustering on the moons at two gammas",
+        "AgglomerativeClustering children_ on four points",
+        "GaussianMixture on three ellipsoids: weights, means, covariances",
+        "predict_proba, sample() and PDF integrating to 1",
+        "Density contours across covariance_type settings",
+        "Anomalies below the 2nd density percentile",
+        "BIC and AIC versus number of components",
+        "BayesianGaussianMixture zeroing out unneeded components",
+        "Exercise answers 1 to 9",
+        "Olivetti faces: stratified train/valid/test split and PCA",
+        "KMeans over k on faces: silhouette picks k=120, cluster faces shown",
+        "RandomForest on PCA features vs KMeans distance features",
+        "Appending cluster distances to the PCA features",
+        "GaussianMixture on faces, sampling new faces",
+        "score_samples on rotated, flipped and darkened faces",
+        "PCA reconstruction error as face anomaly detector"
+      ],
+      "ranges": [
+        [
+          0,
+          12
+        ],
+        [
+          13,
+          19
+        ],
+        [
+          20,
+          35
+        ],
+        [
+          36,
+          39
+        ],
+        [
+          40,
+          44
+        ],
+        [
+          45,
+          49
+        ],
+        [
+          50,
+          54
+        ],
+        [
+          55,
+          63
+        ],
+        [
+          64,
+          70
+        ],
+        [
+          71,
+          77
+        ],
+        [
+          78,
+          82
+        ],
+        [
+          83,
+          92
+        ],
+        [
+          93,
+          102
+        ],
+        [
+          103,
+          111
+        ],
+        [
+          112,
+          114
+        ],
+        [
+          115,
+          120
+        ],
+        [
+          121,
+          128
+        ],
+        [
+          129,
+          136
+        ],
+        [
+          137,
+          147
+        ],
+        [
+          148,
+          154
+        ],
+        [
+          155,
+          159
+        ],
+        [
+          160,
+          168
+        ],
+        [
+          169,
+          174
+        ],
+        [
+          175,
+          188
+        ],
+        [
+          189,
+          199
+        ],
+        [
+          200,
+          204
+        ],
+        [
+          205,
+          208
+        ],
+        [
+          209,
+          218
+        ],
+        [
+          219,
+          225
+        ],
+        [
+          226,
+          228
+        ],
+        [
+          229,
+          238
+        ],
+        [
+          239,
+          249
+        ],
+        [
+          250,
+          259
+        ],
+        [
+          260,
+          263
+        ],
+        [
+          264,
+          269
+        ],
+        [
+          270,
+          275
+        ],
+        [
+          276,
+          285
+        ]
+      ]
+    }
+  },
+  {
+    "notebook": "orie4741-eda",
+    "cells": 54,
+    "headings": 6,
+    "deterministic": {
+      "blocks": 7,
+      "min": 1,
+      "median": 4,
+      "max": 22,
+      "cv": 0.9568896802047269,
+      "one_cell": 1,
+      "over_12": 2,
+      "hdep": 0.8333333333333334,
+      "valid": true
+    },
+    "deterministic_no_headings": 2,
+    "model": {
+      "blocks": 10,
+      "min": 2,
+      "median": 5.5,
+      "max": 9,
+      "cv": 0.4239082645281332,
+      "one_cell": 0,
+      "over_12": 0,
+      "hdep": 0.5555555555555556,
+      "valid": true,
+      "problems": [],
+      "seconds": 8.1,
+      "names": [
+        "Lecture 2 EDA demo, numpy/pandas/seaborn imports",
+        "ACS 2013 CSV, first 10000 rows",
+        "HHINCOME mean, std, max",
+        "Missing HHINCOME counts and raw histograms",
+        "acs99 subset dropping the 9999999 income code",
+        "HHINCOME by FOODSTMP, log-scale INCOME+1",
+        "Recoded acs_2013_cleaned: HHINCOME, COSTGAS, EDUC",
+        "HHINCOME by LABFORCE, fraction working",
+        "HHINCOME across EDUC: violin, box, scatter",
+        "Plotting library links"
+      ],
+      "ranges": [
+        [
+          0,
+          1
+        ],
+        [
+          2,
+          6
+        ],
+        [
+          7,
+          14
+        ],
+        [
+          15,
+          21
+        ],
+        [
+          22,
+          30
+        ],
+        [
+          31,
+          36
+        ],
+        [
+          37,
+          43
+        ],
+        [
+          44,
+          47
+        ],
+        [
+          48,
+          51
+        ],
+        [
+          52,
+          53
+        ]
+      ]
+    }
+  },
+  {
+    "notebook": "revenue-recovery-eda",
+    "cells": 87,
+    "headings": 20,
+    "deterministic": {
+      "blocks": 22,
+      "min": 1,
+      "median": 3.0,
+      "max": 15,
+      "cv": 0.7867478141906944,
+      "one_cell": 5,
+      "over_12": 1,
+      "hdep": 0.9047619047619048,
+      "valid": true
+    },
+    "deterministic_no_headings": 3,
+    "model": {
+      "blocks": 12,
+      "min": 4,
+      "median": 7.0,
+      "max": 11,
+      "cv": 0.24625615270837414,
+      "one_cell": 0,
+      "over_12": 0,
+      "hdep": 0.9090909090909091,
+      "valid": true,
+      "problems": [],
+      "seconds": 10.8,
+      "names": [
+        "Data_June24.csv load and column check",
+        "Paid vs unpaid split by Age_range",
+        "Account counts and percent paid by age range",
+        "Invoice_bal and Total_Paid by age range",
+        "Age 45-49 by Seller_Type and Income_level",
+        "Unemply_rate_range binning and Percent_Paid merge",
+        "Percent_Paid rankings per age range",
+        "Dropping nulls from paid dataset",
+        "Labor_force_part_range added to the grouping",
+        "Top 45-49 feature combinations by Total_Paid_Count",
+        "Education_college added to the grouping",
+        "Seller_Type comparison"
+      ],
+      "ranges": [
+        [
+          0,
+          6
+        ],
+        [
+          7,
+          16
+        ],
+        [
+          17,
+          23
+        ],
+        [
+          24,
+          34
+        ],
+        [
+          35,
+          42
+        ],
+        [
+          43,
+          49
+        ],
+        [
+          50,
+          55
+        ],
+        [
+          56,
+          61
+        ],
+        [
+          62,
+          68
+        ],
+        [
+          69,
+          76
+        ],
+        [
+          77,
+          82
+        ],
+        [
+          83,
+          86
+        ]
+      ]
+    }
+  },
+  {
+    "notebook": "fraud-eda",
+    "cells": 21,
+    "headings": 4,
+    "deterministic": {
+      "blocks": 6,
+      "min": 1,
+      "median": 2.0,
+      "max": 12,
+      "cv": 1.0910894511799618,
+      "one_cell": 1,
+      "over_12": 0,
+      "hdep": 0.6,
+      "valid": true
+    },
+    "deterministic_no_headings": 3,
+    "model": {
+      "blocks": 5,
+      "min": 2,
+      "median": 4,
+      "max": 7,
+      "cv": 0.4096345365258393,
+      "one_cell": 0,
+      "over_12": 0,
+      "hdep": 0.75,
+      "valid": true,
+      "problems": [],
+      "seconds": 6.2,
+      "names": [
+        "Merge transaction and identity into train/test",
+        "Univariate, bivariate and null-count plot helpers",
+        "Train/test shapes, heads and null counts",
+        "isFraud rates by ProductCD, DeviceType and correlation",
+        "Merged train.csv and test.csv export"
+      ],
+      "ranges": [
+        [
+          0,
+          3
+        ],
+        [
+          4,
+          5
+        ],
+        [
+          6,
+          12
+        ],
+        [
+          13,
+          17
+        ],
+        [
+          18,
+          20
+        ]
+      ]
+    }
+  },
+  {
+    "notebook": "messy-exploration",
+    "cells": 57,
+    "headings": 0,
+    "deterministic": {
+      "blocks": 5,
+      "min": 1,
+      "median": 4,
+      "max": 44,
+      "cv": 1.4345256910006756,
+      "one_cell": 1,
+      "over_12": 1,
+      "hdep": 0.0,
+      "valid": true
+    },
+    "deterministic_no_headings": 5,
+    "model": {
+      "blocks": 13,
+      "min": 2,
+      "median": 4,
+      "max": 8,
+      "cv": 0.4054112283610997,
+      "one_cell": 0,
+      "over_12": 0,
+      "hdep": 0.0,
+      "valid": true,
+      "problems": [],
+      "seconds": 22.0,
+      "names": [
+        "sales_2023_2025.csv load, dtypes, missing values",
+        "store_dim merge on store_id, unmatched regions dropped",
+        "revenue from units and unit_price, negatives dropped",
+        "Revenue totals by region",
+        "Weekly revenue trend, overall and per region",
+        "Monthly revenue heatmap by region",
+        "units above 1000 trimmed, weekly and region recheck",
+        "NORTH and SOUTH revenue histograms",
+        "Store-week revenue with lag_1, lag_4, roll_4",
+        "GradientBoostingRegressor on lag features, test MAPE",
+        "Actual vs pred, feature importances, deeper model2",
+        "forecast_v4.csv export of revenue and pred",
+        "model_v4.pkl dump and lightgbm TODO"
+      ],
+      "ranges": [
+        [
+          0,
+          7
+        ],
+        [
+          8,
+          12
+        ],
+        [
+          13,
+          16
+        ],
+        [
+          17,
+          18
+        ],
+        [
+          19,
+          25
+        ],
+        [
+          26,
+          28
+        ],
+        [
+          29,
+          33
+        ],
+        [
+          34,
+          36
+        ],
+        [
+          37,
+          41
+        ],
+        [
+          42,
+          47
+        ],
+        [
+          48,
+          51
+        ],
+        [
+          52,
+          54
+        ],
+        [
+          55,
+          56
+        ]
+      ]
+    }
+  },
+  {
+    "notebook": "simulation-sweep",
+    "cells": 21,
+    "headings": 1,
+    "deterministic": {
+      "blocks": 3,
+      "min": 2,
+      "median": 4,
+      "max": 15,
+      "cv": 0.816496580927726,
+      "one_cell": 0,
+      "over_12": 1,
+      "hdep": 0.0,
+      "valid": true
+    },
+    "deterministic_no_headings": 3,
+    "model": {
+      "blocks": 7,
+      "min": 1,
+      "median": 3,
+      "max": 6,
+      "cv": 0.5039526306789697,
+      "one_cell": 1,
+      "over_12": 0,
+      "hdep": 0.0,
+      "valid": true,
+      "problems": [],
+      "seconds": 9.5,
+      "names": [
+        "SIR model setup and solver helpers",
+        "R0 grid sweep and peak timing",
+        "Infection curves across R0",
+        "Attack rate versus R0",
+        "Intervention start day comparison",
+        "Peak and attack rate summary table",
+        "sweep_peaks.npy export and sensitivity stub"
+      ],
+      "ranges": [
+        [
+          0,
+          5
+        ],
+        [
+          6,
+          9
+        ],
+        [
+          10,
+          10
+        ],
+        [
+          11,
+          13
+        ],
+        [
+          14,
+          16
+        ],
+        [
+          17,
+          18
+        ],
+        [
+          19,
+          20
+        ]
+      ]
+    }
+  },
+  {
+    "notebook": "messy-adspend",
+    "cells": 154,
+    "headings": 2,
+    "deterministic": {
+      "blocks": 5,
+      "min": 1,
+      "median": 10,
+      "max": 99,
+      "cv": 1.195122769765492,
+      "one_cell": 1,
+      "over_12": 2,
+      "hdep": 0.25,
+      "valid": true
+    },
+    "deterministic_no_headings": 4,
+    "model": {
+      "blocks": 22,
+      "min": 2,
+      "median": 7.0,
+      "max": 12,
+      "cv": 0.36293996396057454,
+      "one_cell": 0,
+      "over_12": 0,
+      "hdep": 0.0,
+      "valid": true,
+      "problems": [],
+      "seconds": 12.4,
+      "names": [
+        "Imports and finding spend_2025_q1_FINAL.csv",
+        "First look at spend and signups tables",
+        "channel vs source vocabulary, date parsing, 2025 cutoff",
+        "Negative spend rows dropped, spend distribution",
+        "channel and source spelling normalised to shared names",
+        "Duplicate date/channel/campaign rows summed",
+        "Daily spend outer-merged with signups counts",
+        "Spend and signups over time, per channel",
+        "two_axis() plotting helper",
+        "cpa per channel, capping above 500",
+        "dow, week, month, is_weekend calendar features",
+        "Spend lags, 7d/28d windows, saturation",
+        "Zero-spend organic rows removed, features rebuilt",
+        "Ridge on TimeSeriesSplit, first r2 scores",
+        "spend_7d leakage fixed by shifting one day",
+        "Ridge alpha sweep and coefficients at ALPHA=100",
+        "GradientBoostingRegressor scores, importances, fit vs actual",
+        "Peek at from_marketing_dont_delete.xlsx",
+        "Residuals by channel, month, dow, worst 20 rows",
+        "ridge vs gb MAE \u2014 don't ship",
+        "model_df.csv and gb.pkl saved",
+        "Scratch: shapes, feats count, del other"
+      ],
+      "ranges": [
+        [
+          0,
+          8
+        ],
+        [
+          9,
+          16
+        ],
+        [
+          17,
+          25
+        ],
+        [
+          26,
+          32
+        ],
+        [
+          33,
+          44
+        ],
+        [
+          45,
+          49
+        ],
+        [
+          50,
+          58
+        ],
+        [
+          59,
+          67
+        ],
+        [
+          68,
+          71
+        ],
+        [
+          72,
+          78
+        ],
+        [
+          79,
+          84
+        ],
+        [
+          85,
+          90
+        ],
+        [
+          91,
+          95
+        ],
+        [
+          96,
+          104
+        ],
+        [
+          105,
+          110
+        ],
+        [
+          111,
+          117
+        ],
+        [
+          118,
+          124
+        ],
+        [
+          125,
+          127
+        ],
+        [
+          128,
+          139
+        ],
+        [
+          140,
+          143
+        ],
+        [
+          144,
+          145
+        ],
+        [
+          146,
+          153
+        ]
+      ]
+    }
+  },
+  {
+    "notebook": "tidy-phased",
+    "cells": 122,
+    "headings": 19,
+    "deterministic": {
+      "blocks": 23,
+      "min": 1,
+      "median": 5,
+      "max": 10,
+      "cv": 0.4632416770801572,
+      "one_cell": 2,
+      "over_12": 0,
+      "hdep": 0.8181818181818182,
+      "valid": true
+    },
+    "deterministic_no_headings": 5,
+    "model": {
+      "blocks": 19,
+      "min": 4,
+      "median": 6,
+      "max": 10,
+      "cv": 0.2592030868990475,
+      "one_cell": 0,
+      "over_12": 0,
+      "hdep": 1.0,
+      "valid": true,
+      "problems": [],
+      "seconds": 11.8,
+      "names": [
+        "Imports, seeds, and RAW/INTERIM paths",
+        "accounts, events, billing, support tickets loaded",
+        "Null rates and missing plan values",
+        "Drop sparse columns, fix signup_date, plan, seats, mrr",
+        "churned label from billing after the 2026-03-01 cut",
+        "90-day event counts, active days, recency, kind pivot",
+        "tickets_180d and escalations_180d",
+        "bill_mean, bill_std, bill_last, bill_delta from last three periods",
+        "Recency, churn-by-plan, active-days plots and churn correlations",
+        "X/y matrix, stratified split, 5-fold CV",
+        "Attempt 1 \u2014 logistic regression AUC and coefficients",
+        "Attempt 2 \u2014 random forest, overfit gap and shallow refit",
+        "Attempt 3 \u2014 HistGradientBoosting, the shipped model",
+        "Precision/recall threshold sweep to THRESHOLD 0.42",
+        "Calibration curve and isotonic CalibratedClassifierCV",
+        "Per-segment AUC by plan, mrr quartile, seats",
+        "False negatives and false positives at THRESHOLD",
+        "Export gbm joblib, scored holdout, model_card.json",
+        "Scratch \u2014 column dumps, leakage assert, cleanup"
+      ],
+      "ranges": [
+        [
+          0,
+          3
+        ],
+        [
+          4,
+          11
+        ],
+        [
+          12,
+          18
+        ],
+        [
+          19,
+          28
+        ],
+        [
+          29,
+          34
+        ],
+        [
+          35,
+          42
+        ],
+        [
+          43,
+          47
+        ],
+        [
+          48,
+          52
+        ],
+        [
+          53,
+          59
+        ],
+        [
+          60,
+          64
+        ],
+        [
+          65,
+          71
+        ],
+        [
+          72,
+          78
+        ],
+        [
+          79,
+          85
+        ],
+        [
+          86,
+          90
+        ],
+        [
+          91,
+          95
+        ],
+        [
+          96,
+          101
+        ],
+        [
+          102,
+          106
+        ],
+        [
+          107,
+          111
+        ],
+        [
+          112,
+          121
+        ]
+      ]
+    }
+  }
+]
