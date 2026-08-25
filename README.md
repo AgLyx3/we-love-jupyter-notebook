@@ -14,6 +14,10 @@ may add, delete, reorder, and retype cells. Either way the backend validates and
 applies (or rejects) every change — the agent never mutates your notebook
 directly — and every change is reviewable as a diff and undoable.
 
+Most people drive it from an MCP client — Claude Code edits and runs the
+notebook through tools while the browser tab shows you the same session as it
+happens. `pip install notebook-editor-mcp`, and see [Install](#install).
+
 Everything runs on your machine and binds to loopback only. Read
 [Security Limits](#security-limits) before using it with untrusted notebooks.
 
@@ -63,113 +67,56 @@ Screenshots are captured from a live session against the notebooks in
 [`docs/screenshots/`](docs/screenshots/) for the full set and how to re-capture
 them.
 
-## Prerequisites
+## Install
 
-- **Python** 3.11+
-- **Node.js** 20.19+ or 22.12+, with **npm**
-- A local Python kernel (installed with the backend below via `ipykernel`)
-- **Claude CLI** — required only for agent turns (see [Claude CLI](#claude-cli))
-- **macOS or Linux.** The launcher and Playwright cleanup use POSIX process
-  groups/signals. Windows is out of scope for v1.
+The editor runs two ways. **As an [MCP](https://modelcontextprotocol.io)
+server** is the primary one: an MCP client — Claude Code, for instance — edits
+and runs the notebook through tools while you watch the same session in a
+browser tab and step in when you want to. [Running it
+locally](#run-it-locally-instead) is the other, and is what you want if you are
+working on the editor itself.
 
-## Setup
-
-From the repository root:
-
-```bash
-python -m venv .venv
-.venv/bin/pip install -e '.[test]'
-npm install
-```
-
-Playwright is only needed if you plan to run the end-to-end suite:
-
-```bash
-npx playwright install chromium
-```
-
-## Claude CLI
-
-Agent turns shell out to the `claude` command-line tool. You can open, edit,
-run, and save notebooks without it — the CLI is only invoked when you send an
-agent turn.
-
-**1. Install it** using either official method:
-
-```bash
-# Native installer (installs to ~/.local/bin)
-curl -fsSL https://claude.ai/install.sh | bash
-
-# …or via npm
-npm install -g @anthropic-ai/claude-code
-```
-
-Make sure `claude` is on your `PATH` (the app runs the `claude` executable
-directly):
-
-```bash
-which claude
-```
-
-**2. Authenticate it once.** Run `claude` on its own and complete the login
-flow (an Anthropic account / Claude subscription, or an API key). The app
-launches the CLI non-interactively per turn and does not handle login for you.
-
-**3. Match the supported version.** The adapter verifies the CLI before every
-turn and **requires `claude >= 2.1.203` and `< 2.2.0`**. It relies on
-`--safe-mode`, `--disable-slash-commands`, `--strict-mcp-config`, `--tools`,
-and `--permission-mode`. Check your version:
-
-```bash
-claude --version
-```
-
-If it falls outside that range, agent turns fail fast with **"Unsupported
-Claude CLI version"**; if `claude` is missing from `PATH`, you get **"Claude
-CLI is unavailable."** In both cases opening/editing/running notebooks still
-works — only agent turns are blocked.
-
-> **Just want to try the UI without Claude?** Start the app with
-> `--test-agent` (see [Run](#run)) to use a built-in deterministic adapter.
-> It produces canned Blocking-mode edits for demoing the flow and never calls
-> the real CLI — it does not perform Trusted structural edits, and it is not a
-> substitute for a real agent.
-
-## Run
-
-One command starts FastAPI at `http://127.0.0.1:8000` and Vite at
-`http://127.0.0.1:5173`:
-
-```bash
-.venv/bin/python scripts/dev.py
-```
-
-Then open **http://127.0.0.1:5173**.
-
-Useful flags:
-
-```bash
-# Run against the built-in deterministic adapter instead of the real Claude CLI
-.venv/bin/python scripts/dev.py --test-agent
-
-# Use different ports (the Vite dev server proxies /api to the backend port)
-.venv/bin/python scripts/dev.py --backend-port 8055 --frontend-port 5199
-```
-
-## As an MCP server
-
-The editor can also run as an [MCP](https://modelcontextprotocol.io) server, so
-an MCP client — Claude Code, for instance — edits and runs the notebook through
-tools while you watch the same session in a browser tab and step in when you
-want to. The tab is not a read-only view: the notebook, the kernel and the
+The tab is not a read-only view: the notebook, the kernel and the
 scope are one server-side session, so a cell the client edits updates in front
 of you, and a cell you edit is a cell the client is then refused for editing
 against a stale read.
 
-### Install it
+### What you need
 
-The published wheel carries the browser tab with it, so there is nothing to
-clone and no Node toolchain to install. With [uv](https://docs.astral.sh/uv/):
+- **An MCP client.** Claude Code, or anything else that speaks stdio MCP.
+- **Python 3.11+**, in the environment your notebooks run in — see below.
+- Nothing else. The published wheel carries the browser tab with it, so there
+  is no repository to clone and no Node toolchain to install.
+
+### Your cells run in the environment you install into
+
+This is the one thing to get right, and it decides which of the two commands
+below you want.
+
+The editor runs cells against the Python environment it is *installed into*.
+That environment's own kernel takes precedence over any you have registered
+elsewhere, so a notebook that opens with `import pandas` fails with
+`ModuleNotFoundError` unless pandas is installed alongside the editor. There is
+no flag to point the kernel somewhere else.
+
+So **install it into the environment your notebooks already run in**:
+
+```bash
+# from your project, with its environment active
+pip install notebook-editor-mcp
+
+claude mcp add agent-notebook -- \
+  /absolute/path/to/your/.venv/bin/notebook-editor-mcp \
+  --workspace-root /absolute/path/to/your/project
+```
+
+Your notebooks then see exactly the packages they saw before.
+
+### Trying it out
+
+If you only want to look at it, and your notebooks import nothing beyond the
+standard library, [uv](https://docs.astral.sh/uv/) will fetch it into a
+throwaway environment for you:
 
 ```bash
 claude mcp add agent-notebook -- \
@@ -177,29 +124,11 @@ claude mcp add agent-notebook -- \
   --workspace-root /absolute/path/to/your/project
 ```
 
-`uvx` fetches the package into a throwaway environment on first run, so the
-version stays pinned to the release rather than to whatever a shared
-environment drifted to. If you would rather install it once and keep it:
+That environment holds the editor's own dependencies and nothing of yours,
+which is fine for a demo notebook and wrong for a real one. `pipx install
+notebook-editor-mcp` has the same property for the same reason.
 
-```bash
-pipx install notebook-editor-mcp
-claude mcp add agent-notebook -- \
-  notebook-editor-mcp --workspace-root /absolute/path/to/your/project
-```
-
-**From a checkout instead** — for working on the editor itself. Install the
-extra and build the frontend, **both**, in this order: the tab is served from
-the built frontend, and skipping `npm run build` leaves the editor unable to
-start, with the first tool call failing with exactly that message.
-
-```bash
-.venv/bin/pip install -e '.[mcp]'
-npm run build
-
-claude mcp add agent-notebook -- \
-  /absolute/path/to/.venv/bin/notebook-editor-mcp \
-  --workspace-root /absolute/path/to/your/project
-```
+### The flags
 
 Use an absolute path for `--workspace-root`, and for the executable if you name
 one — the client decides what directory the server starts in, so a relative one
@@ -278,6 +207,104 @@ npx @modelcontextprotocol/inspector \
 
 Read [Security Limits](#security-limits) before pointing a client at a notebook
 you would not run yourself.
+
+## Run it locally instead
+
+For working on the editor itself, or to use the browser UI on its own with
+agent turns driven from the tab rather than from an MCP client.
+
+### Prerequisites
+
+- **Python** 3.11+
+- **Node.js** 20.19+ or 22.12+, with **npm**
+- A local Python kernel (installed with the backend below via `ipykernel`)
+- **Claude CLI** — required only for agent turns (see [Claude CLI](#claude-cli))
+- **macOS or Linux.** The launcher and Playwright cleanup use POSIX process
+  groups/signals. Windows is out of scope for v1.
+
+### Setup
+
+From the repository root:
+
+```bash
+python -m venv .venv
+.venv/bin/pip install -e '.[test]'
+npm install
+```
+
+Playwright is only needed if you plan to run the end-to-end suite:
+
+```bash
+npx playwright install chromium
+```
+
+### Claude CLI
+
+Agent turns shell out to the `claude` command-line tool. You can open, edit,
+run, and save notebooks without it — the CLI is only invoked when you send an
+agent turn.
+
+**1. Install it** using either official method:
+
+```bash
+# Native installer (installs to ~/.local/bin)
+curl -fsSL https://claude.ai/install.sh | bash
+
+# …or via npm
+npm install -g @anthropic-ai/claude-code
+```
+
+Make sure `claude` is on your `PATH` (the app runs the `claude` executable
+directly):
+
+```bash
+which claude
+```
+
+**2. Authenticate it once.** Run `claude` on its own and complete the login
+flow (an Anthropic account / Claude subscription, or an API key). The app
+launches the CLI non-interactively per turn and does not handle login for you.
+
+**3. Match the supported version.** The adapter verifies the CLI before every
+turn and **requires `claude >= 2.1.203` and `< 2.2.0`**. It relies on
+`--safe-mode`, `--disable-slash-commands`, `--strict-mcp-config`, `--tools`,
+and `--permission-mode`. Check your version:
+
+```bash
+claude --version
+```
+
+If it falls outside that range, agent turns fail fast with **"Unsupported
+Claude CLI version"**; if `claude` is missing from `PATH`, you get **"Claude
+CLI is unavailable."** In both cases opening/editing/running notebooks still
+works — only agent turns are blocked.
+
+> **Just want to try the UI without Claude?** Start the app with
+> `--test-agent` (see [Run](#run)) to use a built-in deterministic adapter.
+> It produces canned Blocking-mode edits for demoing the flow and never calls
+> the real CLI — it does not perform Trusted structural edits, and it is not a
+> substitute for a real agent.
+
+### Run
+
+One command starts FastAPI at `http://127.0.0.1:8000` and Vite at
+`http://127.0.0.1:5173`:
+
+```bash
+.venv/bin/python scripts/dev.py
+```
+
+Then open **http://127.0.0.1:5173**.
+
+Useful flags:
+
+```bash
+# Run against the built-in deterministic adapter instead of the real Claude CLI
+.venv/bin/python scripts/dev.py --test-agent
+
+# Use different ports (the Vite dev server proxies /api to the backend port)
+.venv/bin/python scripts/dev.py --backend-port 8055 --frontend-port 5199
+```
 
 ## Using it
 
