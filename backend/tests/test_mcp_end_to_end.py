@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import time
 
 import httpx
@@ -379,3 +380,32 @@ def test_a_delete_moves_the_revision_so_a_stale_edit_is_refused(editor, workspac
 
     after = call(server, "delete_cell", cell_id="cell1")
     assert after["revision"] > opened["revision"]
+
+
+def test_the_tools_work_with_no_claude_cli_on_path(workspace, built_frontend, monkeypatch):
+    """The MCP route is client-agnostic, and the README now says so.
+
+    Agent turns shell out to the `claude` CLI, but they are not exposed as
+    tools — the client is already the agent. So a notebook opened and run
+    through these tools must not depend on that CLI existing, or the server
+    only works for one harness while claiming to work for any.
+
+    The failure this guards is a construction-time probe: the bundled app
+    builds a ClaudeAgentAdapter at startup, and making that verify the CLI
+    would break every non-Claude client at the first tool call.
+    """
+    root, _ = workspace
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    assert shutil.which("claude") is None, "PATH still resolves claude — test proves nothing"
+
+    server, tools = build_server(workspace_root=str(root), open_browser=False)
+    try:
+        opened = call(server, "open", path=str(root / "work.ipynb"))
+        assert opened["cellCount"] == 2
+        assert call(server, "read")["cells"]
+        # cell0 is the safe one, so this clears the approval gate and proves a
+        # kernel started and executed — not merely that the server booted.
+        ran = call(server, "run_cell", cell_id="cell0")
+        assert ran["state"] == "completed"
+    finally:
+        tools.close()
