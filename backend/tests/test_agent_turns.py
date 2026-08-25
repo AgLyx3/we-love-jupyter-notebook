@@ -17,7 +17,10 @@ from backend.app.api.agent_turn_routes import (
     MAX_TURN_SUMMARY_BYTES, StartTurnRequest, serialize_turn, serialize_turn_summary,
 )
 from backend.app.agent_turns.operations import build_add_operation, with_state
-from backend.app.agent_workspace.workspace_builder import _render_entry
+from backend.app.agent_workspace.models import MemoryEntry, MemoryOperation
+from backend.app.agent_workspace.workspace_builder import (
+    MEMORY_BUDGET_BYTES, _render_entry, _render_memory,
+)
 from backend.app.boundary_validation.validator import CandidateCellSourceChange
 from backend.app.agent_workspace.adapters import FakeAgentAdapter, FakeAttempt
 from backend.app.agent_workspace.models import (
@@ -792,6 +795,284 @@ def test_hand_edited_cell_is_flagged_stale_without_losing_its_outcome(notebook_p
     # typing in the tab, an MCP client, and the plot-tuning panel. See the
     # route-level test below.
     assert "by hand" not in memory
+
+
+def test_whole_turn_undo_overrides_an_already_accepted_hunk(notebook_payload):
+    # Undo restores the pre-turn checkpoint, so an accepted hunk is gone with
+    # the rest. It keeps its `accepted` state though — undo settles only the
+    # operations still pending — so reading the ledger reported it KEPT, "the
+    # result is in notebook.ipynb", for content the undo had just removed. That
+    # is the one direction that matters: it invites the agent to build on code
+    # that is not there.
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(
+        notebook_payload(sources={"editable": "first = 1\nsecond = 2\nthird = 3\n"})
+    )
+    scopes = TurnScopeService(documents)
+    recorder = _RecordingFakeAdapter([
+        FakeAttempt(edits={
+            "editable/cell_editable.py": "first = 100\nsecond = 2\nthird = 300\n",
+        }),
+        FakeAttempt(),
+    ])
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=recorder, timeout=2,
+    )
+    scopes.add("editable", editable=True)
+    first = turns.start(
+        prompt="scale the numbers", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    applied = turns.get(first.turn_id)
+    assert len(applied.operations) == 2, "expected one hunk per changed line"
+    turns.accept_operations(
+        first.turn_id, [applied.operations[0].operation_id],
+        session_id=applied.session_id,
+    )
+    turns.undo(
+        first.turn_id, session_id=applied.session_id,
+        expected_revision=applied.applied_revision,
+    )
+    assert _source(documents.get_snapshot()) == "first = 1\nsecond = 2\nthird = 3\n"
+
+    memory = _memory_of_next_turn(documents, scopes, turns, recorder)
+    assert "STATUS: KEPT" not in memory
+    assert "STATUS: UNDONE by the user" in memory
+    # The whole turn is one outcome now, not two half-reviewed ones.
+    assert "reviewed separately" not in memory
+    assert "+ first = 100" in memory
+    # And the cell is not called stale: nothing touched it after the undo. That
+    # claim came from composing the ledger, whose accepted hunk no longer
+    # matched the restored document.
+    assert "STALE:" not in memory
+
+
+def test_retyped_cell_can_still_be_flagged_stale(notebook_payload):
+    # A retyped cell in a Trusted turn has a `changes` entry and no ledger
+    # operation. Staleness iterated the ledger only, so the feed went on
+    # asserting its account of exactly the cells it could never check.
+    structure = json.dumps({"cells": [
+        {"cellId": "intro", "cellType": "markdown", "source": "cells/cell_intro.md"},
+        {"cellId": "editable", "cellType": "markdown", "source": "cells/cell_editable.py"},
+    ]})
+    documents, _scopes, turns, snapshot = _trusted_services(
+        notebook_payload,
+        [FakeAttempt(edits={
+            "structure.json": structure,
+            "cells/cell_editable.py": "## now prose\n",
+        }, final_output="retyped")],
+    )
+    turn = turns.start(
+        prompt="turn that into prose", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, write_scope="trusted", background=False,
+    )
+    assert turn.state == "completed", turn.error
+    assert [c.cell_id for c in turn.changes] == ["editable"]
+    assert not any(op.cell_id == "editable" for op in turn.operations), (
+        "a retype is whole-turn undo only, so it carries no ledger operation"
+    )
+    # Untouched, it is not stale: the expected content of a change with no
+    # ledger coverage is what the turn wrote, not what preceded it.
+    assert turns.stale_cell_ids(turns.get(turn.turn_id)) == frozenset()
+
+    current = documents.get_snapshot()
+    documents.update_cell_source(
+        cell_id="editable", source="## mine now\n",
+        expected_session_id=current.session_id,
+        expected_revision=current.revision, owner="user",
+    )
+    assert turns.stale_cell_ids(turns.get(turn.turn_id)) == frozenset({"editable"})
+
+
+def test_delete_only_trusted_turn_is_not_reported_as_having_made_no_changes(
+    notebook_payload,
+):
+    # A deleted cell has no "after", so it is absent from `changes`, and delete
+    # is not a ledger kind, so it is absent from `operations` too. Iterating
+    # those two alone lost it, and the empty-operations branch then said "It
+    # made no changes" about a turn that removed a cell.
+    structure = json.dumps({"cells": [
+        {"cellId": "editable", "cellType": "code", "source": "cells/cell_editable.py"},
+    ]})
+    documents, _scopes, turns, snapshot = _trusted_services(
+        notebook_payload,
+        [FakeAttempt(edits={"structure.json": structure}, final_output="pruned")],
+    )
+    turn = turns.start(
+        prompt="drop the intro", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, write_scope="trusted", background=False,
+    )
+    assert turn.state == "completed", turn.error
+    assert [c["id"] for c in documents.get_snapshot().notebook["cells"]] == ["editable"]
+
+    entry = AgentTurnService._memory_entry(turns.get(turn.turn_id))
+    rendered = "\n".join(_render_entry(entry, 1, {}))
+    assert "It made no changes" not in rendered
+    # Named by id, never by position: the cell is gone and has no position.
+    assert "It deleted a cell (id intro)." in rendered
+    # The content is not carried — the turn does not retain the frozen sources
+    # past the apply — so the feed says so rather than implying it is readable.
+    assert "Its content is not recorded here" in rendered
+
+
+def test_auto_settled_changes_are_reported_as_applied_not_kept(notebook_payload):
+    # The history-budget evictor settles unreviewed operations to `accepted` so
+    # they stop advertising controls that are already gone. By state alone that
+    # is indistinguishable from a person approving them, and the feed reported
+    # KEPT — inventing a consent nobody gave.
+    _documents, _scopes, turns, _snapshot = _trusted_services(notebook_payload, [])
+    turn = AgentTurn(
+        turn_id="t", session_id="s", base_revision=1, prompt="add a plotting cell",
+        write_scope="trusted", state="completed", final_output="Added a cell.",
+    )
+    turn.operations = (build_add_operation(
+        turn_id="t", cell_id="new1", source="import matplotlib\n",
+    ),)
+    turns._force_settle_locked(turn)
+    assert [op.state for op in turn.operations] == ["accepted"]
+
+    entry = AgentTurnService._memory_entry(turn)
+    rendered = "\n".join(_render_entry(entry, 1, {"new1": (3, {})}))
+    assert "STATUS: KEPT" not in rendered
+    assert "STATUS: APPLIED but not yet reviewed by the user" in rendered
+
+
+def test_memory_budget_bounds_even_a_single_oversized_turn():
+    # The newest turn is admitted whatever its size, so the budget bounded
+    # nothing: one turn carries an entry per edited cell, each with up to
+    # MEMORY_DIFF_LINES rows of source whose line length has no bound. Twenty
+    # undone cells of long lines rendered half a megabyte against a 16 KiB
+    # budget, and all of it lands in the next turn's INSTRUCTIONS.md.
+    huge = "\n".join(f"line {index} " + "x" * 400 for index in range(60))
+    entry = MemoryEntry(
+        prompt="rewrite everything", mode="edit",
+        operations=tuple(
+            MemoryOperation(
+                cell_id=f"c{index}", status="UNDONE",
+                previous_source=huge, next_source="",
+            )
+            for index in range(20)
+        ),
+    )
+    rendered = "\n".join(_render_memory((entry,), {}))
+    assert len(rendered.encode("utf-8")) <= MEMORY_BUDGET_BYTES
+    assert "rest of this turn omitted" in rendered
+    # Truncated, not dropped: the turn that just happened still appears.
+    assert 'You asked: "rewrite everything"' in rendered
+
+
+def test_a_trailing_newline_hunk_still_renders_its_diff(notebook_payload):
+    # The renderer split with str.splitlines() while the ledger splits with
+    # split("\n"). splitlines() drops the empty final element, so a hunk that
+    # only adds a trailing newline produced no diff rows at all — and on an
+    # UNDONE operation the diff is the only surviving copy of the content.
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(
+        notebook_payload(sources={"editable": "value = 1"})
+    )
+    scopes = TurnScopeService(documents)
+    recorder = _RecordingFakeAdapter([
+        FakeAttempt(edits={"editable/cell_editable.py": "value = 1\n"}),
+        FakeAttempt(),
+    ])
+    turns = AgentTurnService(
+        documents=documents, scopes=scopes, adapter=recorder, timeout=2,
+    )
+    scopes.add("editable", editable=True)
+    first = turns.start(
+        prompt="add the missing newline", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, background=False,
+    )
+    applied = turns.get(first.turn_id)
+    assert applied.operations, "the ledger sees a hunk here"
+    turns.reject_operations(
+        first.turn_id, [op.operation_id for op in applied.operations],
+        session_id=applied.session_id,
+        expected_revision=applied.applied_revision,
+    )
+
+    memory = _memory_of_next_turn(documents, scopes, turns, recorder)
+    assert "STATUS: UNDONE by the user" in memory
+    # The change is described as a change, and carries a row for it.
+    assert "added 0 lines" not in memory
+    assert "added 1 line" in memory
+
+
+def test_a_long_lead_with_an_attachment_is_still_capped():
+    # The cap lived only in the no-delimiter branch, so a long typed prompt with
+    # a selection attached escaped it. Nothing bounds a prompt at the API, and
+    # an oversized lead crowds its own turn out of the budgeted feed.
+    typed = "please refactor this " * 400
+    prompt = typed + "\nReferenced selections:\nCell 1 (code):\nvalue = 1\n"
+    entry = MemoryEntry(prompt=prompt, mode="edit")
+    rendered = "\n".join(_render_entry(entry, 1, {}))
+    assert len(rendered) < 2000, "a 8KB lead reached the feed intact"
+    assert "(truncated)" in rendered
+    # The attachment is still counted; the cap does not eat the payload note.
+    assert "referenced selection" in rendered
+
+
+def test_a_retyped_cell_says_so_even_when_its_source_also_changed(notebook_payload):
+    # A retype whose source changed is carried by `changes` as an ordinary edit,
+    # which renders "It edited cell N: changed 1 line" and never says the cell
+    # stopped being code. Suppressing the retype entry as a duplicate lost the
+    # only statement of the type change.
+    structure = json.dumps({"cells": [
+        {"cellId": "intro", "cellType": "markdown", "source": "cells/cell_intro.md"},
+        {"cellId": "editable", "cellType": "markdown", "source": "cells/cell_editable.py"},
+    ]})
+    documents, _scopes, turns, snapshot = _trusted_services(
+        notebook_payload,
+        [FakeAttempt(edits={
+            "structure.json": structure,
+            "cells/cell_editable.py": "## now prose\n",
+        }, final_output="retyped")],
+    )
+    turn = turns.start(
+        prompt="turn that into prose", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, write_scope="trusted", background=False,
+    )
+    assert turn.state == "completed", turn.error
+
+    entry = AgentTurnService._memory_entry(turns.get(turn.turn_id))
+    rendered = "\n".join(_render_entry(entry, 1, {"editable": (2, {})}))
+    assert "changed this cell's type" in rendered
+    # Both facts sit under one cell header, not as two unrelated edits.
+    assert rendered.count("cell 2 (id editable)") == 1
+
+
+def test_a_cell_both_edited_and_moved_is_not_called_reviewed_separately(
+    notebook_payload,
+):
+    # "the parts were reviewed separately" is only true of parts carrying a
+    # review outcome. A move carries none, so the header contradicted the STATUS
+    # lines underneath it.
+    structure = json.dumps({"cells": [
+        {"cellId": "editable", "cellType": "code", "source": "cells/cell_editable.py"},
+        {"cellId": "intro", "cellType": "markdown", "source": "cells/cell_intro.md"},
+    ]})
+    documents, _scopes, turns, snapshot = _trusted_services(
+        notebook_payload,
+        [FakeAttempt(edits={
+            "structure.json": structure,
+            "cells/cell_intro.md": "# Retitled\n",
+        }, final_output="moved and edited")],
+    )
+    turn = turns.start(
+        prompt="put the code first and retitle", session_id=snapshot.session_id,
+        expected_revision=snapshot.revision, write_scope="trusted", background=False,
+    )
+    assert turn.state == "completed", turn.error
+    stored = turns.get(turn.turn_id)
+    # The swap leaves `intro` as the displaced cell, and its source changed too,
+    # so it carries a hunk *and* a move — the mixed group this guards.
+    assert any(op.op == "move" and op.cell_id == "intro" for op in stored.structural_ops)
+    assert any(change.cell_id == "intro" for change in stored.changes)
+
+    entry = AgentTurnService._memory_entry(stored)
+    rendered = "\n".join(_render_entry(entry, 1, {"intro": (2, {})}))
+    assert "reviewed separately" not in rendered
+    assert "moved this cell" in rendered
 
 
 def _await_turn(api, turn_id, state="completed"):

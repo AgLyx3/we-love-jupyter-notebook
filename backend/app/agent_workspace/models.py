@@ -141,10 +141,13 @@ class MemoryOperation:
     # be kept *and* since overwritten, and the agent needs both facts. Without
     # it the feed asserts an account of the cell the document no longer matches.
     stale: bool = False
-    # "edit" or "add". A whole cell a Trusted turn created has no before/after
-    # source to diff — the ledger keeps a hash for it, not the text — so it is
-    # described rather than diffed. It still has to appear: a turn that only
-    # added cells would otherwise render as "It made no changes".
+    # "edit", "add", "delete", "move" or "retype". Only "edit" carries a
+    # before/after pair to diff. The other four are structural: the ledger keeps
+    # a hash for an add and nothing at all for the rest, so they are described
+    # rather than diffed. They still have to appear — a Trusted turn that only
+    # added, deleted, or moved cells would otherwise render as "It made no
+    # changes", which is a false statement about a destructive edit and invites
+    # the agent to make it again.
     kind: str = "edit"
 
 

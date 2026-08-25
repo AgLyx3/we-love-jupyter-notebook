@@ -141,6 +141,12 @@ class AgentTurn:
     # cells the ledger has no kind for — retyped, deleted, and moved cells in a
     # Trusted turn — where it is the only record that the change was reversed.
     undone_at: datetime | None = None
+    # Operations settled by the history-budget evictor rather than by a person.
+    # `_force_settle_locked` marks them `accepted`, which by state alone is
+    # indistinguishable from a real approval — so without this the feed reports
+    # changes nobody ever looked at as KEPT, inventing a consent that was never
+    # given. Recorded here so it can say APPLIED instead.
+    auto_settled_operation_ids: frozenset[str] = frozenset()
     accepted_cancel_revision: int | None = None
     accepted_cancel_lineage_revision: int | None = None
     cancel_event: Event = field(default_factory=Event, repr=False)
@@ -328,7 +334,7 @@ class AgentTurnService:
                     stale=change.cell_id in stale,
                 )
                 for change in turn.changes
-            )
+            ) + cls._structural_memory_operations(turn, stale, "")
         else:
             operations = cls._memory_operations(turn, stale)
         return MemoryEntry(
@@ -337,8 +343,44 @@ class AgentTurnService:
         )
 
     @staticmethod
+    def _structural_memory_operations(
+        turn: AgentTurn, stale: frozenset[str], status: str,
+    ) -> tuple[MemoryOperation, ...]:
+        """Deletes, moves and retypes — the ops the ledger has no kind for.
+
+        These reach the document but produce no ledger operation (undoing one
+        needs anchor math over an ordering other ops also changed, design doc
+        §12.4) and, for a delete or a pure move, no ``changes`` entry either: a
+        removed cell has no "after" and a moved one has no before/after *source*
+        pair. Iterating either list alone loses them entirely, and the
+        empty-operations branch then renders "It made no changes" over a turn
+        that deleted a cell — a false statement about the most destructive edit
+        the agent can make, and one it may act on by deleting the cell again.
+
+        Reported as a fact without a body, like a rejected add. The turn does not
+        retain the frozen sources past the apply, and copying a deleted cell's
+        text onto the turn would grow the history each turn carries without
+        ``_history_size`` seeing it.
+        """
+        # A retype is stated even when the cell also has a `changes` entry.
+        # Suppressing it as a duplicate was the first attempt and lost the fact
+        # outright: the change renders as "It edited cell 2: changed 1 line",
+        # which never says the cell stopped being code. The renderer groups both
+        # under one cell header, so it reads as one edit with two parts.
+        return tuple(
+            MemoryOperation(
+                cell_id=operation.cell_id, kind=operation.op, status=status,
+                previous_source="", next_source="",
+                stale=operation.cell_id in stale,
+            )
+            for operation in turn.structural_ops
+            if operation.op in ("delete", "move", "retype")
+            and operation.cell_id is not None
+        )
+
+    @classmethod
     def _memory_operations(
-        turn: AgentTurn, stale: frozenset[str] = frozenset(),
+        cls, turn: AgentTurn, stale: frozenset[str] = frozenset(),
     ) -> tuple[MemoryOperation, ...]:
         """Split each cell change by what the ledger says actually survived.
 
@@ -349,6 +391,39 @@ class AgentTurnService:
         agent its rejected code is live and invites it to build on code that is
         not there.
         """
+        # A whole-turn undo restores the pre-turn checkpoint, so nothing the turn
+        # wrote is in the notebook — including hunks the user had already
+        # accepted one by one. Per-operation state cannot be read here: undo
+        # settles only the operations still *pending*, so an accepted hunk keeps
+        # a state that renders KEPT ("the result is in notebook.ipynb") for
+        # content the undo removed. The document is the authority, and it says
+        # the whole turn is gone.
+        if turn.undone_at:
+            return tuple(
+                MemoryOperation(
+                    cell_id=change.cell_id, status="UNDONE",
+                    previous_source=change.previous_source,
+                    next_source=change.next_source,
+                    stale=change.cell_id in stale,
+                )
+                for change in turn.changes
+            ) + tuple(
+                MemoryOperation(
+                    cell_id=operation.cell_id, kind="add", status="UNDONE",
+                    previous_source="", next_source="",
+                    stale=operation.cell_id in stale,
+                )
+                for operation in turn.operations
+                if operation.kind == KIND_STRUCTURAL_ADD
+            ) + cls._structural_memory_operations(turn, stale, "UNDONE")
+
+        def reviewed(operation: TurnOperation) -> bool:
+            """Accepted by a person — not by the history-budget evictor."""
+            return (
+                operation.state == ACCEPTED
+                and operation.operation_id not in turn.auto_settled_operation_ids
+            )
+
         by_cell: dict[str, list[TurnOperation]] = {}
         for operation in turn.operations:
             if operation.hunk is not None:
@@ -357,12 +432,13 @@ class AgentTurnService:
         for change in turn.changes:
             operations = by_cell.get(change.cell_id, [])
             if not operations:
-                # No ledger coverage: a retyped cell in a Trusted turn, or a
-                # delete/move that the ledger has no kind for. The whole-turn
-                # marker is all there is, which is exactly what it is for.
+                # No ledger coverage: a retyped cell in a Trusted turn. There
+                # is no per-operation outcome to report, and the whole-turn undo
+                # case already returned above, so the change is simply in the
+                # notebook and unreviewed.
                 entries.append(MemoryOperation(
                     cell_id=change.cell_id,
-                    status="UNDONE" if turn.undone_at else "APPLIED",
+                    status="APPLIED",
                     previous_source=change.previous_source,
                     next_source=change.next_source,
                     stale=change.cell_id in stale,
@@ -378,8 +454,12 @@ class AgentTurnService:
             if surviving:
                 entries.append(MemoryOperation(
                     cell_id=change.cell_id,
+                    # KEPT means a person looked and approved. An operation the
+                    # evictor auto-settled is `accepted` without anyone having
+                    # seen it, so it reports as APPLIED — in the notebook, not
+                    # endorsed.
                     status="KEPT" if all(
-                        item.state == ACCEPTED for item in surviving
+                        reviewed(item) for item in surviving
                     ) else "APPLIED",
                     # Diffed against what the cell actually holds now, so the
                     # description covers the surviving hunks only. The body is
@@ -417,7 +497,7 @@ class AgentTurnService:
                 cell_id=operation.cell_id, kind="add",
                 status=(
                     "UNDONE" if operation.state == REJECTED
-                    else "KEPT" if operation.state == ACCEPTED else "APPLIED"
+                    else "KEPT" if reviewed(operation) else "APPLIED"
                 ),
                 # The ledger keeps a hash of the added source, not the source.
                 # A kept add is readable in the notebook; a rejected one is gone
@@ -425,6 +505,9 @@ class AgentTurnService:
                 previous_source="", next_source="",
                 stale=operation.cell_id in stale,
             ))
+        entries.extend(
+            cls._structural_memory_operations(turn, stale, "APPLIED")
+        )
         return tuple(entries)
 
     def _thread_memory_or_empty(
@@ -969,18 +1052,44 @@ class AgentTurnService:
         hold: taking one deep-copies the notebook, and the session-status
         endpoint would otherwise do that once per turn in history.
         """
-        if not turn.operations:
+        # Both lists, not just the ledger. The feed emits an entry for every
+        # cell in `changes`, and a retyped cell in a Trusted turn has a change
+        # and no operation — so keying staleness off `operations` alone left
+        # exactly those cells unable to be flagged, no matter how far the
+        # document had moved on from what the feed was asserting about them.
+        covered = {item.cell_id for item in turn.operations}
+        covered |= {change.cell_id for change in turn.changes}
+        if not covered:
             return frozenset()
         try:
             snapshot = snapshot if snapshot is not None else self.documents.get_snapshot()
         except NotebookDomainError:
             return frozenset()
         if snapshot.session_id != turn.session_id:
-            return frozenset(item.cell_id for item in turn.operations)
+            return frozenset(covered)
         cells = {cell["id"]: cell for cell in snapshot.notebook["cells"]}
         sources = {change.cell_id: change for change in turn.changes}
         stale: set[str] = set()
-        for cell_id in {item.cell_id for item in turn.operations}:
+        if turn.undone_at:
+            # Undo restored the pre-turn checkpoint, so the expected content of
+            # every cell the turn edited is its *pre-turn* source, and a cell the
+            # turn added is expected to be gone. Composing from the ledger here
+            # would read the per-operation states undo left behind: one hunk the
+            # user had accepted before undoing makes the composed expectation
+            # differ from the restored document, and the cell reports stale the
+            # instant it is undone with nothing having touched it since.
+            for cell_id in covered:
+                cell = cells.get(cell_id)
+                change = sources.get(cell_id)
+                if change is None:
+                    if cell is not None:
+                        stale.add(cell_id)
+                elif cell is None or source_hash(
+                    self._cell_source(cell)
+                ) != source_hash(change.previous_source):
+                    stale.add(cell_id)
+            return frozenset(stale)
+        for cell_id in covered:
             for_cell = [
                 item for item in turn.operations if item.cell_id == cell_id
             ]
@@ -1002,6 +1111,17 @@ class AgentTurnService:
             change = sources.get(cell_id)
             if change is None or cell is None:
                 stale.add(cell_id)
+                continue
+            if not for_cell:
+                # A change with no ledger coverage: the turn wrote `next_source`
+                # and nothing can have been rejected since, so that *is* the
+                # expected content. `compose` must not be asked — with no
+                # operations it rebuilds `previous_source` and would call every
+                # such cell stale the instant the turn landed.
+                if source_hash(self._cell_source(cell)) != source_hash(
+                    change.next_source
+                ):
+                    stale.add(cell_id)
                 continue
             if is_stale(
                 current_source=self._cell_source(cell),
@@ -1501,6 +1621,10 @@ class AgentTurnService:
         return operations
 
     def _force_settle_locked(self, turn: AgentTurn) -> None:
+        turn.auto_settled_operation_ids |= frozenset(
+            operation.operation_id for operation in turn.operations
+            if operation.state == PENDING
+        )
         turn.operations = self._settle_all(turn.operations, ACCEPTED)
         logger.info(
             "Auto-kept unreviewed agent changes for turn %s: review backlog "

@@ -11,6 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from ..agent_turns.operations import split_lines
 from ..notebook_document.models import NotebookSnapshot
 from ..turn_scope.models import FrozenTurnScope
 from .models import (
@@ -50,18 +51,34 @@ def _count(quantity: int, noun: str) -> str:
     return f"{quantity} {noun}" if quantity == 1 else f"{quantity} {noun}s"
 
 
+def _capped(text: str) -> tuple[str, str]:
+    """Bound a lead to MEMORY_PROMPT_CHARS, with a note when it was cut.
+
+    Applied to every branch, not just the no-delimiter one. Nothing limits a
+    prompt's length at the API, and a composed prompt splits into a lead of
+    whatever the user typed plus a payload — so a long typed instruction with a
+    selection attached escaped the cap entirely. An oversized lead now costs the
+    turn it belongs to: the feed budget truncates the newest block, and a lead
+    big enough leaves nothing of that turn but the omission notice.
+    """
+    text = text.strip()
+    if len(text) > MEMORY_PROMPT_CHARS:
+        return text[:MEMORY_PROMPT_CHARS].rstrip(), " (truncated)"
+    return text, ""
+
+
 def _prompt_lead(prompt: str) -> tuple[str, str]:
     """Split a composed prompt into the user's own words and a payload note."""
     head, delimiter, tail = prompt.partition(_ATTACHMENT_DELIMITER)
     if delimiter:
         attached = len(_ATTACHMENT_HEADING.findall(tail)) or 1
-        return head.strip(), f" (+{_count(attached, 'referenced selection')})"
+        lead, cut = _capped(head)
+        return lead, f"{cut} (+{_count(attached, 'referenced selection')})"
     head, delimiter, _ = prompt.partition(_INLINE_EDIT_DELIMITER)
     if delimiter:
-        return head.strip(), " (+1 selected region)"
-    if len(prompt) > MEMORY_PROMPT_CHARS:
-        return prompt[:MEMORY_PROMPT_CHARS].strip(), " (truncated)"
-    return prompt.strip(), ""
+        lead, cut = _capped(head)
+        return lead, f"{cut} (+1 selected region)"
+    return _capped(prompt)
 
 
 def _diff_body(operation: MemoryOperation) -> list[str]:
@@ -76,10 +93,18 @@ def _diff_body(operation: MemoryOperation) -> list[str]:
 
     "@@" stays a prefix test: a content line only ever reaches here with a
     leading "-", "+" or " ", so it cannot collide with a hunk header.
+
+    Split with ``split("\n")``, matching ``operations.split_lines``, so the rows
+    describe the same lines the ledger reviewed. ``str.splitlines`` disagrees
+    with it twice over: it drops the empty final element, so a hunk that only
+    adds or removes a trailing newline renders as no rows at all — silent
+    content loss on an UNDONE operation, which is the one place the diff is the
+    only surviving copy — and it also splits on \x0b, \x0c and \u2028, which
+    would emit rows matching no line of the cell.
     """
     rows = difflib.unified_diff(
-        operation.previous_source.splitlines(),
-        operation.next_source.splitlines(),
+        split_lines(operation.previous_source),
+        split_lines(operation.next_source),
         lineterm="", n=2,
     )
     return [line for line in list(rows)[2:] if not line.startswith("@@")]
@@ -109,6 +134,28 @@ def _diff_lines(body: list[str]) -> list[str]:
         dropped = len(body) - MEMORY_DIFF_LINES
         lines.append(f"    ... ({_count(dropped, 'more diff line')} omitted)")
     return lines
+
+
+# kind -> (phrase under a shared cell header, standalone phrase, status lead).
+# The standalone phrase takes {reference}; "delete" deliberately does not use it,
+# because the cell is gone and cannot be named by its position any more.
+_STRUCTURAL_PHRASES = {
+    "delete": (
+        "deleted this cell",
+        "deleted a cell (id {cell_id})",
+        "DELETED. Its content is not recorded here.",
+    ),
+    "move": (
+        "moved this cell",
+        "moved {reference} to a different position",
+        "MOVED.",
+    ),
+    "retype": (
+        "changed this cell's type",
+        "changed the type of {reference}",
+        "RETYPED.",
+    ),
+}
 
 
 def _cell_reference(cell_id: str, indexed: dict) -> str:
@@ -143,18 +190,48 @@ def _render_entry(entry: MemoryEntry, distance: int, indexed: dict) -> list[str]
         reference = _cell_reference(cell_id, indexed)
         split = len(operations) > 1
         if split:
-            lines.append(f"It edited {reference}, and the parts were reviewed separately:")
+            # "reviewed separately" is only true of parts that carry a review
+            # outcome. A move or a retype carries none, so a cell that was both
+            # edited and moved would get a header its own STATUS lines
+            # contradict.
+            reviewed_parts = all(
+                operation.kind not in _STRUCTURAL_PHRASES
+                for operation in operations
+            )
+            lines.append(
+                f"It edited {reference}, and the parts were reviewed separately:"
+                if reviewed_parts else f"It changed {reference}:"
+            )
         for operation in operations:
             is_add = operation.kind == "add"
-            body = [] if is_add else _diff_body(operation)
-            described = "added this whole cell" if is_add else _describe(operation, body)
+            # delete/move/retype carry no source pair — see MemoryOperation —
+            # so they are stated, never diffed. A deleted cell also cannot be
+            # named by position: it is gone, and _cell_reference would render
+            # "It deleted a since-deleted cell".
+            structural = _STRUCTURAL_PHRASES.get(operation.kind)
+            body = [] if is_add or structural else _diff_body(operation)
+            described = (
+                "added this whole cell" if is_add
+                else structural[0] if structural
+                else _describe(operation, body)
+            )
             lines.append(
                 f"  - {described}." if split
                 else f"It added {reference} as a new cell." if is_add
+                else f"It {structural[1].format(reference=reference, cell_id=cell_id)}."
+                if structural
                 else f"It edited {reference}: {described}."
             )
             prefix = "    " if split else indent
-            if is_add and operation.status == "UNDONE":
+            if structural:
+                lines.append(
+                    f"{prefix}STATUS: UNDONE by the user — this was reversed and "
+                    "the notebook no longer reflects it."
+                    if operation.status == "UNDONE" else
+                    f"{prefix}STATUS: {structural[2]} notebook.ipynb is the "
+                    "current structure; read it there."
+                )
+            elif is_add and operation.status == "UNDONE":
                 # The ledger stores a hash of the added source, not the source,
                 # so unlike an undone edit there is no diff to show. Say that
                 # outright rather than leaving the agent to assume the cell is
@@ -216,22 +293,58 @@ def _render_entry(entry: MemoryEntry, distance: int, indexed: dict) -> list[str]
     return lines
 
 
+def _truncate_block(block: list[str], budget: int) -> list[str]:
+    """Cut a single turn's block down to `budget` bytes, oldest lines last.
+
+    The newest turn is admitted whatever its size — a feed that drops the turn
+    that just happened is worse than one that abbreviates it — so without this
+    the budget bounds nothing. One turn can carry an entry per edited cell, each
+    with up to MEMORY_DIFF_LINES rows of source whose line length has no bound:
+    twenty undone cells of long lines render half a megabyte against a 16 KiB
+    budget, and all of it lands in the next turn's INSTRUCTIONS.md.
+    """
+    kept: list[str] = []
+    used = 0
+    for line in block:
+        size = len(line.encode("utf-8")) + 1
+        if used + size > budget:
+            kept.append("(rest of this turn omitted — too large for the feed)")
+            break
+        used += size
+        kept.append(line)
+    return kept
+
+
+_MEMORY_HEADING = (
+    "Conversation so far (this notebook session). These earlier turns are yours."
+)
+_OMITTED_NOTE = "(earlier turns omitted)"
+# What _render_memory spends outside the turn blocks: the heading, the note it
+# may add, and their newlines. Reserved unconditionally — over-reserving by the
+# note's length on a feed that does not need it is worth a budget that holds in
+# every case rather than most.
+_MEMORY_WRAPPER_BYTES = len(_MEMORY_HEADING) + len(_OMITTED_NOTE) + 2
+
+
 def _render_memory(memory: tuple[MemoryEntry, ...], indexed: dict) -> list[str]:
     """Newest-first accumulation so eviction only ever drops the oldest turns."""
     blocks: list[list[str]] = []
+    budget = MEMORY_BUDGET_BYTES - _MEMORY_WRAPPER_BYTES
     used = 0
     for distance, entry in enumerate(reversed(memory), start=1):
         block = _render_entry(entry, distance, indexed)
-        size = len("\n".join(block).encode("utf-8"))
-        if blocks and used + size > MEMORY_BUDGET_BYTES:
+        # +1 for the blank line this block is separated by.
+        size = len("\n".join(block).encode("utf-8")) + 1
+        if blocks and used + size > budget:
             break
+        if not blocks and size > budget:
+            block = _truncate_block(block, budget - 1)
+            size = len("\n".join(block).encode("utf-8")) + 1
         used += size
         blocks.append(block)
-    lines = [
-        "Conversation so far (this notebook session). These earlier turns are yours.",
-    ]
+    lines = [_MEMORY_HEADING]
     if len(blocks) < len(memory):
-        lines.append("(earlier turns omitted)")
+        lines.append(_OMITTED_NOTE)
     for block in reversed(blocks):
         lines.append("")
         lines.extend(block)
