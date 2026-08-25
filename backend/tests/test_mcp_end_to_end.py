@@ -409,3 +409,57 @@ def test_the_tools_work_with_no_claude_cli_on_path(workspace, built_frontend, mo
         assert ran["state"] == "completed"
     finally:
         tools.close()
+
+
+def test_any_first_tool_call_raises_the_tab_not_just_open(workspace, built_frontend, monkeypatch):
+    """The tab is the workspace, so it cannot depend on which tool ran first.
+
+    It used to be opened from inside `open` alone. A client whose first call
+    was `status` or `read` — a perfectly ordinary way to begin — got a running
+    editor and no window, and the approval gate a later run parks at would have
+    had nowhere to appear.
+    """
+    root, _ = workspace
+    opened: list[str] = []
+    monkeypatch.setattr("backend.app.mcp.server.webbrowser.open", opened.append)
+
+    server, tools = build_server(workspace_root=str(root), open_browser=True)
+    try:
+        # `status` before any `open` is refused by the editor, and the tab must
+        # still be there: that refusal is exactly the moment a person needs to
+        # see the window and pick a notebook.
+        with pytest.raises(Exception):
+            call(server, "status")
+        assert opened, "no tab for a session that began with `status`"
+        assert opened[0] == tools.editor.base_url
+
+        # Once per session, however many calls follow.
+        call(server, "open", path=str(root / "work.ipynb"))
+        call(server, "read")
+        assert len(opened) == 1, f"tab raised {len(opened)} times, expected once"
+    finally:
+        tools.close()
+
+
+def test_no_browser_still_lets_show_hand_over_the_tab(workspace, built_frontend, monkeypatch):
+    """--no-browser is for automation, not a way to lose the editor.
+
+    Nothing should pop up on its own, but asking for it by name still has to
+    work — that is the escape hatch on a headless host, where `show` returns
+    the URL for a person to open themselves.
+    """
+    root, _ = workspace
+    opened: list[str] = []
+    monkeypatch.setattr("backend.app.mcp.server.webbrowser.open", opened.append)
+
+    server, tools = build_server(workspace_root=str(root), open_browser=False)
+    try:
+        call(server, "open", path=str(root / "work.ipynb"))
+        call(server, "read")
+        assert opened == [], "a tab opened despite open_browser=False"
+
+        shown = call(server, "show")
+        assert shown["url"] == tools.editor.base_url
+        assert opened == [tools.editor.base_url], "`show` did not open the tab"
+    finally:
+        tools.close()

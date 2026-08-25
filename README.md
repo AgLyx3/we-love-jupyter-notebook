@@ -65,11 +65,15 @@ at launch, with the command to fix it, rather than at the first cell.
 
 ### Opening the tab
 
-Ask your client to open a notebook and the tab opens by itself, once per
-session; `show` re-opens it whenever you want it back. On a headless or remote
-host nothing pops up — `open` returns the URL as `editorUrl` for the client to
-hand you — and `--no-browser` turns the automatic tab off while leaving `show`
-working.
+The tab opens by itself on your client's first tool call, whichever it is, once
+per session; `show` brings it back whenever you want it. You never have to ask
+for it — a session that begins with `status` or `read` gets a window just the
+same, because the moment a run stops for approval there has to be somewhere for
+that to appear.
+
+On a headless or remote host nothing can pop up, so `open` returns the URL as
+`editorUrl` for the client to hand you and `show` returns it again. Automation
+that wants no window passes `--no-browser`, which leaves `show` working.
 
 Everything the editor does is in that tab: the agent chat, per-hunk diff review
 on the cell a change belongs to, the approval gate a risky run parks at, the
@@ -97,23 +101,21 @@ namespace already called notebook.
 `set_cell_source`, `insert_cell`, `delete_cell`,
 `run_cell`, `run_all`, `cancel_run`, `save`, `show`.
 
-Four things about them are deliberate:
+Four things the tab guarantees you, whatever the client does:
 
-- **Running a cell can stop and wait for you.** Execution asked for by a tool
-  is treated as agent-initiated, so a cell the risk classifier flags pauses at
-  *awaiting approval* and does not run until you approve it in the tab — the
-  same gate an agent turn's downstream cells get. That pause is the reason to
-  have a browser window at all.
-- **Edits are checked against what the client last read.** If you changed the
-  notebook in the tab in between, the edit is refused rather than applied, and
-  the client is told to re-read. Nothing retries over the top of your change.
-- **Images are described, not returned.** A plot comes back as its size and
-  type; the picture is in the tab. A modest plotting notebook is about 23K
-  tokens of base64 if forwarded whole, and unreadable to a model either way.
-- **An added cell is never run for you.** `insert_cell` marks the new
-  cell as agent-authored — the tab shows it with a badge reading "review before
-  running" — and leaves it inert. Running it is a separate call, and goes
-  through the approval gate like any other.
+- **You approve anything risky before it runs.** Execution a tool asks for is
+  agent-initiated, so a cell the risk classifier flags stops at *awaiting
+  approval* and waits for you — the same gate an agent turn's downstream cells
+  get.
+- **Your edits win.** Change a cell in the tab and a client writing against the
+  version it last read is refused and told to re-read. Nothing retries over the
+  top of your work.
+- **Plots stay where you can see them.** The client is handed a plot's size and
+  type; the picture renders in the tab. Forwarding it whole would be about 23K
+  tokens of base64 for a modest notebook, and unreadable to a model anyway.
+- **New cells arrive for review, not already run.** `insert_cell` marks its
+  cell agent-authored, the tab badges it "review before running", and leaves it
+  inert. Running it is a separate call through the same approval gate.
 
 Agent turns are **not** exposed as tools — the client is already the agent, and
 running the `claude` CLI underneath it would just nest a second one. The tab's

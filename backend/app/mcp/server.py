@@ -222,10 +222,11 @@ def _explain(status: int, body: dict[str, Any] | None, *, what: str) -> str:
 class NotebookTools:
     """The HTTP calls behind the tools, with the editor started on demand."""
 
-    def __init__(self, editor: EditorProcess) -> None:
+    def __init__(self, editor: EditorProcess, *, auto_open_browser: bool = True) -> None:
         self.editor = editor
         self.state = EditorSession()
         self._client = httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS)
+        self.auto_open_browser = auto_open_browser
         self._opened_browser = False
 
     def close(self) -> None:
@@ -237,6 +238,12 @@ class NotebookTools:
         what: str = "The request",
     ) -> Any:
         base = self.editor.ensure_running()
+        # Any tool call, not just `open`. The tab is where the work happens —
+        # the approval gate, the diff review, the plot the model cannot see —
+        # so a session that starts with `status` or `read` must not leave the
+        # person without one.
+        if self.auto_open_browser:
+            self._raise_tab(base)
         try:
             response = self._client.request(
                 method, f"{base}/api{path}", json=json_body,
@@ -253,15 +260,32 @@ class NotebookTools:
             return None
         return response.json()
 
+    def _raise_tab(self, url: str) -> None:
+        """Open the tab once, and never let a browser failure fail a tool."""
+        if self._opened_browser:
+            return
+        self._opened_browser = True
+        try:
+            webbrowser.open(url)
+        except Exception:  # noqa: BLE001 - a headless host is not a failure
+            pass
+
     def show_in_browser(self, *, force: bool = False) -> str:
-        """Open the editor tab, once per session unless asked again."""
+        """Open the editor tab, once per session unless asked again.
+
+        `force` is what the `show` tool passes, and it ignores
+        `auto_open_browser`: asking for the tab explicitly should hand it to
+        you even on a server started with --no-browser.
+        """
         url = self.editor.ensure_running()
-        if force or not self._opened_browser:
+        if force:
+            self._opened_browser = True
             try:
                 webbrowser.open(url)
-            except Exception:  # noqa: BLE001 - a headless host is not a failure
+            except Exception:  # noqa: BLE001
                 pass
-            self._opened_browser = True
+        else:
+            self._raise_tab(url)
         return url
 
 
@@ -287,7 +311,8 @@ def build_server(
 ) -> tuple[MCPServer, NotebookTools]:
     """Wire the tools onto a server. Returns both so a caller can shut down."""
     tools = NotebookTools(
-        EditorProcess(workspace_root=workspace_root, kernel_python=kernel_python)
+        EditorProcess(workspace_root=workspace_root, kernel_python=kernel_python),
+        auto_open_browser=open_browser,
     )
     server = MCPServer(
         name="agent-notebook",
@@ -331,8 +356,6 @@ def build_server(
         except ToolFailure as failure:
             raise ToolFailure(_with_suggestions(str(failure), tools)) from failure
         tools.state.observe(snapshot)
-        if open_browser:
-            tools.show_in_browser()
         shaped = shape_notebook(snapshot)
         shaped["editorUrl"] = tools.editor.base_url
         hint = budget_hint(shaped)
