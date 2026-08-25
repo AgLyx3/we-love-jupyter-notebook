@@ -30,6 +30,9 @@ class FakeKernel:
     startup_timeout = 1
     cell_timeout = 1
     recovery_timeout = 1
+    # Mirrors KernelSession: a replacement kernel is built from these, so a
+    # field missing here is an AttributeError on every restart path.
+    kernel_python = None
 
     def __init__(self):
         self.sources = []

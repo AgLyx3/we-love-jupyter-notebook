@@ -88,18 +88,19 @@ against a stale read.
 - Nothing else. The published wheel carries the browser tab with it, so there
   is no repository to clone and no Node toolchain to install.
 
-### Your cells run in the environment you install into
+### Which Python runs your cells
 
-This is the one thing to get right, and it decides which of the two commands
-below you want.
+This is the one thing to get right.
 
 The editor runs cells against the Python environment it is *installed into*.
-That environment's own kernel takes precedence over any you have registered
-elsewhere, so a notebook that opens with `import pandas` fails with
-`ModuleNotFoundError` unless pandas is installed alongside the editor. There is
-no flag to point the kernel somewhere else.
+That environment's own kernel wins the lookup — it sorts ahead of any you have
+registered — so installed apart from your notebook's dependencies, a notebook
+opening with `import pandas` fails with `ModuleNotFoundError`.
 
-So **install it into the environment your notebooks already run in**:
+There are two ways to end up in the right environment, and either is fine.
+
+**Install it beside your notebooks.** Nothing more to say afterwards: they see
+the packages they always saw.
 
 ```bash
 # from your project, with its environment active
@@ -110,23 +111,26 @@ claude mcp add agent-notebook -- \
   --workspace-root /absolute/path/to/your/project
 ```
 
-Your notebooks then see exactly the packages they saw before.
-
-### Trying it out
-
-If you only want to look at it, and your notebooks import nothing beyond the
-standard library, [uv](https://docs.astral.sh/uv/) will fetch it into a
-throwaway environment for you:
+**Or keep the editor separate and point it at them.** `--kernel-python` names
+the interpreter that runs the cells, independently of the one serving the
+editor. This is what makes `uvx` — which by design installs nothing of yours —
+work on a real notebook:
 
 ```bash
 claude mcp add agent-notebook -- \
   uvx --from notebook-editor-mcp notebook-editor-mcp \
-  --workspace-root /absolute/path/to/your/project
+  --workspace-root /absolute/path/to/your/project \
+  --kernel-python /absolute/path/to/your/.venv/bin/python
 ```
 
-That environment holds the editor's own dependencies and nothing of yours,
-which is fine for a demo notebook and wrong for a real one. `pipx install
-notebook-editor-mcp` has the same property for the same reason.
+Give it the `python` inside the environment, not a resolved path to the base
+interpreter — a virtualenv's `bin/python` is a symlink, and the thing it points
+at has none of the virtualenv's packages. That environment needs `ipykernel`,
+which is checked at launch: a wrong path or a missing `ipykernel` fails
+immediately, with the command to fix it, rather than at the first cell you run.
+
+Without the flag, `uvx` and `pipx` are still the quickest way to *look* at the
+tool, on a notebook that imports nothing beyond the standard library.
 
 ### The flags
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from queue import Empty
 from threading import RLock
 from typing import Any
@@ -12,6 +13,15 @@ from .models import (
     KernelCellTimeout, KernelExecutionCancelled, KernelOutputLimitExceeded,
     KernelRestartRequired,
 )
+
+
+# Which interpreter runs the cells. Unset, jupyter_client resolves the
+# `python3` kernelspec, and the environment the editor is installed into wins
+# that lookup — its own `share/jupyter/kernels` sorts ahead of the user
+# directory. That is the right answer when the editor was installed beside the
+# notebooks' own dependencies and the wrong one when it was installed apart
+# from them, which is what `uvx` and `pipx` do.
+KERNEL_PYTHON_ENV_VAR = "NOTEBOOK_KERNEL_PYTHON"
 
 
 @dataclass(frozen=True)
@@ -28,7 +38,12 @@ class KernelSession:
         self, *, startup_timeout: float = 30, cell_timeout: float = 300,
         recovery_timeout: float = 5, max_output_items: int = 1000,
         max_output_bytes: int = 5 * 1024 * 1024,
+        kernel_python: str | None = None,
     ) -> None:
+        # Read once, here, rather than at start: a restart builds a replacement
+        # session from this object's attributes, and a value re-read later
+        # would let the interpreter change under a notebook mid-session.
+        self.kernel_python = kernel_python or os.environ.get(KERNEL_PYTHON_ENV_VAR) or None
         self.startup_timeout = startup_timeout
         self.cell_timeout = cell_timeout
         self.recovery_timeout = recovery_timeout
@@ -251,6 +266,14 @@ class KernelSession:
         from jupyter_client import KernelManager
 
         manager = KernelManager(kernel_name="python3")
+        if self.kernel_python is not None:
+            # Same launcher, different interpreter. Replacing argv rather than
+            # naming another kernelspec means the caller points at a virtualenv
+            # they already have instead of first registering one with Jupyter.
+            manager.kernel_spec.argv = [
+                self.kernel_python, "-m", "ipykernel_launcher",
+                "-f", "{connection_file}",
+            ]
         manager.start_kernel()
         client = None
         try:

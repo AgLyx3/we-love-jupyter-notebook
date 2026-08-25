@@ -663,3 +663,90 @@ def test_a_structural_change_reports_the_notebook_as_unsaved(built):
     for marker in ("def notebook_insert_cell", "def notebook_delete_cell"):
         body = source[source.index(marker):][:1200]
         assert '"dirty"' in body, f"{marker} does not report dirty"
+
+
+# --- which interpreter runs the cells -----------------------------------------
+
+
+def test_the_kernel_interpreter_defaults_to_this_environment(monkeypatch):
+    """No flag, no env var: jupyter_client resolves `python3` as it always did."""
+    from backend.app.kernel_execution.kernel_session import KernelSession
+
+    monkeypatch.delenv("NOTEBOOK_KERNEL_PYTHON", raising=False)
+    assert KernelSession().kernel_python is None
+
+
+def test_the_kernel_interpreter_is_taken_from_the_environment(monkeypatch):
+    """The supervisor hands it to the child that way, so reading it matters."""
+    from backend.app.kernel_execution.kernel_session import KernelSession
+
+    monkeypatch.setenv("NOTEBOOK_KERNEL_PYTHON", "/somewhere/.venv/bin/python")
+    assert KernelSession().kernel_python == "/somewhere/.venv/bin/python"
+
+
+def test_an_explicit_interpreter_beats_the_environment(monkeypatch):
+    from backend.app.kernel_execution.kernel_session import KernelSession
+
+    monkeypatch.setenv("NOTEBOOK_KERNEL_PYTHON", "/from/env/python")
+    assert KernelSession(kernel_python="/explicit/python").kernel_python == "/explicit/python"
+
+
+def test_the_supervisor_passes_the_interpreter_to_the_editor_process():
+    """It reaches the child as an env var, beside the workspace root."""
+    from backend.app.mcp.supervisor import EditorProcess
+
+    process = EditorProcess(kernel_python="/project/.venv/bin/python")
+    assert process.kernel_python == "/project/.venv/bin/python"
+    # And is distinct from the interpreter that serves the editor itself.
+    assert process.python != process.kernel_python
+
+
+def test_a_restarted_kernel_keeps_the_interpreter_it_was_given():
+    """The replacement is built field by field, so a new one is easy to drop.
+
+    Losing it here would be near-invisible: the notebook keeps working, on the
+    wrong environment, and only an import that used to resolve would say so.
+    """
+    import inspect
+
+    from backend.app.kernel_execution import service
+
+    source = inspect.getsource(service)
+    constructions = source.count("KernelSession(\n")
+    carried = source.count("kernel_python=old_kernel.kernel_python")
+    assert carried == constructions, (
+        f"{constructions} KernelSession(...) reconstructions but {carried} carry "
+        "kernel_python — a restart would silently fall back to this environment"
+    )
+
+
+def test_a_virtualenv_interpreter_is_not_resolved_through_its_symlink(tmp_path):
+    """`bin/python` in a virtualenv is a symlink to the base interpreter.
+
+    Resolving it hands back that base interpreter, which has none of the
+    virtualenv's packages — the exact environment `--kernel-python` exists to
+    escape. The symptom is silent: the flag is accepted, a kernel starts, and
+    the notebook's imports fail as if the flag had not been passed.
+    """
+    from backend.app.mcp.server import _resolved_kernel_python
+
+    # Stands in for the base interpreter: all the probe asks of it is that
+    # `-c "import ipykernel"` exits 0, which keeps this test off the machine's
+    # real environments and fast.
+    base = tmp_path / "base-python"
+    base.write_text("#!/bin/sh\nexit 0\n")
+    base.chmod(0o755)
+
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    link = venv_bin / "python"
+    link.symlink_to(base)
+
+    def unexpected_failure(message):  # pragma: no cover - only on regression
+        raise AssertionError(message)
+
+    resolved = _resolved_kernel_python(str(link), unexpected_failure)
+    assert resolved == str(link), (
+        f"followed the symlink to {resolved} — the virtualenv's packages are "
+        "not on that interpreter's path"
+    )

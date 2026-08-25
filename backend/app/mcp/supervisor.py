@@ -79,10 +79,17 @@ class EditorProcess:
         *,
         workspace_root: str | Path | None = None,
         python: str | None = None,
+        kernel_python: str | Path | None = None,
         startup_timeout: float = STARTUP_TIMEOUT_SECONDS,
     ) -> None:
         self.workspace_root = str(workspace_root) if workspace_root is not None else None
         self.python = python or sys.executable
+        # `python` is the interpreter that serves the editor; `kernel_python`
+        # is the one that runs the notebook's cells. They are the same by
+        # default and deliberately separable: an install apart from the
+        # notebook's dependencies can serve the tab perfectly well while being
+        # the wrong environment to execute in.
+        self.kernel_python = str(kernel_python) if kernel_python is not None else None
         self.startup_timeout = startup_timeout
         self._process: subprocess.Popen[bytes] | None = None
         self._port: int | None = None
@@ -130,6 +137,8 @@ class EditorProcess:
         )
         if self.workspace_root is not None:
             environment["NOTEBOOK_WORKSPACE_ROOT"] = self.workspace_root
+        if self.kernel_python is not None:
+            environment["NOTEBOOK_KERNEL_PYTHON"] = self.kernel_python
         command = [
             self.python, "-m", "uvicorn",
             "backend.app.bundled:create_bundled_app", "--factory",
