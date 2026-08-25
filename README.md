@@ -25,9 +25,14 @@ browser tab shows you the same session and lets you step in. [Running it
 locally](#run-it-locally-instead) is for working on the editor itself.
 
 Any client that speaks stdio MCP works — nothing here is specific to Claude
-Code, and the Claude CLI is only needed for agent turns sent *from the tab*.
-You need that client and Python 3.11+. The wheel carries the browser tab, so
-there is nothing to clone and no Node toolchain.
+Code. You need that client and Python 3.11+. The wheel carries the browser tab,
+so there is nothing to clone and no Node toolchain.
+
+The tab keeps everything it has, including its agent chat: two agents can work
+the same notebook, your MCP client through tools and the tab's own turns
+through the `claude` CLI, against one session and one kernel. The chat is the
+only part that needs that CLI on your `PATH` (see [Claude
+CLI](#claude-cli)) — every tool here works without it.
 
 ### Which Python runs your cells
 
