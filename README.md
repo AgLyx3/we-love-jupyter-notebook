@@ -101,7 +101,7 @@ namespace already called notebook.
 `set_cell_source`, `insert_cell`, `delete_cell`,
 `run_cell`, `run_all`, `cancel_run`, `save`, `show`.
 
-Four things the tab guarantees you, whatever the client does:
+Three things the tab guarantees you, whatever the client does:
 
 - **You approve anything risky before it runs.** Execution a tool asks for is
   agent-initiated, so a cell the risk classifier flags stops at *awaiting
@@ -110,9 +110,6 @@ Four things the tab guarantees you, whatever the client does:
 - **Your edits win.** Change a cell in the tab and a client writing against the
   version it last read is refused and told to re-read. Nothing retries over the
   top of your work.
-- **Plots stay where you can see them.** The client is handed a plot's size and
-  type; the picture renders in the tab. Forwarding it whole would be about 23K
-  tokens of base64 for a modest notebook, and unreadable to a model anyway.
 - **New cells arrive for review, not already run.** `insert_cell` marks its
   cell agent-authored, the tab badges it "review before running", and leaves it
   inert. Running it is a separate call through the same approval gate.
