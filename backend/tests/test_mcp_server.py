@@ -630,8 +630,15 @@ def test_the_readme_lists_every_tool_that_exists(built):
     server, _ = built
     names = {tool.name for tool in asyncio.run(server.list_tools())}
     readme = Path(__file__).resolve().parents[2] / "README.md"
-    section = readme.read_text().split("**The tools.**", 1)[1].split("\n\n")[1]
-    listed = set(re.findall(r"`([a-z_]+)`", section))
+    text = readme.read_text()
+    assert "### The tools" in text, "README's tool section was renamed — fix this anchor"
+    section = text.split("### The tools", 1)[1]
+    # The list is whichever paragraph names `open`, rather than a fixed offset
+    # from the heading: prose gets added above it and the index moves.
+    listed = set(re.findall(
+        r"`([a-z_]+)`",
+        next(para for para in section.split("\n\n") if "`open`" in para),
+    ))
     assert listed == names, f"README missing {names - listed}, extra {listed - names}"
 
 

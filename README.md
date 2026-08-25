@@ -14,145 +14,74 @@ may add, delete, reorder, and retype cells. Either way the backend validates and
 applies (or rejects) every change — the agent never mutates your notebook
 directly — and every change is reviewable as a diff and undoable.
 
-Most people drive it from an MCP client — Claude Code edits and runs the
-notebook through tools while the browser tab shows you the same session as it
-happens. `pip install notebook-editor-mcp`, and see [Install](#install).
-
 Everything runs on your machine and binds to loopback only. Read
 [Security Limits](#security-limits) before using it with untrusted notebooks.
 
-## The interface
-
-The editor at rest: files and the notebook map on the left, the notebook in the
-middle, the agent on the right. Nothing is scoped yet, so the composer says so —
-a turn sent now is read-only.
-
-![The editor with a notebook open: file tree, notebook, and agent panel](docs/screenshots/01-app-shell.png)
-
-After a turn, changed cells become reviewable in place — an inline diff on the
-cell it belongs to, accepted or rejected per hunk, not a patch file you read
-somewhere else. The review bar counts what is pending and names the turn it came
-from; the agent's answer stays beside the diff, so what it claims to have done
-and what it actually changed are on screen together. Here two of the three
-scoped cells were rewritten, and the panel explains why the third was left
-alone.
-
-![The same view mid-review: pending-review bar, an inline diff on a cell, and the agent transcript](docs/screenshots/02-app-shell-reviewing.png)
-
-<table>
-<tr>
-<td width="30%"><img src="docs/screenshots/06-outline-panel.png" alt="The Outline tab listing four named blocks of cells"></td>
-<td>
-
-**The notebook map.** The Outline tab segments the notebook into blocks and
-asks the model to name each one, so a long notebook has a table of contents it
-never had. Names are generated — they carry a dotted underline to say so —
-while the cell ranges under them are computed. **Rebuild map** re-derives it
-after the notebook moves on.
-
-</td>
-</tr>
-</table>
-
-Plots get knobs. **Tune** scans the cells above a figure for values it can vary
-safely — sizes, counts, colours, flags — and puts each on a control, floating
-over the notebook so the picture keeps the full width of the cell. Moving one
-re-runs the cell into a preview labelled *not in your notebook yet*; **Apply and
-re-run** is what writes the values back. Nothing is committed until you press it.
-
-![The Tuning Controls popover open over a histogram, with sliders for N_POINTS, NOISE, BINS and ALPHA](docs/screenshots/07-tuning-panel.png)
-
-Screenshots are captured from a live session against the notebooks in
-`examples/`, with a real kernel and the real Claude CLI. See
-[`docs/screenshots/`](docs/screenshots/) for the full set and how to re-capture
-them.
-
 ## Install
 
-The editor runs two ways. **As an [MCP](https://modelcontextprotocol.io)
-server** is the primary one: an MCP client — Claude Code, for instance — edits
-and runs the notebook through tools while you watch the same session in a
-browser tab and step in when you want to. [Running it
-locally](#run-it-locally-instead) is the other, and is what you want if you are
-working on the editor itself.
+Two ways to run it. **As an [MCP](https://modelcontextprotocol.io) server** is
+the primary one: your client edits and runs the notebook through tools while a
+browser tab shows you the same session and lets you step in. [Running it
+locally](#run-it-locally-instead) is for working on the editor itself.
 
-The tab is not a read-only view: the notebook, the kernel and the
-scope are one server-side session, so a cell the client edits updates in front
-of you, and a cell you edit is a cell the client is then refused for editing
-against a stale read.
-
-### What you need
-
-- **An MCP client.** Claude Code, or anything else that speaks stdio MCP.
-- **Python 3.11+**, in the environment your notebooks run in — see below.
-- Nothing else. The published wheel carries the browser tab with it, so there
-  is no repository to clone and no Node toolchain to install.
+Any client that speaks stdio MCP works — nothing here is specific to Claude
+Code, and the Claude CLI is only needed for agent turns sent *from the tab*.
+You need that client and Python 3.11+. The wheel carries the browser tab, so
+there is nothing to clone and no Node toolchain.
 
 ### Which Python runs your cells
 
-This is the one thing to get right.
+Cells run in the environment the editor is installed into, and that
+environment's kernel wins over any you have registered. Install it apart from
+your notebook's dependencies and `import pandas` fails.
 
-The editor runs cells against the Python environment it is *installed into*.
-That environment's own kernel wins the lookup — it sorts ahead of any you have
-registered — so installed apart from your notebook's dependencies, a notebook
-opening with `import pandas` fails with `ModuleNotFoundError`.
-
-There are two ways to end up in the right environment, and either is fine.
-
-**Install it beside your notebooks.** Nothing more to say afterwards: they see
-the packages they always saw.
+So either install it beside them:
 
 ```bash
-# from your project, with its environment active
-pip install notebook-editor-mcp
+pip install notebook-editor-mcp        # in your project's environment
 
 claude mcp add agent-notebook -- \
-  /absolute/path/to/your/.venv/bin/notebook-editor-mcp \
-  --workspace-root /absolute/path/to/your/project
+  /abs/path/to/.venv/bin/notebook-editor-mcp \
+  --workspace-root /abs/path/to/project
 ```
 
-**Or keep the editor separate and point it at them.** `--kernel-python` names
-the interpreter that runs the cells, independently of the one serving the
-editor. This is what makes `uvx` — which by design installs nothing of yours —
-work on a real notebook:
+…or keep it separate and point `--kernel-python` at them, which is what makes
+`uvx` usable on a real notebook:
 
 ```bash
 claude mcp add agent-notebook -- \
   uvx --from notebook-editor-mcp notebook-editor-mcp \
-  --workspace-root /absolute/path/to/your/project \
-  --kernel-python /absolute/path/to/your/.venv/bin/python
+  --workspace-root /abs/path/to/project \
+  --kernel-python /abs/path/to/.venv/bin/python
 ```
 
-Give it the `python` inside the environment, not a resolved path to the base
-interpreter — a virtualenv's `bin/python` is a symlink, and the thing it points
-at has none of the virtualenv's packages. That environment needs `ipykernel`,
-which is checked at launch: a wrong path or a missing `ipykernel` fails
-immediately, with the command to fix it, rather than at the first cell you run.
+Pass the `python` inside the environment, not a resolved path: a virtualenv's
+`bin/python` is a symlink whose target has none of the virtualenv's packages.
+That environment needs `ipykernel`. A wrong path or a missing `ipykernel` fails
+at launch, with the command to fix it, rather than at the first cell.
 
-Without the flag, `uvx` and `pipx` are still the quickest way to *look* at the
-tool, on a notebook that imports nothing beyond the standard library.
+### The tab
 
-### The flags
+It opens by itself the first time your client calls `open`, once per session;
+`show` opens it again. On a headless or remote host nothing pops up — `open`
+returns the URL as `editorUrl` for the client to hand you. `--no-browser` turns
+the automatic tab off and leaves `show` working.
 
-Use an absolute path for `--workspace-root`, and for the executable if you name
-one — the client decides what directory the server starts in, so a relative one
-is ambiguous. `--workspace-root` confines every path the editor will open,
-list, or write to that directory; it is optional and strongly recommended,
-since without it the editor reaches anywhere you can. A typo fails at launch
-rather than at the first tool call.
+### The workspace
 
-`--no-browser` stops the tab opening by itself. On a headless or remote
-machine no tab can open regardless, so `open` returns an `editorUrl`
-for the client to hand you, and `show` returns it again on request.
+`--workspace-root` confines every path the editor will open, list or write to
+one directory. It is optional and strongly recommended: without it the editor
+reaches anywhere you can. Use absolute paths for it and for the executable —
+the client decides what directory the server starts in. A typo fails at launch.
 
-If a client names a notebook that is not there, the error lists the `.ipynb`
-files that *are* in the workspace, so it can pick one rather than guess again.
+Name a notebook that is not there and the error lists the `.ipynb` files that
+*are*, so the client can pick one rather than guess again.
 
-**The tools.** The server is registered under a name, and MCP namespaces every
-tool by it, so a client sees `mcp__agent_notebook__open`. The tools are
-therefore named for what they do and nothing more — repeating the domain in
-each one only produced `notebook_open` inside a namespace already called
-notebook.
+### The tools
+
+Named for what they do and nothing more, because clients that namespace tools
+by server name — Claude Code renders them `mcp__agent_notebook__open` — would
+otherwise produce `notebook_open` inside a namespace already called notebook.
 
 `open`, `read`, `status`,
 `set_cell_source`, `insert_cell`, `delete_cell`,
@@ -211,6 +140,52 @@ npx @modelcontextprotocol/inspector \
 
 Read [Security Limits](#security-limits) before pointing a client at a notebook
 you would not run yourself.
+
+## The interface
+
+The editor at rest: files and the notebook map on the left, the notebook in the
+middle, the agent on the right. Nothing is scoped yet, so the composer says so —
+a turn sent now is read-only.
+
+![The editor with a notebook open: file tree, notebook, and agent panel](docs/screenshots/01-app-shell.png)
+
+After a turn, changed cells become reviewable in place — an inline diff on the
+cell it belongs to, accepted or rejected per hunk, not a patch file you read
+somewhere else. The review bar counts what is pending and names the turn it came
+from; the agent's answer stays beside the diff, so what it claims to have done
+and what it actually changed are on screen together. Here two of the three
+scoped cells were rewritten, and the panel explains why the third was left
+alone.
+
+![The same view mid-review: pending-review bar, an inline diff on a cell, and the agent transcript](docs/screenshots/02-app-shell-reviewing.png)
+
+<table>
+<tr>
+<td width="30%"><img src="docs/screenshots/06-outline-panel.png" alt="The Outline tab listing four named blocks of cells"></td>
+<td>
+
+**The notebook map.** The Outline tab segments the notebook into blocks and
+asks the model to name each one, so a long notebook has a table of contents it
+never had. Names are generated — they carry a dotted underline to say so —
+while the cell ranges under them are computed. **Rebuild map** re-derives it
+after the notebook moves on.
+
+</td>
+</tr>
+</table>
+
+Plots get knobs. **Tune** scans the cells above a figure for values it can vary
+safely — sizes, counts, colours, flags — and puts each on a control, floating
+over the notebook so the picture keeps the full width of the cell. Moving one
+re-runs the cell into a preview labelled *not in your notebook yet*; **Apply and
+re-run** is what writes the values back. Nothing is committed until you press it.
+
+![The Tuning Controls popover open over a histogram, with sliders for N_POINTS, NOISE, BINS and ALPHA](docs/screenshots/07-tuning-panel.png)
+
+Screenshots are captured from a live session against the notebooks in
+`examples/`, with a real kernel and the real Claude CLI. See
+[`docs/screenshots/`](docs/screenshots/) for the full set and how to re-capture
+them.
 
 ## Run it locally instead
 
