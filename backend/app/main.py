@@ -37,6 +37,30 @@ from .workspace_confinement import UNCONFINED, WorkspaceConfinement
 DEV_SERVER_ORIGINS = ("http://127.0.0.1:5173", "http://localhost:5173")
 
 
+def _single_adapter(
+    agent_adapter: AgentAdapter | None,
+    agent_adapters: dict[str, AgentAdapter] | None,
+    default_agent: str | None,
+) -> AgentAdapter:
+    """The one adapter for consumers that take a single one, not a registry.
+
+    Production wires `agent_adapters` and no `agent_adapter`, so falling
+    straight through to `FakeAgentAdapter()` handed the fake to every
+    single-adapter consumer — silently, and exactly where a real CLI is the
+    whole point. The registry is the better source when it exists; the fake
+    remains the default only for `create_app()` with no adapters at all, which
+    is how the tests build the app.
+    """
+    if agent_adapter is not None:
+        return agent_adapter
+    registry = agent_adapters or {}
+    return (
+        registry.get(default_agent or "default")
+        or next(iter(registry.values()), None)
+        or FakeAgentAdapter()
+    )
+
+
 def create_app(
     *,
     agent_adapter: AgentAdapter | None = None,
@@ -103,7 +127,7 @@ def create_app(
     app.state.agent_turn_service = AgentTurnService(
         documents=app.state.notebook_service,
         scopes=app.state.turn_scope_service,
-        adapter=agent_adapter or FakeAgentAdapter(),
+        adapter=_single_adapter(agent_adapter, agent_adapters, default_agent),
         adapters=agent_adapters,
         default_agent=default_agent or "default",
         executions=app.state.kernel_execution_service,

@@ -126,15 +126,32 @@ class UnknownAgentAdapter(NotebookDomainError):
         super().__init__(agent=agent)
 
 
-class DefaultAgentUnavailable(NotebookDomainError):
-    """No `agent` was named and the configured default's CLI cannot run."""
+class AgentUnavailable(NotebookDomainError):
+    """The chosen agent's CLI cannot run, but another one could."""
 
-    code = "default_agent_unavailable"
-    message = "The default agent is unavailable; name an agent explicitly"
+    code = "agent_unavailable"
+    message = "The requested agent is unavailable; name one of the available agents"
     status_code = 422
 
     def __init__(self, agent: str, available: list[str]) -> None:
         super().__init__(agent=agent, availableAgents=available)
+
+
+class NoAgentAvailable(NotebookDomainError):
+    """No registered adapter has a usable CLI.
+
+    Separate from AgentUnavailable because the remedy is different and the
+    caller cannot act on the other one's advice: telling someone to name an
+    available agent when the list is empty is a dead end, and it is the machine
+    that needs fixing, not the request.
+    """
+
+    code = "no_agent_available"
+    message = "No agent CLI is available on this machine"
+    status_code = 503
+
+    def __init__(self, agent: str) -> None:
+        super().__init__(agent=agent)
 
 
 class UnknownAgentModel(NotebookDomainError):
@@ -242,16 +259,30 @@ class AgentTurnService:
         is the caller's to do: GET /agent-adapters still advertises a reachable
         default, and the composer sends it explicitly.
         """
-        adapter = self.adapters.get(self.default_agent)
+        self.require_available(self.default_agent)
+        return self.default_agent
+
+    def require_available(self, agent: str) -> None:
+        """Refuse, before the document lease, when this agent's CLI cannot run.
+
+        Applies to an explicitly named agent as much as to a resolved default.
+        Naming the agent in the request does not make a missing CLI any easier
+        to discover: without this, an explicit choice sailed past the check the
+        omitted-agent path performs and failed as a 502 *after* taking the
+        lease — the very sequence the original fallback was written to avoid.
+        """
+        adapter = self.adapters.get(agent)
+        # An unregistered id is not an availability problem; start() reports it
+        # as UnknownAgentAdapter, which names the right fault.
         if adapter is None or _is_available(adapter):
-            return self.default_agent
-        raise DefaultAgentUnavailable(
-            self.default_agent,
-            sorted(
-                agent_id for agent_id, candidate in self.adapters.items()
-                if _is_available(candidate)
-            ),
+            return
+        available = sorted(
+            agent_id for agent_id, candidate in self.adapters.items()
+            if _is_available(candidate)
         )
+        if not available:
+            raise NoAgentAvailable(agent)
+        raise AgentUnavailable(agent, available)
 
     def start(
         self, *, prompt: str, session_id: str, expected_revision: int,
@@ -260,6 +291,9 @@ class AgentTurnService:
     ) -> AgentTurn:
         turn_id = uuid4().hex
         agent = self._resolved_default_agent() if agent in ("", "default") else agent
+        # Outside the lock: the probe shells out on its first call per adapter,
+        # and the answer is cached for the process either way.
+        self.require_available(agent)
         with self._lock:
             if self._shutting_down:
                 raise AgentTurnServiceShuttingDown()

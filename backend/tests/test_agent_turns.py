@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from backend.app.agent_turns.service import (
     AgentTurn, AgentTurnNotFound, AgentTurnService, AgentTurnServiceShuttingDown,
-    DefaultAgentUnavailable,
+    AgentUnavailable, NoAgentAvailable,
     MAX_TURN_HISTORY_BYTES, RevertConflict, UndoConflict, UnknownAgentAdapter,
     UnknownAgentModel,
 )
@@ -1272,7 +1272,7 @@ def test_omitted_agent_refuses_rather_than_running_on_another_vendors_cli(
         default_agent="gone",
     )
     scopes.add("editable", editable=True)
-    with pytest.raises(DefaultAgentUnavailable) as caught:
+    with pytest.raises(AgentUnavailable) as caught:
         service.start(
             prompt="go", session_id=snapshot.session_id,
             expected_revision=snapshot.revision, background=False,
@@ -1294,6 +1294,87 @@ def test_omitted_agent_refuses_rather_than_running_on_another_vendors_cli(
         default_agent="gone",
     )
     assert both_here._resolved_default_agent() == "gone"
+
+
+def test_an_explicitly_named_agent_is_checked_before_the_lease_too(notebook_payload):
+    # Naming the agent does not make a missing CLI easier to discover. The
+    # explicit path skipped the check the omitted path performs, so it failed as
+    # a 502 after taking the document lease — the sequence the pre-flight exists
+    # to avoid.
+    class _Missing(FakeAgentAdapter):
+        def is_available(self):
+            return False
+
+    class _Present(FakeAgentAdapter):
+        def is_available(self):
+            return True
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    service = AgentTurnService(
+        documents=documents, scopes=scopes, timeout=2,
+        adapters={"gone": _Missing([FakeAttempt()]), "here": _Present([FakeAttempt()])},
+        default_agent="here",
+    )
+    scopes.add("editable", editable=True)
+    with pytest.raises(AgentUnavailable) as caught:
+        service.start(
+            prompt="go", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision, agent="gone", background=False,
+        )
+    assert caught.value.details["agent"] == "gone"
+    assert caught.value.details["availableAgents"] == ["here"]
+    assert service._turns == {}
+    lease = documents.coordinator.acquire(operation_type="probe", operation_id="p")
+    documents.coordinator.release(lease)
+
+
+def test_with_no_cli_installed_the_failure_does_not_advise_the_impossible(
+    notebook_payload,
+):
+    # "name one of the available agents" is a dead end when the list is empty,
+    # and the fault is the machine's, not the request's. A different error, and
+    # a 503 rather than a 422.
+    class _Missing(FakeAgentAdapter):
+        def is_available(self):
+            return False
+
+    documents = NotebookDocumentService()
+    snapshot = documents.import_notebook(notebook_payload())
+    scopes = TurnScopeService(documents)
+    service = AgentTurnService(
+        documents=documents, scopes=scopes, timeout=2,
+        adapters={"gone": _Missing([FakeAttempt()]), "also": _Missing([FakeAttempt()])},
+        default_agent="gone",
+    )
+    scopes.add("editable", editable=True)
+    with pytest.raises(NoAgentAvailable) as caught:
+        service.start(
+            prompt="go", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision, background=False,
+        )
+    assert caught.value.status_code == 503
+    assert caught.value.details["agent"] == "gone"
+
+
+def test_a_registry_deployment_never_falls_through_to_the_fake_adapter():
+    # Production passes `agent_adapters` and no `agent_adapter`, so the old
+    # `agent_adapter or FakeAgentAdapter()` handed the fake to every consumer
+    # taking a single adapter — silently, where a real CLI is the entire point.
+    from backend.app.main import _single_adapter
+    from backend.app.agent_workspace.adapters import (
+        ClaudeAgentAdapter, CodexAgentAdapter,
+    )
+
+    registry = {"claude": ClaudeAgentAdapter(), "codex": CodexAgentAdapter()}
+    assert isinstance(_single_adapter(None, registry, "claude"), ClaudeAgentAdapter)
+    assert isinstance(_single_adapter(None, registry, "codex"), CodexAgentAdapter)
+    # A registry that does not name the default still beats the fake.
+    assert isinstance(_single_adapter(None, {"codex": registry["codex"]}, "claude"),
+                      CodexAgentAdapter)
+    # Only a build with no adapters at all — how the tests construct it — fakes.
+    assert isinstance(_single_adapter(None, None, None), FakeAgentAdapter)
 
 
 def test_service_requires_at_least_one_adapter():

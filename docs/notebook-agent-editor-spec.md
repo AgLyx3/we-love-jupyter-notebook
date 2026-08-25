@@ -822,12 +822,18 @@ Rules:
   matches the directory the audit actually inspects.
 - The turn runs on the agent the request named, and on no other. A request that
   omits `agent` is asking for the configured default; if that default's CLI
-  cannot run, the app refuses the turn (422 `default_agent_unavailable`, naming
-  the agents that are available) rather than substituting one. Availability is
-  probed once per process, so a silent substitution would redirect every later
-  omitted-agent turn to a different vendor's CLI until a restart, with the
-  swap visible only after the turn had already run. `GET /agent-adapters` still
-  advertises a reachable default for the composer to send explicitly.
+  cannot run, the app refuses the turn rather than substituting one.
+  Availability is probed once per process, so a silent substitution would
+  redirect every later omitted-agent turn to a different vendor's CLI until a
+  restart, with the swap visible only after the turn had already run.
+  `GET /agent-adapters` still advertises a reachable default for the composer
+  to send explicitly.
+- The same check runs for an explicitly named agent, and for both it runs
+  before the document lease is taken: 422 `agent_unavailable` when some other
+  agent could serve the turn (the response names them), and 503
+  `no_agent_available` when none can, because advising the caller to name an
+  available agent is a dead end when the list is empty and the fault is the
+  machine's rather than the request's.
 - Notebook execution is owned by the app after validated changes are applied.
   A CLI agent's shell is not an execution path for notebook code: nothing it
   runs touches the live document or the kernel, and its shell output is not
