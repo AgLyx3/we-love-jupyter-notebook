@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from backend.app.agent_turns.service import (
     AgentTurn, AgentTurnNotFound, AgentTurnService, AgentTurnServiceShuttingDown,
+    DefaultAgentUnavailable,
     MAX_TURN_HISTORY_BYTES, RevertConflict, UndoConflict, UnknownAgentAdapter,
     UnknownAgentModel,
 )
@@ -1241,12 +1242,18 @@ def test_shell_file_access_reaches_instructions_on_every_turn_shape(notebook_pay
             assert "read and write" not in instructions
 
 
-def test_omitted_agent_falls_back_to_an_installed_cli(notebook_payload):
-    # Regression: GET /agent-adapters advertises a fallback when the configured
-    # default's CLI is missing, but start() resolved "default" straight to
-    # self.default_agent. So a request that merely omitted `agent` took the
-    # document lease and then failed against a CLI that is not installed, while
-    # the composer showed a different agent as the default.
+def test_omitted_agent_refuses_rather_than_running_on_another_vendors_cli(
+    notebook_payload,
+):
+    # An omitted `agent` asks for the configured default and nothing else.
+    # Substituting another agent silently hands the prompt, the notebook and the
+    # write scope to a different vendor's CLI; `is_available` is cached for the
+    # life of the process, so one version drift redirects every later
+    # omitted-agent turn, evidenced only by `· {turn.agent}` after the fact.
+    #
+    # It still must not fail the way it originally did — after taking the
+    # document lease, against a CLI that is not installed. It fails before the
+    # lease, naming what the caller can actually pick.
     class _Missing(FakeAgentAdapter):
         def is_available(self):
             return False
@@ -1265,11 +1272,20 @@ def test_omitted_agent_falls_back_to_an_installed_cli(notebook_payload):
         default_agent="gone",
     )
     scopes.add("editable", editable=True)
-    turn = service.start(
-        prompt="go", session_id=snapshot.session_id,
-        expected_revision=snapshot.revision, background=False,
-    )
-    assert turn.agent == "here", "an omitted agent must not pick an uninstalled CLI"
+    with pytest.raises(DefaultAgentUnavailable) as caught:
+        service.start(
+            prompt="go", session_id=snapshot.session_id,
+            expected_revision=snapshot.revision, background=False,
+        )
+    # It names the default that could not run, and what can.
+    assert caught.value.details["agent"] == "gone"
+    assert caught.value.details["availableAgents"] == ["here"]
+    assert caught.value.status_code == 422
+    # No turn was recorded, and the document lease is still free — the original
+    # bug was discovering this *after* acquiring it.
+    assert service._turns == {}
+    lease = documents.coordinator.acquire(operation_type="probe", operation_id="p")
+    documents.coordinator.release(lease)
 
     # The configured default still wins whenever it is actually installed.
     both_here = AgentTurnService(

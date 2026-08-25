@@ -820,6 +820,14 @@ Rules:
   `sandbox_workspace_write.exclude_tmpdir_env_var` and
   `sandbox_workspace_write.exclude_slash_tmp` are set so the writable set
   matches the directory the audit actually inspects.
+- The turn runs on the agent the request named, and on no other. A request that
+  omits `agent` is asking for the configured default; if that default's CLI
+  cannot run, the app refuses the turn (422 `default_agent_unavailable`, naming
+  the agents that are available) rather than substituting one. Availability is
+  probed once per process, so a silent substitution would redirect every later
+  omitted-agent turn to a different vendor's CLI until a restart, with the
+  swap visible only after the turn had already run. `GET /agent-adapters` still
+  advertises a reachable default for the composer to send explicitly.
 - Notebook execution is owned by the app after validated changes are applied.
   A CLI agent's shell is not an execution path for notebook code: nothing it
   runs touches the live document or the kernel, and its shell output is not
@@ -833,7 +841,11 @@ Two production adapters exist: the Claude CLI and the Codex CLI. Each turn
 request selects one. The Codex adapter runs `codex exec` with `--ephemeral
 --ignore-user-config --skip-git-repo-check`, sets `--sandbox workspace-write`
 for editable turns and `--sandbox read-only` for read-only or plan turns, and
-disables network access for the sandboxed process. It also excludes `$TMPDIR`
+disables network access for the sandboxed process. It also passes `--disable
+apps`: `codex exec` has no approval gate and no `-a never`, so a connected app
+(a GitHub integration, say) is a way for the model to act on the user's real
+accounts that neither the sandbox nor the workspace audit can observe, both of
+which bound the local filesystem only. It also excludes `$TMPDIR`
 and `/tmp` from the write grant, which `workspace-write` would otherwise
 include, so the writable set is the workspace directory the audit inspects. The agent's final message is
 captured through `--output-last-message` into a temp file outside the

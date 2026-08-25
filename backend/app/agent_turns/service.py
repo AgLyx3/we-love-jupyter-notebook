@@ -126,6 +126,17 @@ class UnknownAgentAdapter(NotebookDomainError):
         super().__init__(agent=agent)
 
 
+class DefaultAgentUnavailable(NotebookDomainError):
+    """No `agent` was named and the configured default's CLI cannot run."""
+
+    code = "default_agent_unavailable"
+    message = "The default agent is unavailable; name an agent explicitly"
+    status_code = 422
+
+    def __init__(self, agent: str, available: list[str]) -> None:
+        super().__init__(agent=agent, availableAgents=available)
+
+
 class UnknownAgentModel(NotebookDomainError):
     code = "unknown_agent_model"
     message = "Requested model is not available for this agent"
@@ -215,24 +226,32 @@ class AgentTurnService:
         return self.adapters[self.default_agent]
 
     def _resolved_default_agent(self) -> str:
-        """The agent an omitted `agent` field should actually run on.
+        """The agent an omitted `agent` field runs on — or a refusal to guess.
 
-        GET /agent-adapters advertises a fallback when the configured default's
-        CLI is missing, so resolving "default" straight to self.default_agent
-        made the composer's advertised default and the turn's real default
-        disagree: a request that simply omitted the field took the document
-        lease and then failed against a CLI that is not installed. Same rule in
-        both places, so the answer is the same in both places.
+        A request that omits `agent` is asking for the configured default, and
+        nothing else. When that default's CLI cannot run, substituting another
+        agent silently reassigns the work: the prompt, the notebook and the
+        write scope all go to a different vendor's CLI than the one the caller
+        asked for. `is_available` is answered once and remembered for the life
+        of the process (see CliAvailability), so a single version drift redirects
+        every subsequent omitted-agent turn until the server restarts, and the
+        only evidence is `· {turn.agent}` in the UI *after* the turn has run.
+
+        So it fails instead, and fails here — before the document lease is taken
+        — naming what is actually available so the caller can choose. Choosing
+        is the caller's to do: GET /agent-adapters still advertises a reachable
+        default, and the composer sends it explicitly.
         """
         adapter = self.adapters.get(self.default_agent)
         if adapter is None or _is_available(adapter):
             return self.default_agent
-        for agent_id, candidate in self.adapters.items():
-            if _is_available(candidate):
-                return agent_id
-        # Nothing is installed. Keep the configured default so the failure names
-        # the agent the operator actually configured.
-        return self.default_agent
+        raise DefaultAgentUnavailable(
+            self.default_agent,
+            sorted(
+                agent_id for agent_id, candidate in self.adapters.items()
+                if _is_available(candidate)
+            ),
+        )
 
     def start(
         self, *, prompt: str, session_id: str, expected_revision: int,
