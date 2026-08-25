@@ -631,14 +631,16 @@ def test_the_readme_lists_every_tool_that_exists(built):
     names = {tool.name for tool in asyncio.run(server.list_tools())}
     readme = Path(__file__).resolve().parents[2] / "README.md"
     text = readme.read_text()
-    assert "### The tools" in text, "README's tool section was renamed — fix this anchor"
-    section = text.split("### The tools", 1)[1]
-    # The list is whichever paragraph names `open`, rather than a fixed offset
-    # from the heading: prose gets added above it and the index moves.
-    listed = set(re.findall(
-        r"`([a-z_]+)`",
-        next(para for para in section.split("\n\n") if "`open`" in para),
-    ))
+    # Find the list by its contents, not by a heading or an offset: both have
+    # already been renamed and renumbered by ordinary editing, and a tool-list
+    # check that breaks when prose moves gets weakened to make it pass.
+    paragraphs = [
+        para for para in text.split("\n\n") if "`set_cell_source`" in para
+    ]
+    assert len(paragraphs) == 1, (
+        f"expected exactly one paragraph listing the tools, found {len(paragraphs)}"
+    )
+    listed = set(re.findall(r"`([a-z_]+)`", paragraphs[0]))
     assert listed == names, f"README missing {names - listed}, extra {listed - names}"
 
 

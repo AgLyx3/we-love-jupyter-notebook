@@ -19,20 +19,18 @@ Everything runs on your machine and binds to loopback only. Read
 
 ## Install
 
-Two ways to run it. **As an [MCP](https://modelcontextprotocol.io) server** is
-the primary one: your client edits and runs the notebook through tools while a
-browser tab shows you the same session and lets you step in. [Running it
-locally](#run-it-locally-instead) is for working on the editor itself.
+**You work in the browser tab.** An MCP client — Claude Code, for instance — is
+how you start it: it launches the editor, opens the tab, and can then edit and
+run cells alongside you through tools, against the same session. [Running it
+locally](#run-it-locally-instead) is the other way in, for working on the
+editor itself.
 
-Any client that speaks stdio MCP works — nothing here is specific to Claude
-Code. You need that client and Python 3.11+. The wheel carries the browser tab,
-so there is nothing to clone and no Node toolchain.
-
-The tab keeps everything it has, including its agent chat: two agents can work
-the same notebook, your MCP client through tools and the tab's own turns
-through the `claude` CLI, against one session and one kernel. The chat is the
-only part that needs that CLI on your `PATH` (see [Claude
-CLI](#claude-cli)) — every tool here works without it.
+Any client that speaks stdio MCP works; nothing here is specific to Claude
+Code. You need that client, Python 3.11+, and — for the tab's agent chat — the
+`claude` CLI on your `PATH`, at a version the adapter accepts (see [Claude
+CLI](#claude-cli)). Without it the tab still opens, edits and runs; only its
+chat is blocked. The wheel carries the tab with it, so there is nothing to
+clone and no Node toolchain.
 
 ### Which Python runs your cells
 
@@ -65,12 +63,17 @@ Pass the `python` inside the environment, not a resolved path: a virtualenv's
 That environment needs `ipykernel`. A wrong path or a missing `ipykernel` fails
 at launch, with the command to fix it, rather than at the first cell.
 
-### The tab
+### Opening the tab
 
-It opens by itself the first time your client calls `open`, once per session;
-`show` opens it again. On a headless or remote host nothing pops up — `open`
-returns the URL as `editorUrl` for the client to hand you. `--no-browser` turns
-the automatic tab off and leaves `show` working.
+Ask your client to open a notebook and the tab opens by itself, once per
+session; `show` re-opens it whenever you want it back. On a headless or remote
+host nothing pops up — `open` returns the URL as `editorUrl` for the client to
+hand you — and `--no-browser` turns the automatic tab off while leaving `show`
+working.
+
+Everything the editor does is in that tab: the agent chat, per-hunk diff review
+on the cell a change belongs to, the approval gate a risky run parks at, the
+plot tuner and the notebook map.
 
 ### The workspace
 
@@ -82,17 +85,19 @@ the client decides what directory the server starts in. A typo fails at launch.
 Name a notebook that is not there and the error lists the `.ipynb` files that
 *are*, so the client can pick one rather than guess again.
 
-### The tools
+### What the client can do too
 
-Named for what they do and nothing more, because clients that namespace tools
-by server name — Claude Code renders them `mcp__agent_notebook__open` — would
-otherwise produce `notebook_open` inside a namespace already called notebook.
+The client can drive the notebook while you watch, against the same session
+you are working in. The tools are named for what they do and nothing more,
+because clients that namespace them by server name — Claude Code renders them
+`mcp__agent_notebook__open` — would otherwise produce `notebook_open` inside a
+namespace already called notebook.
 
 `open`, `read`, `status`,
 `set_cell_source`, `insert_cell`, `delete_cell`,
 `run_cell`, `run_all`, `cancel_run`, `save`, `show`.
 
-Three things about them are deliberate:
+Four things about them are deliberate:
 
 - **Running a cell can stop and wait for you.** Execution asked for by a tool
   is treated as agent-initiated, so a cell the risk classifier flags pauses at
@@ -111,10 +116,10 @@ Three things about them are deliberate:
   through the approval gate like any other.
 
 Agent turns are **not** exposed as tools — the client is already the agent, and
-running the `claude` CLI underneath it would just nest a second one. You can
-still send a turn from the tab. Neither is the file browser: the tab has a
-picker, and a person browsing their own machine is a different thing from a
-model enumerating it.
+running the `claude` CLI underneath it would just nest a second one. The tab's
+chat is where a turn gets sent, and it works exactly as it does locally.
+Neither is the file browser exposed: the tab has a picker, and a person
+browsing their own machine is a different thing from a model enumerating it.
 
 ### Watching it work
 
