@@ -27,7 +27,7 @@ Install it into the environment your notebooks run in, so your cells keep the
 packages they already have:
 
 ```bash
-pip install notebook-editor-mcp
+/abs/path/to/.venv/bin/pip install notebook-editor-mcp
 
 claude mcp add agent-notebook -- \
   /abs/path/to/.venv/bin/notebook-editor-mcp \
@@ -67,6 +67,9 @@ namespace already called notebook.
 `open`, `read`, `status`,
 `set_cell_source`, `insert_cell`, `delete_cell`,
 `run_cell`, `run_all`, `cancel_run`, `save`, `show`.
+
+Cells are addressed by the `cellId` that `read` returns, and nothing reaches
+the file until `save` — including the outputs of a run.
 
 Three things the tab guarantees you, whatever the client does:
 
@@ -114,7 +117,8 @@ the same stdio protocol:
 
 ```bash
 npx @modelcontextprotocol/inspector \
-  .venv/bin/notebook-editor-mcp --workspace-root /absolute/path --no-browser
+  /abs/path/to/.venv/bin/notebook-editor-mcp \
+  --workspace-root /abs/path/to/project --no-browser
 ```
 
 Read [Security Limits](#security-limits) before pointing a client at a notebook
