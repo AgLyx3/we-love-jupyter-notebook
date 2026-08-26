@@ -22,6 +22,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e '.[test]'
           npm ci
+      # backend/tests/test_bundle_external_origins.py reads the built bundle and
+      # skips without one, which would leave the tab's "no external origin"
+      # guarantee unchecked here while reporting green.
+      - name: Build the frontend into the package
+        run: npm run build
       - name: Test
         run: python -m pytest backend/tests -q
 
