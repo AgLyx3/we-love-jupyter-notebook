@@ -137,10 +137,12 @@
   font-synthesis: none;
 }
 /* ------------------------------------------------------------------- icons
-   Material Symbols Outlined, a ligature webfont (stitch-diff §A1). The fixed
-   1em box with overflow:hidden is the guard for a missing font: a Material
-   Symbols glyph is exactly 1em wide, so this clips nothing when the font is
-   there, and clips "keyboard_tab_rtl" to a square when it is not — instead of
+   Material Symbols Outlined, a ligature webfont (stitch-diff §A1), declared in
+   fonts.css and served from the bundle — it used to come from Google, which
+   made it absent for anyone offline (#51). The fixed 1em box with
+   overflow:hidden stays as the guard for a missing glyph: a Material Symbols
+   glyph is exactly 1em wide, so this clips nothing when the icon is in the
+   subset, and clips "keyboard_tab_rtl" to a square when it is not — instead of
    letting an unstyled ligature name blow out the row it sits in. */
 .material-symbols-outlined {
   font-family: "Material Symbols Outlined";
