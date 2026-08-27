@@ -14,7 +14,7 @@ Two failures this catches, both of which a fully green test suite misses:
 
 Run it against a wheel, from anywhere:
 
-    python scripts/smoke_wheel.py dist/notebook_editor_mcp-0.1.0-py3-none-any.whl
+    python scripts/smoke_wheel.py dist/notebook_editor_mcp-*-py3-none-any.whl
 
 It builds a throwaway venv, installs the wheel with its `mcp` extra, then
 re-executes itself with that venv's interpreter to play the client: list the

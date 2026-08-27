@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 # a user types into `claude mcp add`. One name for one thing: the wheel, the
 # console script and the client entry all read the same.
 name = "notebook-editor-mcp"
-version = "0.1.0"
+version = "0.1.1"
 description = "Local Jupyter notebook editor an MCP client drives, with a browser tab watching the same session"
 readme = "README.md"
 requires-python = ">=3.11"

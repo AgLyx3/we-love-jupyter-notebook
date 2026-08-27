@@ -532,6 +532,7 @@ class KernelExecutionService:
                     recovery_timeout=old_kernel.recovery_timeout,
                     max_output_items=old_kernel.max_output_items,
                     max_output_bytes=old_kernel.max_output_bytes,
+                    kernel_python=old_kernel.kernel_python,
                 )
             self._kernel_notebook_session_id = notebook_session_id
         if old_kernel is not None:
@@ -556,6 +557,7 @@ class KernelExecutionService:
                 recovery_timeout=old_kernel.recovery_timeout,
                 max_output_items=old_kernel.max_output_items,
                 max_output_bytes=old_kernel.max_output_bytes,
+                kernel_python=old_kernel.kernel_python,
             )
             self.kernel = replacement
             self._kernel_notebook_session_id = session_id

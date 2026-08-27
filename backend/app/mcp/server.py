@@ -222,10 +222,11 @@ def _explain(status: int, body: dict[str, Any] | None, *, what: str) -> str:
 class NotebookTools:
     """The HTTP calls behind the tools, with the editor started on demand."""
 
-    def __init__(self, editor: EditorProcess) -> None:
+    def __init__(self, editor: EditorProcess, *, auto_open_browser: bool = True) -> None:
         self.editor = editor
         self.state = EditorSession()
         self._client = httpx.Client(timeout=REQUEST_TIMEOUT_SECONDS)
+        self.auto_open_browser = auto_open_browser
         self._opened_browser = False
 
     def close(self) -> None:
@@ -237,6 +238,12 @@ class NotebookTools:
         what: str = "The request",
     ) -> Any:
         base = self.editor.ensure_running()
+        # Any tool call, not just `open`. The tab is where the work happens —
+        # the approval gate, the diff review, the plot the model cannot see —
+        # so a session that starts with `status` or `read` must not leave the
+        # person without one.
+        if self.auto_open_browser:
+            self._raise_tab(base)
         try:
             response = self._client.request(
                 method, f"{base}/api{path}", json=json_body,
@@ -253,26 +260,63 @@ class NotebookTools:
             return None
         return response.json()
 
+    def _raise_tab(self, url: str) -> None:
+        """Open the tab once, and never let a browser failure fail a tool."""
+        if self._opened_browser:
+            return
+        self._opened_browser = True
+        try:
+            webbrowser.open(url)
+        except Exception:  # noqa: BLE001 - a headless host is not a failure
+            pass
+
     def show_in_browser(self, *, force: bool = False) -> str:
-        """Open the editor tab, once per session unless asked again."""
+        """Open the editor tab, once per session unless asked again.
+
+        `force` is what the `show` tool passes, and it ignores
+        `auto_open_browser`: asking for the tab explicitly should hand it to
+        you even on a server started with --no-browser.
+        """
         url = self.editor.ensure_running()
-        if force or not self._opened_browser:
+        if force:
+            self._opened_browser = True
             try:
                 webbrowser.open(url)
-            except Exception:  # noqa: BLE001 - a headless host is not a failure
+            except Exception:  # noqa: BLE001
                 pass
-            self._opened_browser = True
+        else:
+            self._raise_tab(url)
         return url
+
+
+def _distribution_version() -> str:
+    """The installed distribution's version, so this cannot drift from it.
+
+    A literal here was already one release behind the moment `pyproject.toml`
+    moved, and the number a client reports is not worth a second place to
+    remember. Running from a checkout that was never installed, there is no
+    metadata to read, and the version is not important enough to fail over.
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("notebook-editor-mcp")
+    except PackageNotFoundError:
+        return "0+unknown"
 
 
 def build_server(
     *, workspace_root: str | None = None, open_browser: bool = True,
+    kernel_python: str | None = None,
 ) -> tuple[MCPServer, NotebookTools]:
     """Wire the tools onto a server. Returns both so a caller can shut down."""
-    tools = NotebookTools(EditorProcess(workspace_root=workspace_root))
+    tools = NotebookTools(
+        EditorProcess(workspace_root=workspace_root, kernel_python=kernel_python),
+        auto_open_browser=open_browser,
+    )
     server = MCPServer(
         name="agent-notebook",
-        version="0.1.0",
+        version=_distribution_version(),
         instructions=(
             "A local Jupyter notebook editor with a live browser tab. Tool calls "
             "and the tab are two views of one session, so a person can watch and "
@@ -312,8 +356,6 @@ def build_server(
         except ToolFailure as failure:
             raise ToolFailure(_with_suggestions(str(failure), tools)) from failure
         tools.state.observe(snapshot)
-        if open_browser:
-            tools.show_in_browser()
         shaped = shape_notebook(snapshot)
         shaped["editorUrl"] = tools.editor.base_url
         hint = budget_hint(shaped)
@@ -617,6 +659,41 @@ def _run(
     )
 
 
+def _resolved_kernel_python(value: str, fail) -> str:
+    """Check the interpreter can actually host a kernel, before anything starts.
+
+    A bad `--workspace-root` already fails at launch rather than at the first
+    tool call, and this deserves the same treatment for a better reason: the
+    symptom otherwise is a kernel that dies on start, which reads as the editor
+    being broken rather than as this argument being wrong.
+    """
+    import os
+    import subprocess
+
+    path = Path(value).expanduser()
+    if not path.is_file():
+        fail(
+            f"--kernel-python is not a file: {path}\n"
+            "Point it at the python inside the environment your notebooks "
+            "run in, for example /path/to/.venv/bin/python."
+        )
+    probe = subprocess.run(
+        [str(path), "-c", "import ipykernel"],
+        capture_output=True, text=True,
+    )
+    if probe.returncode != 0:
+        fail(
+            f"--kernel-python has no ipykernel: {path}\n"
+            "A kernel is launched with `python -m ipykernel_launcher`, so that "
+            f"environment needs it: {path} -m pip install ipykernel"
+        )
+    # Absolute, but deliberately not resolved. A virtualenv's `bin/python` is a
+    # symlink to the base interpreter, and following it lands on that
+    # interpreter with none of the virtualenv's packages — which is precisely
+    # the environment this argument exists to get away from.
+    return os.path.abspath(path)
+
+
 def main() -> None:  # pragma: no cover - process entry point
     import argparse
 
@@ -628,6 +705,14 @@ def main() -> None:  # pragma: no cover - process entry point
     parser.add_argument(
         "--no-browser", action="store_true",
         help="Do not open a browser tab automatically (show still does)",
+    )
+    parser.add_argument(
+        "--kernel-python",
+        help=(
+            "Interpreter to run notebook cells with. Defaults to the "
+            "environment this server is installed into, which is wrong when "
+            "that is not where the notebook's dependencies live"
+        ),
     )
     args = parser.parse_args()
 
@@ -641,8 +726,12 @@ def main() -> None:  # pragma: no cover - process entry point
             )
         args.workspace_root = str(root.resolve())
 
+    if args.kernel_python is not None:
+        args.kernel_python = _resolved_kernel_python(args.kernel_python, parser.error)
+
     server, tools = build_server(
         workspace_root=args.workspace_root, open_browser=not args.no_browser,
+        kernel_python=args.kernel_python,
     )
     try:
         server.run(transport="stdio")

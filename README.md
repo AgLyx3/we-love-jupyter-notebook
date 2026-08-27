@@ -17,6 +17,113 @@ directly — and every change is reviewable as a diff and undoable.
 Everything runs on your machine and binds to loopback only. Read
 [Security Limits](#security-limits) before using it with untrusted notebooks.
 
+## Install
+
+You work in the browser tab. An MCP client — Claude Code, for instance — starts
+the editor and opens it for you. [Running it
+locally](#run-it-locally-instead) is for working on the editor itself.
+
+Install it into the environment your notebooks run in, so your cells keep the
+packages they already have:
+
+```bash
+/abs/path/to/.venv/bin/pip install notebook-editor-mcp
+
+claude mcp add agent-notebook -- \
+  /abs/path/to/.venv/bin/notebook-editor-mcp \
+  --workspace-root /abs/path/to/project
+```
+
+To keep the editor out of your project instead, point `--kernel-python` at the
+environment your cells need:
+
+```bash
+claude mcp add agent-notebook -- \
+  uvx --from notebook-editor-mcp notebook-editor-mcp \
+  --workspace-root /abs/path/to/project \
+  --kernel-python /abs/path/to/.venv/bin/python
+```
+
+`--workspace-root` confines the editor to one directory. Use absolute paths for
+it and for the executable.
+
+Then ask your client for a notebook. The tab opens on its first tool call and
+`show` brings it back. Everything the editor does is there: the agent chat,
+per-hunk diff review, the approval gate a risky run parks at, the plot tuner
+and the notebook map.
+
+Needs Python 3.11+ and `ipykernel` in whichever environment runs your cells,
+plus the `claude` CLI on your `PATH` for the tab's chat (see [Claude
+CLI](#claude-cli)). Any client that speaks stdio MCP works.
+
+### What the client can do too
+
+The client can drive the notebook while you watch, against the same session
+you are working in. The tools are named for what they do and nothing more,
+because clients that namespace them by server name — Claude Code renders them
+`mcp__agent_notebook__open` — would otherwise produce `notebook_open` inside a
+namespace already called notebook.
+
+`open`, `read`, `status`,
+`set_cell_source`, `insert_cell`, `delete_cell`,
+`run_cell`, `run_all`, `cancel_run`, `save`, `show`.
+
+Cells are addressed by the `cellId` that `read` returns, and nothing reaches
+the file until `save` — including the outputs of a run.
+
+Three things the tab guarantees you, whatever the client does:
+
+- **You approve anything risky before it runs.** Execution a tool asks for is
+  agent-initiated, so a cell the risk classifier flags stops at *awaiting
+  approval* and waits for you — the same gate an agent turn's downstream cells
+  get.
+- **Your edits win.** Change a cell in the tab and a client writing against the
+  version it last read is refused and told to re-read. Nothing retries over the
+  top of your work.
+- **New cells arrive for review, not already run.** `insert_cell` marks its
+  cell agent-authored, the tab badges it "review before running", and leaves it
+  inert. Running it is a separate call through the same approval gate.
+
+Agent turns are **not** exposed as tools — the client is already the agent, and
+running the `claude` CLI underneath it would just nest a second one. The tab's
+chat is where a turn gets sent, and it works exactly as it does locally.
+Neither is the file browser exposed: the tab has a picker, and a person
+browsing their own machine is a different thing from a model enumerating it.
+
+### Watching it work
+
+Run as an MCP server the editor is a child process the client starts for you,
+on a port chosen at random, with stdout reserved for the protocol. That is
+three ways in which the usual `scripts/dev.py` habits do not apply, so:
+
+- **The port is announced on stderr**, where MCP clients keep their server
+  logs: `notebook editor ready at http://127.0.0.1:PORT (log: ...)`. Open that
+  URL and you are looking at the same session the tools are driving. The same
+  URL comes back as `editorUrl` from `open`, and from
+  `show` on request.
+- **`NOTEBOOK_EDITOR_LOG=/path/to/editor.log`** keeps the editor's own log at a
+  path you choose instead of a temp file that is deleted when it stops. This is
+  what to set before `tail -f`. Unset, a *failed* start is still drained and
+  reported in the error, so you only need this for watching a server that is
+  working.
+- **Never print to stdout** from the server process. It is the transport; a
+  stray `print` corrupts the protocol rather than showing up somewhere.
+- **`--no-browser`** suppresses the automatic tab, for automation and headless
+  hosts. `show` still opens it, and `open` still returns the URL as
+  `editorUrl` for a client to hand you.
+
+To see the tool surface without wiring up a client, the MCP Inspector speaks
+the same stdio protocol:
+
+```bash
+npx @modelcontextprotocol/inspector \
+  /abs/path/to/.venv/bin/notebook-editor-mcp \
+  --workspace-root /abs/path/to/project --no-browser
+```
+
+Read [Security Limits](#security-limits) before pointing a client at a notebook
+you would not run yourself.
+
 ## The interface
 
 The editor at rest: files and the notebook map on the left, the notebook in the
@@ -63,7 +170,12 @@ Screenshots are captured from a live session against the notebooks in
 [`docs/screenshots/`](docs/screenshots/) for the full set and how to re-capture
 them.
 
-## Prerequisites
+## Run it locally instead
+
+For working on the editor itself, or to use the browser UI on its own with
+agent turns driven from the tab rather than from an MCP client.
+
+### Prerequisites
 
 - **Python** 3.11+
 - **Node.js** 20.19+ or 22.12+, with **npm**
@@ -72,7 +184,7 @@ them.
 - **macOS or Linux.** The launcher and Playwright cleanup use POSIX process
   groups/signals. Windows is out of scope for v1.
 
-## Setup
+### Setup
 
 From the repository root:
 
@@ -88,7 +200,7 @@ Playwright is only needed if you plan to run the end-to-end suite:
 npx playwright install chromium
 ```
 
-## Claude CLI
+### Claude CLI
 
 Agent turns shell out to the `claude` command-line tool. You can open, edit,
 run, and save notebooks without it — the CLI is only invoked when you send an
@@ -135,7 +247,7 @@ works — only agent turns are blocked.
 > the real CLI — it does not perform Trusted structural edits, and it is not a
 > substitute for a real agent.
 
-## Run
+### Run
 
 One command starts FastAPI at `http://127.0.0.1:8000` and Vite at
 `http://127.0.0.1:5173`:
@@ -155,129 +267,6 @@ Useful flags:
 # Use different ports (the Vite dev server proxies /api to the backend port)
 .venv/bin/python scripts/dev.py --backend-port 8055 --frontend-port 5199
 ```
-
-## As an MCP server
-
-The editor can also run as an [MCP](https://modelcontextprotocol.io) server, so
-an MCP client — Claude Code, for instance — edits and runs the notebook through
-tools while you watch the same session in a browser tab and step in when you
-want to. The tab is not a read-only view: the notebook, the kernel and the
-scope are one server-side session, so a cell the client edits updates in front
-of you, and a cell you edit is a cell the client is then refused for editing
-against a stale read.
-
-### Install it
-
-The published wheel carries the browser tab with it, so there is nothing to
-clone and no Node toolchain to install. With [uv](https://docs.astral.sh/uv/):
-
-```bash
-claude mcp add agent-notebook -- \
-  uvx --from notebook-editor-mcp notebook-editor-mcp \
-  --workspace-root /absolute/path/to/your/project
-```
-
-`uvx` fetches the package into a throwaway environment on first run, so the
-version stays pinned to the release rather than to whatever a shared
-environment drifted to. If you would rather install it once and keep it:
-
-```bash
-pipx install notebook-editor-mcp
-claude mcp add agent-notebook -- \
-  notebook-editor-mcp --workspace-root /absolute/path/to/your/project
-```
-
-**From a checkout instead** — for working on the editor itself. Install the
-extra and build the frontend, **both**, in this order: the tab is served from
-the built frontend, and skipping `npm run build` leaves the editor unable to
-start, with the first tool call failing with exactly that message.
-
-```bash
-.venv/bin/pip install -e '.[mcp]'
-npm run build
-
-claude mcp add agent-notebook -- \
-  /absolute/path/to/.venv/bin/notebook-editor-mcp \
-  --workspace-root /absolute/path/to/your/project
-```
-
-Use an absolute path for `--workspace-root`, and for the executable if you name
-one — the client decides what directory the server starts in, so a relative one
-is ambiguous. `--workspace-root` confines every path the editor will open,
-list, or write to that directory; it is optional and strongly recommended,
-since without it the editor reaches anywhere you can. A typo fails at launch
-rather than at the first tool call.
-
-`--no-browser` stops the tab opening by itself. On a headless or remote
-machine no tab can open regardless, so `open` returns an `editorUrl`
-for the client to hand you, and `show` returns it again on request.
-
-If a client names a notebook that is not there, the error lists the `.ipynb`
-files that *are* in the workspace, so it can pick one rather than guess again.
-
-**The tools.** The server is registered under a name, and MCP namespaces every
-tool by it, so a client sees `mcp__agent_notebook__open`. The tools are
-therefore named for what they do and nothing more — repeating the domain in
-each one only produced `notebook_open` inside a namespace already called
-notebook.
-
-`open`, `read`, `status`,
-`set_cell_source`, `insert_cell`, `delete_cell`,
-`run_cell`, `run_all`, `cancel_run`, `save`, `show`.
-
-Three things about them are deliberate:
-
-- **Running a cell can stop and wait for you.** Execution asked for by a tool
-  is treated as agent-initiated, so a cell the risk classifier flags pauses at
-  *awaiting approval* and does not run until you approve it in the tab — the
-  same gate an agent turn's downstream cells get. That pause is the reason to
-  have a browser window at all.
-- **Edits are checked against what the client last read.** If you changed the
-  notebook in the tab in between, the edit is refused rather than applied, and
-  the client is told to re-read. Nothing retries over the top of your change.
-- **Images are described, not returned.** A plot comes back as its size and
-  type; the picture is in the tab. A modest plotting notebook is about 23K
-  tokens of base64 if forwarded whole, and unreadable to a model either way.
-- **An added cell is never run for you.** `insert_cell` marks the new
-  cell as agent-authored — the tab shows it with a badge reading "review before
-  running" — and leaves it inert. Running it is a separate call, and goes
-  through the approval gate like any other.
-
-Agent turns are **not** exposed as tools — the client is already the agent, and
-running the `claude` CLI underneath it would just nest a second one. You can
-still send a turn from the tab. Neither is the file browser: the tab has a
-picker, and a person browsing their own machine is a different thing from a
-model enumerating it.
-
-### Watching it work
-
-Run as an MCP server the editor is a child process the client starts for you,
-on a port chosen at random, with stdout reserved for the protocol. That is
-three ways in which the usual `scripts/dev.py` habits do not apply, so:
-
-- **The port is announced on stderr**, where MCP clients keep their server
-  logs: `notebook editor ready at http://127.0.0.1:PORT (log: ...)`. Open that
-  URL and you are looking at the same session the tools are driving. The same
-  URL comes back as `editorUrl` from `open`, and from
-  `show` on request.
-- **`NOTEBOOK_EDITOR_LOG=/path/to/editor.log`** keeps the editor's own log at a
-  path you choose instead of a temp file that is deleted when it stops. This is
-  what to set before `tail -f`. Unset, a *failed* start is still drained and
-  reported in the error, so you only need this for watching a server that is
-  working.
-- **Never print to stdout** from the server process. It is the transport; a
-  stray `print` corrupts the protocol rather than showing up somewhere.
-
-To see the tool surface without wiring up a client, the MCP Inspector speaks
-the same stdio protocol:
-
-```bash
-npx @modelcontextprotocol/inspector \
-  .venv/bin/notebook-editor-mcp --workspace-root /absolute/path --no-browser
-```
-
-Read [Security Limits](#security-limits) before pointing a client at a notebook
-you would not run yourself.
 
 ## Using it
 

@@ -228,7 +228,11 @@ describe("remediation behaviors", () => {
     expect(await screen.findByText("agent running")).toBeInTheDocument();
     completed = true;
     (await firstEventSource()).emit("notebook.updated", { revision: 3 }, 1);
-    expect(await screen.findByText("failed")).toBeInTheDocument();
+    // Explicit timeout, unlike its neighbours: this is the only case that has
+    // to rehydrate ~10KB of outcome and ~5KB of error through a refetch and a
+    // re-render, and it has timed out on a loaded CI runner against the 1s
+    // default. The assertion below already waits; this one has to as well.
+    expect(await screen.findByText("failed", {}, { timeout: 5000 })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText((_, element) => element?.tagName === "P" && element.textContent?.endsWith("full outcome tail") === true)).toBeInTheDocument());
     expect(screen.getByText((_, element) => element?.classList.contains("error-text") === true && element.textContent?.endsWith("full error tail") === true)).toBeInTheDocument();
     expect(await screen.findByLabelText("Discard agent change to code cell 1")).toBeInTheDocument();
