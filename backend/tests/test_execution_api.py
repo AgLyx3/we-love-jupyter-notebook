@@ -7,6 +7,11 @@ from backend.app.kernel_execution.kernel_session import KernelResult
 
 
 class ApiKernel:
+    # Mirrors KernelSession: kernel_status() reports which interpreter runs
+    # the cells (#52), so a double without these is an AttributeError on
+    # every status read.
+    interpreter = "/fake/.venv/bin/python"
+    interpreter_source = "kernelspec"
     kernel_session_id = "api-kernel"
     status = "idle"
     busy_attempt_id = None

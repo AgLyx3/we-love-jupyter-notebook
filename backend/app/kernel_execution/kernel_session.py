@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import os
+import sys
 from queue import Empty
 from threading import RLock
 from typing import Any
@@ -22,6 +23,28 @@ from .models import (
 # notebooks' own dependencies and the wrong one when it was installed apart
 # from them, which is what `uvx` and `pipx` do.
 KERNEL_PYTHON_ENV_VAR = "NOTEBOOK_KERNEL_PYTHON"
+
+
+def _as_launched(argv0: str) -> str:
+    """What a kernelspec's first argument becomes when the kernel is started.
+
+    `jupyter_client.KernelManager.format_kernel_cmd` swaps a bare `python`,
+    `python3` or `python3.12` for `sys.executable` before launching, on the
+    reasoning that an interpreter running from an unactivated environment will
+    not find its own `python` on PATH. Reporting the spec's literal `python`
+    would therefore name something that never runs — and worse, it would hide
+    the exact case this is for: the `python3` kernelspec inside the editor's
+    own environment says `python`, and that substitution is how a notebook ends
+    up executing against the editor's packages rather than the project's.
+
+    Anything absolute is already the answer and is returned unchanged.
+    """
+    aliases = {
+        "python",
+        f"python{sys.version_info[0]}",
+        f"python{sys.version_info[0]}.{sys.version_info[1]}",
+    }
+    return sys.executable if argv0 in aliases else argv0
 
 
 @dataclass(frozen=True)
@@ -51,10 +74,61 @@ class KernelSession:
         self.max_output_bytes = max_output_bytes
         self.kernel_session_id = uuid4().hex
         self._manager = None
+        # Resolved lazily and remembered, because the answer is wanted before a
+        # kernel has ever started — a person reading "Kernel not started" is
+        # entitled to know which interpreter it would be — and looking up a
+        # kernelspec on every status poll would be silly.
+        self._kernelspec_interpreter: str | None = None
+        self._looked_for_kernelspec = False
         self._client = None
         self._lock = RLock()
         self._busy_attempt_id: str | None = None
         self._restart_required = False
+
+    @property
+    def interpreter(self) -> str | None:
+        """The Python that runs the cells, or None if it cannot be determined.
+
+        This exists because `ModuleNotFoundError` has two opposite fixes and
+        nothing on screen said which one applied (#52): the environment is
+        right and is missing a package, or the environment is wrong entirely.
+        Naming the interpreter is what tells those apart.
+
+        Three sources, most authoritative first. A started kernel's spec is the
+        truth about what is running. Before one starts, `kernel_python` is what
+        it *will* be. With neither, jupyter_client would resolve the `python3`
+        kernelspec, so this resolves the same one to give the same answer.
+
+        Never raises. A status endpoint that fails because a kernelspec lookup
+        threw would be a worse bug than the one this is here to diagnose.
+        """
+        if self._manager is not None:
+            argv = getattr(getattr(self._manager, "kernel_spec", None), "argv", None)
+            if argv:
+                return _as_launched(argv[0])
+        if self.kernel_python is not None:
+            return self.kernel_python
+        if not self._looked_for_kernelspec:
+            self._looked_for_kernelspec = True
+            try:
+                from jupyter_client.kernelspec import KernelSpecManager
+
+                argv = KernelSpecManager().get_kernel_spec("python3").argv
+                self._kernelspec_interpreter = _as_launched(argv[0]) if argv else None
+            except Exception:  # noqa: BLE001 - no kernelspec is a real state
+                self._kernelspec_interpreter = None
+        return self._kernelspec_interpreter
+
+    @property
+    def interpreter_source(self) -> str:
+        """Where `interpreter` came from, so a caller can say *why* it is that.
+
+        The distinction a reader needs is whether someone chose this
+        interpreter or whether it is simply what the editor's own environment
+        resolves to — which is the case that goes wrong, and the case a
+        `--kernel-python` that did not take effect looks exactly like.
+        """
+        return "kernel-python" if self.kernel_python is not None else "kernelspec"
 
     @property
     def busy_attempt_id(self) -> str | None:

@@ -24,6 +24,11 @@ from backend.app.turn_scope.service import TurnScopeService
 
 
 class FakeKernel:
+    # Mirrors KernelSession: kernel_status() reports which interpreter runs
+    # the cells (#52), so a double without these is an AttributeError on
+    # every status read.
+    interpreter = "/fake/.venv/bin/python"
+    interpreter_source = "kernelspec"
     kernel_session_id = "kernel-1"
     status = "idle"
     busy_attempt_id = None

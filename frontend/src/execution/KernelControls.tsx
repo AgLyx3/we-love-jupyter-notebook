@@ -1,6 +1,27 @@
 import Icon from "../ui/Icon";
 import type { KernelStatus } from "../api/client";
 
+/** What the kernel chip says on hover: the environment the cells run in.
+ *
+ *  `ModuleNotFoundError: No module named 'pandas'` means one of two opposite
+ *  things — this environment is missing a package, or it is the wrong
+ *  environment — and until this was reported nothing on the page told them
+ *  apart (#52). Naming the interpreter is what does.
+ *
+ *  Naming the *source* matters as much: passing `--kernel-python` and still
+ *  landing in the wrong environment looks identical to never having passed it.
+ *
+ *  Deliberately a tooltip rather than a visible chip. The path is long, the
+ *  toolbar is full, and the moment a person needs this is when a cell has just
+ *  failed — which is where it belongs on screen, attached to the failure. That
+ *  is the other half of #52 and is not this change.
+ */
+function interpreterTitle(status: KernelStatus): string | undefined {
+  if (!status.interpreter) return undefined;
+  const chosen = status.interpreterSource === "kernel-python";
+  return `Cells run in ${status.interpreter}${chosen ? " (--kernel-python)" : ""}`;
+}
+
 export default function KernelControls({ status, mutationDisabled, runAwaitingApproval = false, onRunAll, onInterrupt, onRestart }: { status: KernelStatus; mutationDisabled: boolean; runAwaitingApproval?: boolean; onRunAll: () => void; onInterrupt: () => void; onRestart: () => void }) {
   // A run parked at `awaiting_approval` is waiting on a person, and restarting
   // underneath it strands the operation: the approval it is waiting for can no
@@ -13,7 +34,7 @@ export default function KernelControls({ status, mutationDisabled, runAwaitingAp
   // back. That is the way out, and the title says so.
   const restartBlocked = runAwaitingApproval && Boolean(status.kernelSessionId);
   return <div className="kernel-controls">
-    <span className={`kernel-state state-${status.state}`}><i />Kernel {status.state.replaceAll("_", " ")}</span>
+    <span className={`kernel-state state-${status.state}`} title={interpreterTitle(status)}><i />Kernel {status.state.replaceAll("_", " ")}</span>
     {/* The kernel chip states the kernel's own truth, and during a parked run
         that truth reads as if nothing is happening — a cell awaiting approval
         has not started one, so it says "Kernel not started" while a run is very

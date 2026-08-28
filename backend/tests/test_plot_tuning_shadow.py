@@ -47,6 +47,11 @@ class FakeClock:
 
 
 class FakeKernel:
+    # Mirrors KernelSession: kernel_status() reports which interpreter runs
+    # the cells (#52), so a double without these is an AttributeError on
+    # every status read.
+    interpreter = "/fake/.venv/bin/python"
+    interpreter_source = "kernelspec"
     """Stands in for `KernelSession`, recording exactly what it was asked to run.
 
     Its output echoes the source, which is what lets a test assert *which*
