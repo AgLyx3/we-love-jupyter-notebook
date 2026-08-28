@@ -644,6 +644,39 @@ def test_the_readme_lists_every_tool_that_exists(built):
     assert listed == names, f"README missing {names - listed}, extra {listed - names}"
 
 
+def test_the_readme_names_the_cell_argument_the_tools_actually_take(built):
+    """A reader followed this sentence exactly and got a validation error.
+
+    The page said cells are addressed by the `cellId` that `read` returns,
+    which is true of the value and wrong about the field: the JSON is camelCase
+    and the tool arguments are snake_case, so `run_cell({"cellId": ...})` is
+    rejected for a missing `cell_id`. It is the one field name the README
+    gives, and the most load-bearing sentence it has about driving the tools —
+    a model client walks into it the same way (#56).
+
+    Checked against the schemas rather than restated, because the reason this
+    was wrong is that nothing connected the two.
+    """
+    from pathlib import Path
+
+    server, _ = built
+    tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+    parameters = set()
+    for tool in tools.values():
+        parameters |= set((tool.input_schema.get("properties") or {}).keys())
+    assert "cell_id" in parameters, f"no cell_id in the tool surface: {sorted(parameters)}"
+
+    readme = (Path(__file__).resolve().parents[2] / "README.md").read_text()
+    addressing = [
+        para for para in readme.split("\n\n") if "addressed by the" in para
+    ]
+    assert len(addressing) == 1, "expected one paragraph on how cells are addressed"
+    assert "`cell_id`" in addressing[0], (
+        "the paragraph on addressing cells does not name `cell_id`, the argument "
+        "the tools take — a reader passing `cellId` gets a validation error"
+    )
+
+
 def test_every_mutating_tool_says_the_file_is_not_written_yet(built):
     """Found by running the suite against a second model.
 
