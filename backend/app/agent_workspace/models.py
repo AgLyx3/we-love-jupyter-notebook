@@ -113,6 +113,61 @@ class ReturnedStructureEntry:
     content: str
 
 
+@dataclass(frozen=True)
+class MemoryOperation:
+    """One source change a past turn made, with its outcome as known now.
+
+    Outcome comes from the per-operation ledger, so a single cell can produce
+    two of these: the hunks that survived and the hunks the user undid are
+    different facts with different statuses, and collapsing them would report
+    one of the two wrongly.
+
+    - ``KEPT``: the user reviewed it and kept it.
+    - ``APPLIED``: it is in the notebook but the user has not reviewed it yet.
+      Distinct from ``KEPT`` on purpose — an unreviewed change carries no signal
+      of approval, and reporting it as kept would invent one.
+    - ``UNDONE``: the user rejected it. This is the only status that carries a
+      diff, because it is the only content that exists nowhere else.
+    """
+
+    cell_id: str
+    status: str  # "KEPT" | "APPLIED" | "UNDONE"
+    previous_source: str
+    next_source: str
+    # The cell has diverged from the ledger since — a hand edit in the tab, an
+    # MCP client's set_cell_source, or the plot-tuning panel writing back a
+    # tuned literal all do it, and the check that derives this cannot tell them
+    # apart. Orthogonal to status rather than a fourth value of it: a hunk can
+    # be kept *and* since overwritten, and the agent needs both facts. Without
+    # it the feed asserts an account of the cell the document no longer matches.
+    stale: bool = False
+    # "edit", "add", "delete", "move" or "retype". Only "edit" carries a
+    # before/after pair to diff. The other four are structural: the ledger keeps
+    # a hash for an add and nothing at all for the rest, so they are described
+    # rather than diffed. They still have to appear — a Trusted turn that only
+    # added, deleted, or moved cells would otherwise render as "It made no
+    # changes", which is a false statement about a destructive edit and invites
+    # the agent to make it again.
+    kind: str = "edit"
+
+
+@dataclass(frozen=True)
+class MemoryEntry:
+    """One past turn, as the thread memory feed will render it.
+
+    `turn_status` is set only when the turn as a whole ended without a settled
+    per-operation outcome (cancelled, failed). It is never inferred: a cancelled
+    turn can have applied its changes before cancelling, so the feed states what
+    happened and points at the notebook rather than guessing.
+    """
+
+    prompt: str
+    mode: str
+    operations: tuple[MemoryOperation, ...] = ()
+    reply: str = ""
+    turn_status: str = ""
+
+
 @dataclass
 class AgentWorkspace:
     root: Path
