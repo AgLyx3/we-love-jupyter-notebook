@@ -34,6 +34,11 @@ PLOT = "plot(n_samples, bins, alpha)\n"
 
 
 class FakeKernel:
+    # Mirrors KernelSession: kernel_status() reports which interpreter runs
+    # the cells (#52), so a double without these is an AttributeError on
+    # every status read.
+    interpreter = "/fake/.venv/bin/python"
+    interpreter_source = "kernelspec"
     """Enough of `KernelSession` for the execution service, and no more.
 
     Records every source it is handed, which is how the prefix-guard tests see

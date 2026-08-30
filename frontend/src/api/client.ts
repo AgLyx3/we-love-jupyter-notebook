@@ -203,6 +203,10 @@ export interface KernelStatus {
   kernelSessionId: string | null;
   state: string;
   executionAttemptId: string | null;
+  // Which Python runs the cells, and whether anyone chose it (#52). Optional
+  // because a server older than this field is still a server worth talking to.
+  interpreter?: string | null;
+  interpreterSource?: "kernel-python" | "kernelspec";
 }
 
 export interface SessionStatus {

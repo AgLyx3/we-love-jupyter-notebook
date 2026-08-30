@@ -459,7 +459,17 @@ class KernelExecutionService:
             return self._copy_operation(max(active, key=lambda item: item.created_at))
 
     def kernel_status(self) -> dict[str, Any]:
-        return {"kernelSessionId": self.kernel.kernel_session_id, "state": self.kernel.status, "executionAttemptId": self.kernel.busy_attempt_id}
+        # `interpreter` is the environment question (#52). A cell that fails on
+        # `import pandas` is either missing a package or running in the wrong
+        # environment, and until this was reported nothing on the page or on
+        # the wire distinguished them.
+        return {
+            "kernelSessionId": self.kernel.kernel_session_id,
+            "state": self.kernel.status,
+            "executionAttemptId": self.kernel.busy_attempt_id,
+            "interpreter": self.kernel.interpreter,
+            "interpreterSource": self.kernel.interpreter_source,
+        }
 
     def interrupt(self, kernel_session_id: str, *, execution_attempt_id: str | None = None) -> dict[str, Any]:
         if not self.kernel.interrupt_correlated(
