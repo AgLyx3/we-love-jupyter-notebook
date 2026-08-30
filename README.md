@@ -34,8 +34,13 @@ claude mcp add agent-notebook -- \
   --workspace-root /abs/path/to/project
 ```
 
-To keep the editor out of your project instead, point `--kernel-python` at the
-environment your cells need:
+That environment is the one your cells run in. Left alone, the editor executes
+them wherever it was installed — which is the right answer here and the wrong
+one for `uvx` or `pipx`, where a notebook opening with `import pandas` fails on
+its first cell.
+
+So to keep the editor out of your project instead, point `--kernel-python` at
+the environment your cells need:
 
 ```bash
 claude mcp add agent-notebook -- \
@@ -52,9 +57,11 @@ Then ask your client for a notebook. The tab opens on its first tool call and
 per-hunk diff review, the approval gate a risky run parks at, the plot tuner
 and the notebook map.
 
-Needs Python 3.11+ and `ipykernel` in whichever environment runs your cells,
-plus the `claude` CLI on your `PATH` for the tab's chat (see [Claude
-CLI](#claude-cli)). Any client that speaks stdio MCP works.
+Needs Python 3.11+, plus the `claude` CLI on your `PATH` for the tab's chat
+(see [Claude CLI](#claude-cli)). Any client that speaks stdio MCP works. The
+first route installs `ipykernel` for you; with `--kernel-python`, the
+environment you point at needs it, and the server says so at startup if it is
+missing.
 
 ### What the client can do too
 
@@ -68,8 +75,9 @@ namespace already called notebook.
 `set_cell_source`, `insert_cell`, `delete_cell`,
 `run_cell`, `run_all`, `cancel_run`, `save`, `show`.
 
-Cells are addressed by the `cellId` that `read` returns, and nothing reaches
-the file until `save` — including the outputs of a run.
+Cells are addressed by the `cellId` that `read` returns — passed back as
+`cell_id`, since the tool arguments are snake_case and the JSON is not. Nothing
+reaches the file until `save`, including the outputs of a run.
 
 Three things the tab guarantees you, whatever the client does:
 
@@ -241,8 +249,11 @@ Claude CLI version"**; if `claude` is missing from `PATH`, you get **"Claude
 CLI is unavailable."** In both cases opening/editing/running notebooks still
 works — only agent turns are blocked.
 
-> **Just want to try the UI without Claude?** Start the app with
-> `--test-agent` (see [Run](#run)) to use a built-in deterministic adapter.
+> **Just want to try the UI without Claude?** From a checkout, start the app
+> with `scripts/dev.py --test-agent` (see [Run](#run)) to use a built-in
+> deterministic adapter. It is a flag of that script, not of the installed
+> `notebook-editor-mcp` command, which has only `--workspace-root`,
+> `--no-browser` and `--kernel-python`.
 > It produces canned Blocking-mode edits for demoing the flow and never calls
 > the real CLI — it does not perform Trusted structural edits, and it is not a
 > substitute for a real agent.
