@@ -11,14 +11,19 @@ from __future__ import annotations
 
 import json
 import re
+import select
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
-from mcp_types import UNSUPPORTED_PROTOCOL_VERSION
+from mcp.types import UNSUPPORTED_PROTOCOL_VERSION
 
 REPO = Path(__file__).resolve().parents[2]
 README = REPO / "README.md"
+
+REPLY_TIMEOUT_SECONDS = 60.0
 
 
 def _readme() -> str:
@@ -28,13 +33,21 @@ def _readme() -> str:
 def test_no_link_in_the_readme_is_repo_relative():
     """On the project page there is no repository to be relative to.
 
-    Four screenshots rendered as broken images and four links — the screenshot
-    directory, CONTRIBUTING, the Code of Conduct, SECURITY — and the licence
-    went nowhere. Written as a rule rather than a list of the eight, because the
-    next relative link someone adds breaks the same way.
+    Nine targets went nowhere: four screenshots that rendered as broken images,
+    and links to the screenshot directory, CONTRIBUTING, the Code of Conduct,
+    SECURITY and the licence. Written as a rule rather than a list of the nine,
+    because the next relative link someone adds breaks the same way — so it
+    covers the raw HTML this page also contains, and reference-style
+    definitions, not only inline Markdown.
     """
-    text = _readme()
-    targets = re.findall(r"\]\(([^)]+)\)", text) + re.findall(r'src="([^"]+)"', text)
+    # Fenced blocks are examples, not links: the install commands contain
+    # paths that would read as relative targets and are not.
+    text = re.sub(r"^```.*?^```", "", _readme(), flags=re.S | re.M)
+    targets = (
+        re.findall(r"\]\(\s*([^)\s]+)", text)                 # [text](target)
+        + re.findall(r"""(?:src|href)\s*=\s*["']([^"']+)""", text)  # raw HTML
+        + re.findall(r"^\s*\[[^\]]+\]:\s*(\S+)", text, flags=re.M)  # [ref]: target
+    )
     relative = [
         target for target in targets
         if not target.startswith(("http://", "https://", "mailto:", "#", "data:"))
@@ -79,12 +92,24 @@ HANDSHAKE = {
 
 
 def _replies_to(*messages: dict) -> list[dict]:
-    """Send frames down a real stdio server and read one reply per frame."""
+    """Send frames down a real stdio server and read one reply per frame.
+
+    Bounded, and with the child's stderr kept: the failure this guards against
+    is an SDK release that stops answering one of these frames, which as a bare
+    `readline()` would hang the suite rather than fail it. A server that dies on
+    startup instead has its own reason to give, and it is on stderr.
+    """
+    log = tempfile.TemporaryFile()
     server = subprocess.Popen(
         [sys.executable, "-m", "backend.app.mcp.server", "--no-browser"],
         cwd=REPO, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL, bufsize=0,
+        stderr=log, bufsize=0,
     )
+
+    def stderr() -> str:
+        log.seek(0)
+        return log.read().decode("utf-8", "replace").strip() or "(nothing on stderr)"
+
     try:
         # stdin stays open until every reply is read: closing it after the
         # writes races the dispatcher, and the server can exit on EOF before it
@@ -92,11 +117,33 @@ def _replies_to(*messages: dict) -> list[dict]:
         for message in messages:
             server.stdin.write((json.dumps(message) + "\n").encode())
             server.stdin.flush()
-        return [json.loads(server.stdout.readline()) for _ in messages]
+        buffer = bytearray()
+        deadline = time.monotonic() + REPLY_TIMEOUT_SECONDS
+        while buffer.count(b"\n") < len(messages):
+            remaining = deadline - time.monotonic()
+            got = buffer.count(b"\n")
+            if remaining <= 0 or not select.select([server.stdout], [], [], remaining)[0]:
+                raise AssertionError(
+                    f"the server answered {got} of {len(messages)} frames in "
+                    f"{REPLY_TIMEOUT_SECONDS}s. stderr:\n{stderr()}"
+                )
+            chunk = server.stdout.read(4096)
+            if not chunk:
+                raise AssertionError(
+                    f"the server exited after {got} of {len(messages)} frames "
+                    f"(rc={server.poll()}). stderr:\n{stderr()}"
+                )
+            buffer += chunk
+        return [json.loads(line) for line in buffer.splitlines()[: len(messages)]]
     finally:
         server.stdin.close()
         server.terminate()
-        server.wait(timeout=30)
+        try:
+            server.wait(timeout=30)
+        except subprocess.TimeoutExpired:  # pragma: no cover - a wedged child
+            server.kill()
+            server.wait(timeout=30)
+        log.close()
 
 
 def test_a_handshake_behind_an_unread_probe_is_refused():

@@ -616,26 +616,29 @@ def test_a_stuck_run_can_be_cancelled(built):
     assert "holds the notebook" in tools["cancel_run"].description
 
 
-def _readme_signatures():
-    """The README's tool list, parsed back into {name: {argument: required}}.
+def _readme_tool_section():
+    """The README's tool list and the note under it, as (signatures, note).
 
     Found by its contents, not by a heading or an offset: both have already been
     renamed and renumbered by ordinary editing, and a tool-list check that
-    breaks when prose moves gets weakened to make it pass.
+    breaks when prose moves gets weakened to make it pass. `signatures` is
+    {tool: {argument: required}}; `note` is the paragraph that follows, which is
+    where anything a signature cannot carry has to live.
     """
     import re
     from pathlib import Path
 
     text = (Path(__file__).resolve().parents[2] / "README.md").read_text()
-    paragraphs = [para for para in text.split("\n\n") if "set_cell_source(" in para]
-    assert len(paragraphs) == 1, (
-        f"expected exactly one paragraph listing the tools, found {len(paragraphs)}"
+    paragraphs = text.split("\n\n")
+    listing = [i for i, para in enumerate(paragraphs) if "set_cell_source(" in para]
+    assert len(listing) == 1, (
+        f"expected exactly one paragraph listing the tools, found {len(listing)}"
     )
     signatures = {}
-    for name, arguments in re.findall(r"`([a-z_]+)\(([^)]*)\)`", paragraphs[0]):
+    for name, arguments in re.findall(r"`([a-z_]+)\(([^)]*)\)`", paragraphs[listing[0]]):
         listed = [a.strip() for a in arguments.split(",") if a.strip()]
         signatures[name] = {a.rstrip("?"): not a.endswith("?") for a in listed}
-    return signatures
+    return signatures, paragraphs[listing[0] + 1]
 
 
 def test_the_readme_lists_every_tool_that_exists(built):
@@ -648,7 +651,7 @@ def test_the_readme_lists_every_tool_that_exists(built):
     """
     server, _ = built
     names = {tool.name for tool in asyncio.run(server.list_tools())}
-    listed = set(_readme_signatures())
+    listed = set(_readme_tool_section()[0])
     assert listed == names, f"README missing {names - listed}, extra {listed - names}"
 
 
@@ -662,15 +665,17 @@ def test_the_readme_signatures_match_the_schemas_argument_for_argument(built):
     live schema rather than restated.
     """
     server, _ = built
-    signatures = _readme_signatures()
+    signatures, _ = _readme_tool_section()
     for tool in asyncio.run(server.list_tools()):
         schema = tool.input_schema
         actual = {
             name: name in set(schema.get("required") or [])
             for name in (schema.get("properties") or {})
         }
-        assert signatures[tool.name] == actual, (
-            f"README signature for {tool.name} is {signatures[tool.name]}, "
+        # .get, not [...]: a tool missing from the page is what the test
+        # above reports, and a bare KeyError here only obscures it.
+        assert signatures.get(tool.name) == actual, (
+            f"README signature for {tool.name} is {signatures.get(tool.name)}, "
             f"schema says {actual} (name: required?)"
         )
 
@@ -679,17 +684,19 @@ def test_the_readme_gives_the_enum_values_only_the_schema_knows(built):
     """`detail` decides whether `read` truncates cell source, and `cell_type`
     decides what `insert_cell` makes. Neither value set appears anywhere a
     reader of the page can see, so both are named and both are checked."""
-    from pathlib import Path
-
     server, _ = built
     schemas = {tool.name: tool.input_schema for tool in asyncio.run(server.list_tools())}
-    readme = (Path(__file__).resolve().parents[2] / "README.md").read_text()
+    # The note under the signatures, not the whole page: `code` and `markdown`
+    # are words this README uses constantly, so a page-wide search would keep
+    # passing after the sentence that documents them was deleted.
+    note = _readme_tool_section()[1]
     for tool_name, argument in (("read", "detail"), ("insert_cell", "cell_type")):
         values = (schemas[tool_name]["properties"][argument]).get("enum")
         assert values, f"{tool_name}.{argument} is no longer an enum"
+        assert f"`{argument}`" in note, f"the note does not name {tool_name}.{argument}"
         for value in values:
-            assert f"`{value}`" in readme, (
-                f"README does not give `{value}`, a value of {tool_name}.{argument}"
+            assert f"`{value}`" in note, (
+                f"the note does not give `{value}`, a value of {tool_name}.{argument}"
             )
 
 
