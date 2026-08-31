@@ -263,6 +263,39 @@ describe("Notebook editor", () => {
     expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringContaining("/execution/attempt-1/approve"), expect.objectContaining({ body: JSON.stringify({ sessionId: "session-1", expectedDocumentRevision: 3, turnId: "turn-1", cellId: "code-1" }) }));
   });
 
+  it("offers a missing-module remediation only for a cell this tab has run", async () => {
+    // #52's remediation ends in a `pip install` a person may paste, and a
+    // .ipynb stores its outputs — so a notebook can arrive carrying a
+    // ModuleNotFoundError naming a package of its author's choosing. The
+    // gate is App's record of which cells it has actually run; the cell-level
+    // behaviour is covered in notebook/missingModule.test.tsx, and this pins
+    // that the record fills at all. Without it the feature is invisible.
+    const failure = { output_type: "error", ename: "ModuleNotFoundError", evalue: "No module named 'pandas'", traceback: ["ModuleNotFoundError: No module named 'pandas'"] };
+    const carried = { ...notebook, cells: [notebook.cells[0], { ...notebook.cells[1], source: "import pandas", outputs: [failure], executionCount: 1 }] };
+    const failed = {
+      operationId: "op-1", sessionId: "session-1", baseRevision: 3, currentDocumentRevision: 3,
+      kind: "manual", parentTurnId: null, state: "failed", currentExecutionAttemptId: null,
+      attempts: [{ executionAttemptId: "attempt-1", cellId: "code-1", cellIndex: 1, sourcePreview: "import pandas", state: "failed", risk: { level: "safe", reasons: [], matchedPatterns: [] }, decision: null, outputs: [failure], outputsTruncated: false, executionCount: 1, error: null }],
+      error: null, createdAt: "", completedAt: "",
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const path = String(input);
+      if (path.includes("/execution/cells/code-1/run")) return response(failed);
+      if (path.endsWith("/notebooks/current")) return response(carried);
+      if (path.endsWith("/turn-scope")) return response({ editableCellIds: [], contextCellIds: [], sessionId: "session-1", notebookRevision: 3 });
+      if (path.endsWith("/kernel/status")) return response({ state: "idle", kernelSessionId: "kernel-1", executionAttemptId: null, interpreter: "/proj/.venv/bin/python", interpreterSource: "kernelspec" });
+      if (path.endsWith("/session/status")) return response({ sessionId: "session-1", documentRevision: 3, activeTurn: null, activeExecution: null, turnHistory: [], turnHistoryTruncated: false });
+      return response({});
+    });
+    render(<App />);
+    expect(await screen.findByText(/No module named 'pandas'/)).toBeInTheDocument();
+    expect(screen.queryByRole("note", { name: "Missing module" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Run code cell 2" }));
+    expect(await screen.findByRole("note", { name: "Missing module" }))
+      .toHaveTextContent("/proj/.venv/bin/python -m pip install pandas");
+  });
+
   it("blocks source-dependent actions while a cell has an unsaved draft", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const path = String(input);

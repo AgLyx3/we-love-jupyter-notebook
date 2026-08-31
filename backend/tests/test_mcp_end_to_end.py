@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shlex
 import shutil
 import time
 
@@ -368,7 +369,8 @@ def test_a_missing_module_comes_back_with_the_interpreter_and_the_command(editor
     assert interpreter, "the editor could not name its own interpreter"
     assert interpreter in result["note"], "the note does not say which Python looked"
     assert (
-        f"{interpreter} -m pip install definitely_not_installed_xyz" in result["note"]
+        f"{shlex.quote(interpreter)} -m pip install definitely_not_installed_xyz"
+        in result["note"]
     ), "the note does not carry a command that installs into that interpreter"
 
 

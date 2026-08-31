@@ -88,8 +88,14 @@ function MissingModuleHelp({ missing, interpreter, chosen }: Remediation) {
   return <div className="output-remediation" role="note" aria-label="Missing module">
     <p>
       <code>{missing.module}</code> is not installed in the environment your cells run in, <code className="remediation-path">{interpreter}</code>.
-      {missing.packageName !== missing.module && <> It comes from the <code>{missing.packageName}</code> package.</>}
     </p>
+    {/* The distribution is stated as fact only where the table knew it. A
+        failed `import helpers` is usually somebody's own file that is not on
+        the path, and asserting that `pip install helpers` is the fix would
+        install a stranger's package and bury the real cause. */}
+    <p>{missing.known
+      ? <>It comes from the <code>{missing.packageName}</code> package — install that there:</>
+      : <>If it comes from a package rather than a file of your own, that is where to install it:</>}</p>
     <pre className="remediation-command">{installCommand(interpreter, missing)}</pre>
     <p className="remediation-aside">{chosen
       ? "That interpreter was chosen with --kernel-python."
@@ -187,11 +193,18 @@ function MarkdownPreview({ source, cellId, disabled, onAddSelectionToChat, onInl
 
 export function Outputs({ outputs, disabled = false, kernel, onAddErrorToChat, onHoverChange, onTune, tuneLabel = "Tune" }: { outputs: Record<string, unknown>[]; disabled?: boolean; kernel?: KernelStatus; onAddErrorToChat?: (text: string) => void; onHoverChange?: (hovered: boolean) => void; onTune?: () => void; tuneLabel?: string }) {
   if (!outputs.length) return null;
-  // No interpreter, no remediation. A message that named neither the
-  // environment nor a command it can run would only restate the traceback.
+  // `kernel` arrives only for outputs this tab produced (NotebookCell gates it
+  // on `ran`), and without an interpreter there is no environment to name and
+  // no command to give. Both matter. A .ipynb stores its outputs, so a notebook
+  // can arrive carrying a ModuleNotFoundError from another machine; speaking
+  // about *this* environment on the strength of that would be wrong, and the
+  // module name in the resulting `pip install` would have come from the file
+  // rather than from a kernel here.
   const remediationFor = (output: Record<string, unknown>): Remediation | null => {
-    const missing = kernel?.interpreter ? missingModule(output.ename, output.evalue) : null;
-    return missing ? { missing, interpreter: kernel!.interpreter!, chosen: kernel!.interpreterSource === "kernel-python" } : null;
+    const interpreter = kernel?.interpreter;
+    if (!interpreter) return null;
+    const missing = missingModule(output.ename, output.evalue);
+    return missing ? { missing, interpreter, chosen: kernel.interpreterSource === "kernel-python" } : null;
   };
   return <div className="cell-outputs" aria-label="Cell output" onMouseEnter={() => onHoverChange?.(true)} onMouseLeave={() => onHoverChange?.(false)}>
     {/* Entry point for plot tuning, following the labelled output-add-chat
@@ -215,7 +228,7 @@ export function Outputs({ outputs, disabled = false, kernel, onAddErrorToChat, o
   </div>;
 }
 
-export default function NotebookCell({ cell, focused, selected, outlined = false, dragIds, editable, context, trusted = false, change, operations = [], origin = "agent", retyped, revertable = true, tunable = false, tuning, kernel, disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onKeep, onKeepOperation, onUndoOperation, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
+export default function NotebookCell({ cell, focused, selected, outlined = false, dragIds, editable, context, trusted = false, change, operations = [], origin = "agent", retyped, revertable = true, tunable = false, tuning, kernel, ran = false, disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onKeep, onKeepOperation, onUndoOperation, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
   cell: NotebookCellData; focused: boolean; selected: boolean;
   /** Covered by the outline block the pointer is over. Presentational only. */
   outlined?: boolean;
@@ -228,6 +241,9 @@ export default function NotebookCell({ cell, focused, selected, outlined = false
   /** Which interpreter the cells run in, so a `ModuleNotFoundError` in the
    *  outputs below can say where to install and where not to (#52). */
   kernel?: KernelStatus;
+  /** This tab ran this cell, so its outputs are this kernel's answer and not
+   *  whatever the .ipynb happened to arrive with. */
+  ran?: boolean;
   retyped?: { from: string; to: string };
   disabled: boolean; sourceActionsDisabled: boolean; autoSave: boolean; cellRef: (node: HTMLElement | null) => void;
   onFocus: () => void; onSelect: (event: MouseEvent) => void; onContextMenu: (event: MouseEvent) => void; onDirtyChange: (dirty: boolean) => void; onSave: (source: string) => void; onRun: () => void; onAddEditable: () => void; onAddContext: () => void; onRevert: () => void; onKeep?: () => void;
@@ -430,7 +446,7 @@ export default function NotebookCell({ cell, focused, selected, outlined = false
           ? <TuningPanel cellId={cell.cellId} open revision={tuning.revision} cellOutputs={cell.outputs}
             onScan={tuning.onScan} onWarm={tuning.onWarm} onPreview={tuning.onPreview} onApply={tuning.onApply}
             onDiscardShadow={tuning.onDiscardShadow} onClose={() => setTuningOpen(false)} />
-          : <Outputs outputs={cell.outputs} disabled={dependentDisabled} kernel={kernel} onAddErrorToChat={onAddErrorToChat} onHoverChange={setSuppressDrag}
+          : <Outputs outputs={cell.outputs} disabled={dependentDisabled} kernel={ran ? kernel : undefined} onAddErrorToChat={onAddErrorToChat} onHoverChange={setSuppressDrag}
             onTune={canTune ? () => setTuningOpen(true) : undefined} tuneLabel={`Tune ${description}`} />}
       </div>
     </div>

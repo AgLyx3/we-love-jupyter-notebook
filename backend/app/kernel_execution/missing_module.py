@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+import shlex
 
 
 # Import names that are not their own distribution name.
@@ -55,15 +56,22 @@ class MissingModule:
 
     module: str
     package: str
+    #: The table knew this distribution, rather than the module name being
+    #: reused as a guess. What separates "it comes from scikit-learn" from "if
+    #: it comes from a package at all" — plenty of failed imports are somebody's
+    #: own `helpers.py` that is not on the path, and `pip install helpers`
+    #: installs an unrelated stranger's package while hiding the real cause.
+    known: bool = False
 
     def install_command(self, interpreter: str) -> str:
         """The command that installs into the interpreter the cells run in.
 
         `<interpreter> -m pip install`, never a guessed sibling `bin/pip`. The
         interpreter path is known exactly; a `pip` executable next to it is not
-        guaranteed to exist, and a command that fails is worse than none.
+        guaranteed to exist, and a command that fails is worse than none — as
+        would an unquoted path under `~/My Projects`, hence `shlex.quote`.
         """
-        return f"{interpreter} -m pip install {self.package}"
+        return f"{shlex.quote(interpreter)} -m pip install {self.package}"
 
 
 def missing_module(ename: object, evalue: object) -> MissingModule | None:
@@ -87,7 +95,8 @@ def missing_module(ename: object, evalue: object) -> MissingModule | None:
     module = named.group(1)
     if not _IMPORT_NAME.match(module):
         return None
-    return MissingModule(module, PACKAGE_NAMES.get(module, module))
+    package = PACKAGE_NAMES.get(module)
+    return MissingModule(module, package or module, known=package is not None)
 
 
 def missing_module_in(outputs: object) -> MissingModule | None:

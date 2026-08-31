@@ -29,13 +29,16 @@ def test_a_missing_module_is_recognised_and_named():
     assert found is not None
     assert found.module == "pandas"
     assert found.package == "pandas"
+    assert found.known is False, "the module name is a guess, however good a one"
 
 
 def test_a_module_that_is_not_its_package_installs_the_package():
     """`pip install sklearn` fails outright. A command that does not work is
     worse than no command, so the names a notebook actually trips over are
     known exactly rather than guessed from the module."""
-    assert missing_module("ModuleNotFoundError", "No module named 'sklearn'").package == "scikit-learn"
+    sklearn = missing_module("ModuleNotFoundError", "No module named 'sklearn'")
+    assert sklearn.package == "scikit-learn"
+    assert sklearn.known is True
     assert missing_module("ModuleNotFoundError", "No module named 'cv2'").package == "opencv-python"
 
 
@@ -70,6 +73,15 @@ def test_the_command_runs_pip_through_the_interpreter_itself():
         "/proj/.venv/bin/python -m pip install pandas"
     )
     assert "bin/pip " not in found.install_command("/proj/.venv/bin/python")
+
+
+def test_a_path_a_shell_would_split_is_quoted():
+    """A venv under `~/My Projects` would otherwise produce a command that runs
+    `/Users/me/My` — the failing command this is meant to avoid."""
+    found = missing_module("ModuleNotFoundError", "No module named 'pandas'")
+    assert found.install_command("/Users/me/My Projects/.venv/bin/python") == (
+        "'/Users/me/My Projects/.venv/bin/python' -m pip install pandas"
+    )
 
 
 def test_the_missing_module_is_found_among_a_cells_outputs():
@@ -161,6 +173,16 @@ def test_a_failed_run_says_where_the_module_is_missing_from_and_what_to_run():
     assert "!pip install" in note, "the cell-magic trap is the likely wrong turn"
 
 
+def test_the_note_does_not_route_an_agent_around_the_approval_gate():
+    """`pip install` in a cell is a `package_change` the classifier stops for a
+    person to approve. A note that answered it with "run this in a terminal
+    instead" would walk an agent past that control, over a package name that
+    came out of a notebook the person may not have written."""
+    note, _ = note_for(failed_on("No module named 'pandas'"), RESOLVED)
+    assert "in a terminal" not in note
+    assert "the person's call" in note
+
+
 def test_the_note_says_nobody_chose_the_interpreter_when_nobody_did():
     """The wrong-environment half of the diagnosis. A resolved interpreter is
     the case that goes wrong; one passed with --kernel-python is not."""
@@ -172,6 +194,27 @@ def test_the_note_says_nobody_chose_the_interpreter_when_nobody_did():
     )
     assert "was chosen with --kernel-python" in chosen
     assert "Nobody chose" not in chosen
+
+
+def test_the_note_does_not_claim_a_package_for_a_module_it_does_not_know():
+    """`import helpers` usually fails because somebody's own file is not on the
+    path. `helpers` is on PyPI, so a note asserting the install is the fix would
+    have an agent pull in a stranger's package and bury the real cause."""
+    unknown, _ = note_for(failed_on("No module named 'helpers'"), RESOLVED)
+    assert "If it comes from a package rather than a file of your own" in unknown
+    assert "It comes from the" not in unknown
+
+    known, _ = note_for(failed_on("No module named 'sklearn'"), RESOLVED)
+    assert "It comes from the scikit-learn package" in known
+    assert "-m pip install scikit-learn" in known
+
+
+def test_a_kernel_status_that_answers_with_nothing_is_survivable():
+    """`NotebookTools.request` hands back None for a 204 or an empty body, and
+    a diagnostic that dereferences that takes the whole run result down."""
+    note, _ = note_for(failed_on("No module named 'pandas'"), None)
+    assert "'code-1'" in note
+    assert "pip install" not in note
 
 
 def test_an_unrelated_failure_costs_no_extra_request():

@@ -1337,7 +1337,18 @@ enough to keep. The fact that separates them is which interpreter looked.
 - `run_cell` and `run_all` put the same thing in the failed run's `note`. A tool
   caller has strictly less to go on than a person with the tab open, and its
   wrong guess is worse: an `!pip install` cell written into the notebook installs
-  against whatever `pip` is first on PATH.
+  against whatever `pip` is first on PATH. The note says installing is the
+  person's call and does not tell an agent to run the command itself — `pip
+  install` in a cell is a `package_change` the risky-cell classifier stops for
+  approval, and a note that steered around that gate would route an agent past a
+  control this product exists to enforce.
+- The remediation is offered only for outputs the current session actually
+  produced. A `.ipynb` stores its outputs, so a notebook can arrive carrying a
+  fabricated `ModuleNotFoundError` naming a package of its author's choosing;
+  the remediation ends in a command a person may paste, so it must never be
+  built from a name that came out of a file rather than out of this kernel.
+  The editor tab tracks which cells it has run; the MCP note is built only from
+  a run that just failed.
 
 This diagnoses the environment; it does not manage it. What is installed in the
 chosen environment stays the project's business, as with Jupyter.
@@ -2120,6 +2131,8 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
   a short table of the module names that are not their own distribution
   (`sklearn` → `scikit-learn`, `cv2` → `opencv-python`, …), duplicated across the
   TypeScript and Python sides and pinned equal by a test.
+  Gate it on outputs this session produced, and keep the wording indefinite
+  ("if it comes from a package") for any name the table does not vouch for.
 - Alternatives: Leave the traceback bare and document the environment model;
   print `pip install <module>` unconditionally; never name a package and only
   name the module; compute the remediation on the backend and attach it to the
@@ -2135,7 +2148,10 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
   run and on reload, while the traceback it explains stays on screen. Putting the
   interpreter in every `read`/`status` spends tokens on every call for a fact
   that matters at one moment; the failure note delivers it exactly then, at the
-  cost of one extra loopback request on a run that has already failed.
+  cost of one extra loopback request on a run that has already failed. The
+  provenance gate and the indefinite wording are not tidiness: the message ends
+  in a command someone may paste, and a stored output or an unrecognised name
+  would let a notebook's author choose the package that command installs.
 
 ### Notebook Close
 

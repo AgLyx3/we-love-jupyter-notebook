@@ -45,6 +45,15 @@ export default function App() {
   const [focusRequest, setFocusRequest] = useState<{ cellId: string; requestId: number } | null>(null);
   const [attachments, setAttachments] = useState<SelectionAttachment[]>([]);
   const [operation, setOperation] = useState<ExecutionOperation | null>(null);
+  // Cells this tab has actually run. Outputs are stored in the .ipynb, so a
+  // notebook can arrive carrying a `ModuleNotFoundError` some other machine
+  // produced — and the missing-module remediation (#52) must never speak about
+  // an environment on the strength of a traceback nothing here ran. Being wrong
+  // in that direction is not merely untidy: the module name would come from the
+  // file rather than from this kernel, and the remediation ends in a `pip
+  // install` command someone may paste. Empty after a reload, which loses the
+  // remediation for an old failure and never invents one.
+  const [ranCellIds, setRanCellIds] = useState<ReadonlySet<string>>(() => new Set());
   // The last Apply from a tuning panel. Held here rather than fetched with the
   // rest of the session because a tune record has no live state to poll: it is
   // created complete, and only this window's Keep/Undo moves it afterwards.
@@ -110,6 +119,14 @@ export default function App() {
   // falls back to the default rather than inheriting the last file's choice.
   useEffect(() => { setRailTab(readRailTab(notebook?.notebookPath, "files")); }, [notebook?.notebookPath]);
   useEffect(() => { setOutlineHighlight(null); }, [notebook?.sessionId]);
+  useEffect(() => { setRanCellIds(new Set()); }, [notebook?.sessionId]);
+  // Only attempts that reached the kernel: one parked at `awaiting_approval`,
+  // or skipped, produced no outputs and is no evidence about anything.
+  useEffect(() => {
+    const ran = (operation?.attempts ?? []).filter((attempt) => attempt.state === "completed" || attempt.state === "failed").map((attempt) => attempt.cellId);
+    if (!ran.length) return;
+    setRanCellIds((current) => ran.every((cellId) => current.has(cellId)) ? current : new Set([...current, ...ran]));
+  }, [operation]);
   useEffect(() => {
     setCloseTarget((target) => target && (target.sessionId !== notebook?.sessionId || target.revision !== notebook.revision) ? null : target);
   }, [notebook?.sessionId, notebook?.revision]);
@@ -566,6 +583,7 @@ export default function App() {
         outlinedCellIds={outlineHighlight}
         tunableCellIds={tunableCellIds}
         kernel={kernel}
+        ranCellIds={ranCellIds}
         tuningControls={{
           revision: notebook.revision,
           onScan: (cellId) => api.openTuning(notebook, cellId),

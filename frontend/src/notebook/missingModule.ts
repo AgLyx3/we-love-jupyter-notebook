@@ -37,9 +37,13 @@ export const PACKAGE_NAMES: Record<string, string> = {
 export interface MissingModule {
   /** The module the kernel could not find, exactly as the error named it. */
   module: string;
-  /** The distribution that provides it, where those differ. Not `package`,
-   *  which is a reserved word once destructured under strict mode. */
+  /** The distribution to install for it. Not `package`, which is a reserved
+   *  word once destructured under strict mode. */
   packageName: string;
+  /** The table knew this distribution, rather than the module name being
+   *  reused as a guess. What separates "it comes from scikit-learn" from "if
+   *  it comes from a package at all" — see `MissingModuleHelp`. */
+  known: boolean;
 }
 
 // `ModuleNotFoundError`'s message is built by CPython itself, so the quoting is
@@ -69,7 +73,23 @@ export function missingModule(ename: unknown, evalue: unknown): MissingModule | 
   if (!named) return null;
   const module = named[1];
   if (!IMPORT_NAME.test(module)) return null;
-  return { module, packageName: PACKAGE_NAMES[module] ?? module };
+  // `Object.hasOwn`, not `PACKAGE_NAMES[module] ?? module`: an object literal
+  // inherits from Object.prototype, and IMPORT_NAME happily admits
+  // `constructor` — a real installable module — which would otherwise resolve
+  // to a function and be printed as the command to run.
+  const known = Object.hasOwn(PACKAGE_NAMES, module);
+  return { module, packageName: known ? PACKAGE_NAMES[module] : module, known };
+}
+
+// Everything a POSIX shell leaves alone; the same set `shlex.quote` uses, so
+// both sides of this feature quote a path identically.
+const SHELL_SAFE = /^[A-Za-z0-9_@%+=:,./-]+$/;
+
+/** A path the reader can paste. An unquoted venv under `~/My Projects` gives a
+ *  command that runs `/Users/me/My` and fails — the outcome this whole block
+ *  exists to avoid. */
+export function shellQuote(value: string): string {
+  return SHELL_SAFE.test(value) ? value : `'${value.split("'").join("'\\''")}'`;
 }
 
 /** The command that installs into the interpreter the cells actually run in.
@@ -79,5 +99,5 @@ export function missingModule(ename: unknown, evalue: unknown): MissingModule | 
  *  guaranteed to exist, and a command that fails is worse than none.
  */
 export function installCommand(interpreter: string, missing: MissingModule): string {
-  return `${interpreter} -m pip install ${missing.packageName}`;
+  return `${shellQuote(interpreter)} -m pip install ${missing.packageName}`;
 }

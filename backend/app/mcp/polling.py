@@ -149,18 +149,34 @@ def _missing_module_note(tools: NotebookTools, operation: dict[str, Any]) -> str
         status = tools.request(
             "GET", "/kernel/status", what="Reading kernel status",
         )
+        interpreter = status.get("interpreter") if isinstance(status, dict) else None
+        chosen = isinstance(status, dict) and status.get("interpreterSource") == "kernel-python"
     except Exception:  # noqa: BLE001 - a diagnostic must not fail the run report
         return ""
-    interpreter = status.get("interpreter")
     if not interpreter:
         return ""
-    chosen = status.get("interpreterSource") == "kernel-python"
+    # Named as a fact only where the table knew it. `import helpers` failing is
+    # usually somebody's own file that is not on the path, and `pip install
+    # helpers` would install a stranger's package and bury the real cause.
+    provenance = (
+        f" It comes from the {missing.package} package."
+        if missing.known
+        else " If it comes from a package rather than a file of your own,"
+        " that is where to install it:"
+    )
+    # Deliberately not "go run this in a terminal". `pip install` in a cell is
+    # a `package_change` the risky-cell classifier stops for a person to
+    # approve, and a note that steered around that gate would be routing an
+    # agent past a control the product exists to enforce — over a module name
+    # that came out of a notebook, which may not be one the person wrote.
     return (
         f" Cells run in {interpreter}, which does not have {missing.module}"
-        f" — installing it anywhere else will not help:"
+        f" — installing it anywhere else will not help.{provenance}"
         f" `{missing.install_command(interpreter)}`."
-        " Run that in a terminal rather than as `!pip install` in a cell, which"
-        " installs against whatever pip is first on PATH."
+        " Installing is the person's call: say what you would run and let them"
+        " decide, and check the package name with them if the notebook is not"
+        " theirs. Note that `!pip install` in a cell installs against whatever"
+        " pip is first on PATH, which need not be this interpreter."
         + (
             " That interpreter was chosen with --kernel-python."
             if chosen

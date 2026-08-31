@@ -13,7 +13,7 @@ function retypeOf(turn: AgentTurn | null, cellId: string): { from: string; to: s
   return typeof from === "string" && typeof to === "string" ? { from, to } : undefined;
 }
 
-export default function NotebookView({ notebook, scope, turn, tuningRecord = null, trusted = false, kernel, disabled, sourceActionsDisabled, autoSave, focusRequest, outlinedCellIds, tuningControls, tunableCellIds, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert, onKeepCell, onKeepOperation, onUndoOperation, onKeepTuned, onUndoTuned, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
+export default function NotebookView({ notebook, scope, turn, tuningRecord = null, trusted = false, kernel, ranCellIds, disabled, sourceActionsDisabled, autoSave, focusRequest, outlinedCellIds, tuningControls, tunableCellIds, onDirtyChange, onSave, onRun, onScope, onScopeMany, onRevert, onKeepCell, onKeepOperation, onUndoOperation, onKeepTuned, onUndoTuned, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
   notebook: NotebookSnapshot; scope: TurnScope; turn: AgentTurn | null; trusted?: boolean;
   /** The most recent Apply from the tuning panel. Its own record type, not an
    *  AgentTurn (design D6) — the cells it governs review under its own wording. */
@@ -24,6 +24,9 @@ export default function NotebookView({ notebook, scope, turn, tuningRecord = nul
   /** Which interpreter runs the cells. Passed through untouched so a failed
    *  cell can say where a missing module would have to be installed (#52). */
   kernel?: KernelStatus;
+  /** Cells this tab has run, so the same remediation is offered only about
+   *  outputs this kernel produced rather than ones the file arrived with. */
+  ranCellIds?: ReadonlySet<string>;
   disabled: boolean; sourceActionsDisabled: boolean; autoSave: boolean; focusRequest: { cellId: string; requestId: number } | null;
   /** Cells the hovered outline block covers. Highlighting only — it changes
    *  no selection and no scope, so it can never affect what an agent edits. */
@@ -173,6 +176,7 @@ export default function NotebookView({ notebook, scope, turn, tuningRecord = nul
       tunable={tunableCellIds?.has(cell.cellId) ?? false}
       tuning={tuningControls}
       kernel={kernel}
+      ran={ranCellIds?.has(cell.cellId) ?? false}
       // T1: on a Trusted turn a cell is individually revertible exactly when it
       // carries ledger operations (edit on a surviving same-type cell, or an
       // add). Cells involved in delete/move/retype have none and stay
