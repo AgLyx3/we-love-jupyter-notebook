@@ -616,6 +616,31 @@ def test_a_stuck_run_can_be_cancelled(built):
     assert "holds the notebook" in tools["cancel_run"].description
 
 
+def _readme_tool_section():
+    """The README's tool list and the note under it, as (signatures, note).
+
+    Found by its contents, not by a heading or an offset: both have already been
+    renamed and renumbered by ordinary editing, and a tool-list check that
+    breaks when prose moves gets weakened to make it pass. `signatures` is
+    {tool: {argument: required}}; `note` is the paragraph that follows, which is
+    where anything a signature cannot carry has to live.
+    """
+    import re
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[2] / "README.md").read_text()
+    paragraphs = text.split("\n\n")
+    listing = [i for i, para in enumerate(paragraphs) if "set_cell_source(" in para]
+    assert len(listing) == 1, (
+        f"expected exactly one paragraph listing the tools, found {len(listing)}"
+    )
+    signatures = {}
+    for name, arguments in re.findall(r"`([a-z_]+)\(([^)]*)\)`", paragraphs[listing[0]]):
+        listed = [a.strip() for a in arguments.split(",") if a.strip()]
+        signatures[name] = {a.rstrip("?"): not a.endswith("?") for a in listed}
+    return signatures, paragraphs[listing[0] + 1]
+
+
 def test_the_readme_lists_every_tool_that_exists(built):
     """The README's tool list had ten of the eleven — `cancel_run`, the one a
     reader most needs to know exists, because without it a run parked on
@@ -624,24 +649,55 @@ def test_the_readme_lists_every_tool_that_exists(built):
     A list maintained by hand beside a surface that changes is a list that goes
     stale, so it is checked rather than trusted.
     """
-    import re
-    from pathlib import Path
-
     server, _ = built
     names = {tool.name for tool in asyncio.run(server.list_tools())}
-    readme = Path(__file__).resolve().parents[2] / "README.md"
-    text = readme.read_text()
-    # Find the list by its contents, not by a heading or an offset: both have
-    # already been renamed and renumbered by ordinary editing, and a tool-list
-    # check that breaks when prose moves gets weakened to make it pass.
-    paragraphs = [
-        para for para in text.split("\n\n") if "`set_cell_source`" in para
-    ]
-    assert len(paragraphs) == 1, (
-        f"expected exactly one paragraph listing the tools, found {len(paragraphs)}"
-    )
-    listed = set(re.findall(r"`([a-z_]+)`", paragraphs[0]))
+    listed = set(_readme_tool_section()[0])
     assert listed == names, f"README missing {names - listed}, extra {listed - names}"
+
+
+def test_the_readme_signatures_match_the_schemas_argument_for_argument(built):
+    """Eleven bare names told a reader nothing about how to call anything, so
+    they had to run `list_tools` to find `open(path)` — and the one argument the
+    page did name, it named wrongly (#56).
+
+    Signatures are only worth putting on a page that changes if nothing can let
+    them drift, so every argument and its optionality is checked against the
+    live schema rather than restated.
+    """
+    server, _ = built
+    signatures, _ = _readme_tool_section()
+    for tool in asyncio.run(server.list_tools()):
+        schema = tool.input_schema
+        actual = {
+            name: name in set(schema.get("required") or [])
+            for name in (schema.get("properties") or {})
+        }
+        # .get, not [...]: a tool missing from the page is what the test
+        # above reports, and a bare KeyError here only obscures it.
+        assert signatures.get(tool.name) == actual, (
+            f"README signature for {tool.name} is {signatures.get(tool.name)}, "
+            f"schema says {actual} (name: required?)"
+        )
+
+
+def test_the_readme_gives_the_enum_values_only_the_schema_knows(built):
+    """`detail` decides whether `read` truncates cell source, and `cell_type`
+    decides what `insert_cell` makes. Neither value set appears anywhere a
+    reader of the page can see, so both are named and both are checked."""
+    server, _ = built
+    schemas = {tool.name: tool.input_schema for tool in asyncio.run(server.list_tools())}
+    # The note under the signatures, not the whole page: `code` and `markdown`
+    # are words this README uses constantly, so a page-wide search would keep
+    # passing after the sentence that documents them was deleted.
+    note = _readme_tool_section()[1]
+    for tool_name, argument in (("read", "detail"), ("insert_cell", "cell_type")):
+        values = (schemas[tool_name]["properties"][argument]).get("enum")
+        assert values, f"{tool_name}.{argument} is no longer an enum"
+        assert f"`{argument}`" in note, f"the note does not name {tool_name}.{argument}"
+        for value in values:
+            assert f"`{value}`" in note, (
+                f"the note does not give `{value}`, a value of {tool_name}.{argument}"
+            )
 
 
 def test_the_readme_names_the_cell_argument_the_tools_actually_take(built):

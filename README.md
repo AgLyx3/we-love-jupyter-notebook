@@ -71,9 +71,16 @@ because clients that namespace them by server name — Claude Code renders them
 `mcp__agent_notebook__open` — would otherwise produce `notebook_open` inside a
 namespace already called notebook.
 
-`open`, `read`, `status`,
-`set_cell_source`, `insert_cell`, `delete_cell`,
-`run_cell`, `run_all`, `cancel_run`, `save`, `show`.
+`open(path)`, `read(cells?, include_outputs?, detail?)`, `status()`,
+`set_cell_source(cell_id, source)`, `insert_cell(source, cell_type?, index?)`,
+`delete_cell(cell_id)`, `run_cell(cell_id)`, `run_all()`, `cancel_run()`,
+`save()`, `show()`.
+
+`?` marks an optional argument. Two of them are enumerations the schema names
+and nothing else does: `read`'s `detail` is `concise` or `detailed`, and
+`insert_cell`'s `cell_type` is `code` or `markdown`. The full schemas come back
+from `list_tools`; the signatures are here because eleven bare names are not
+enough to call anything with.
 
 Cells are addressed by the `cellId` that `read` returns — passed back as
 `cell_id`, since the tool arguments are snake_case and the JSON is not. Nothing
@@ -119,6 +126,36 @@ three ways in which the usual `scripts/dev.py` habits do not apply, so:
 - **`--no-browser`** suppresses the automatic tab, for automation and headless
   hosts. `show` still opens it, and `open` still returns the URL as
   `editorUrl` for a client to hand you.
+- **Each session leaves its tab behind.** The port is new every time, so once
+  your client stops the server that tab is pointing at one nothing is listening
+  on. It does not say so — the page goes on showing the notebook it last had,
+  and a reload is what tells you. Close it when the session ends; four sessions
+  is four dead tabs.
+
+**One failure to disbelieve.** `claude mcp list` sometimes reports
+
+```
+✘ Failed to connect — -32022: connection is serving the 2026-07-28 protocol;
+  the initialize handshake is not accepted
+```
+
+for a server that then drives perfectly, and the same command a minute later
+says `✔ Connected`. It is a race with startup, and the message is the editor's
+own — not the client inventing a health-check complaint. Claude Code opens with
+a protocol-version probe, gives up on it after two to three seconds and falls
+back to the older `initialize` handshake; but the probe is still queued in the
+pipe, and the MCP SDK locks the connection to the newer protocol the moment it
+finally reads it, so the handshake queued behind it is refused. The server only
+loses that race when it is slow to answer its first frame, which for `uvx`
+means the first run on a machine that has not cached the package: 8.1s cold
+here against 0.9s once `uv` has it. So warm it once before you register it —
+
+```bash
+uvx --from notebook-editor-mcp notebook-editor-mcp --help
+```
+
+— or just run `claude mcp list` again. A client that does connect is
+unaffected for the life of that session.
 
 To see the tool surface without wiring up a client, the MCP Inspector speaks
 the same stdio protocol:
@@ -138,7 +175,7 @@ The editor at rest: files and the notebook map on the left, the notebook in the
 middle, the agent on the right. Nothing is scoped yet, so the composer says so —
 a turn sent now is read-only.
 
-![The editor with a notebook open: file tree, notebook, and agent panel](docs/screenshots/01-app-shell.png)
+![The editor with a notebook open: file tree, notebook, and agent panel](https://raw.githubusercontent.com/AgLyx3/we-love-jupyter-notebook/main/docs/screenshots/01-app-shell.png)
 
 After a turn, changed cells become reviewable in place — an inline diff on the
 cell it belongs to, accepted or rejected per hunk, not a patch file you read
@@ -148,11 +185,11 @@ and what it actually changed are on screen together. Here two of the three
 scoped cells were rewritten, and the panel explains why the third was left
 alone.
 
-![The same view mid-review: pending-review bar, an inline diff on a cell, and the agent transcript](docs/screenshots/02-app-shell-reviewing.png)
+![The same view mid-review: pending-review bar, an inline diff on a cell, and the agent transcript](https://raw.githubusercontent.com/AgLyx3/we-love-jupyter-notebook/main/docs/screenshots/02-app-shell-reviewing.png)
 
 <table>
 <tr>
-<td width="30%"><img src="docs/screenshots/06-outline-panel.png" alt="The Outline tab listing four named blocks of cells"></td>
+<td width="30%"><img src="https://raw.githubusercontent.com/AgLyx3/we-love-jupyter-notebook/main/docs/screenshots/06-outline-panel.png" alt="The Outline tab listing four named blocks of cells"></td>
 <td>
 
 **The notebook map.** The Outline tab segments the notebook into blocks and
@@ -171,11 +208,11 @@ over the notebook so the picture keeps the full width of the cell. Moving one
 re-runs the cell into a preview labelled *not in your notebook yet*; **Apply and
 re-run** is what writes the values back. Nothing is committed until you press it.
 
-![The Tuning Controls popover open over a histogram, with sliders for N_POINTS, NOISE, BINS and ALPHA](docs/screenshots/07-tuning-panel.png)
+![The Tuning Controls popover open over a histogram, with sliders for N_POINTS, NOISE, BINS and ALPHA](https://raw.githubusercontent.com/AgLyx3/we-love-jupyter-notebook/main/docs/screenshots/07-tuning-panel.png)
 
 Screenshots are captured from a live session against the notebooks in
 `examples/`, with a real kernel and the real Claude CLI. See
-[`docs/screenshots/`](docs/screenshots/) for the full set and how to re-capture
+[`docs/screenshots/`](https://github.com/AgLyx3/we-love-jupyter-notebook/tree/main/docs/screenshots/) for the full set and how to re-capture
 them.
 
 ## Run it locally instead
@@ -456,11 +493,11 @@ notebooks and agent instructions you trust.
 
 ## Contributing
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup,
+Contributions are welcome — see [CONTRIBUTING.md](https://github.com/AgLyx3/we-love-jupyter-notebook/blob/main/CONTRIBUTING.md) for setup,
 the checks CI runs, and pull-request guidelines. Participation is governed by
-our [Code of Conduct](CODE_OF_CONDUCT.md). To report a vulnerability, see
-[SECURITY.md](SECURITY.md).
+our [Code of Conduct](https://github.com/AgLyx3/we-love-jupyter-notebook/blob/main/CODE_OF_CONDUCT.md). To report a vulnerability, see
+[SECURITY.md](https://github.com/AgLyx3/we-love-jupyter-notebook/blob/main/SECURITY.md).
 
 ## License
 
-Released under the [MIT License](LICENSE).
+Released under the [MIT License](https://github.com/AgLyx3/we-love-jupyter-notebook/blob/main/LICENSE).
