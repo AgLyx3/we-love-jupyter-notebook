@@ -122,6 +122,72 @@ def _failing_cell(operation: dict[str, Any]) -> str | None:
     return None
 
 
+def _missing_module_note(tools: NotebookTools, operation: dict[str, Any]) -> str:
+    """What to do about a `ModuleNotFoundError`, for a caller who cannot look.
+
+    A person who hits this has the editor tab: the kernel chip names the
+    interpreter and the failed cell carries the same remediation this builds.
+    A tool caller has the traceback and nothing else, so it is strictly worse
+    off than the reader whose case was already judged worth fixing — and its
+    wrong guesses are worse too. Left to itself it writes `!pip install pandas`
+    into the notebook, which installs against whatever `pip` is first on PATH
+    rather than against the kernel's interpreter, and reports success.
+
+    The interpreter costs one extra loopback request, made only when a run has
+    already failed on a missing module — never on the hot path.
+    """
+    from ..kernel_execution.missing_module import missing_module_in
+
+    missing = None
+    for attempt in reversed(operation.get("attempts") or []):
+        if attempt.get("state") == "failed":
+            missing = missing_module_in(attempt.get("outputs"))
+            break
+    if missing is None:
+        return ""
+    try:
+        status = tools.request(
+            "GET", "/kernel/status", what="Reading kernel status",
+        )
+        interpreter = status.get("interpreter") if isinstance(status, dict) else None
+        chosen = isinstance(status, dict) and status.get("interpreterSource") == "kernel-python"
+    except Exception:  # noqa: BLE001 - a diagnostic must not fail the run report
+        return ""
+    if not interpreter:
+        return ""
+    # Named as a fact only where the table knew it. `import helpers` failing is
+    # usually somebody's own file that is not on the path, and `pip install
+    # helpers` would install a stranger's package and bury the real cause.
+    provenance = (
+        f" It comes from the {missing.package} package."
+        if missing.known
+        else " If it comes from a package rather than a file of your own,"
+        " that is where to install it:"
+    )
+    # Deliberately not "go run this in a terminal". `pip install` in a cell is
+    # a `package_change` the risky-cell classifier stops for a person to
+    # approve, and a note that steered around that gate would be routing an
+    # agent past a control the product exists to enforce — over a module name
+    # that came out of a notebook, which may not be one the person wrote.
+    return (
+        f" Cells run in {interpreter}, which does not have {missing.module}"
+        f" — installing it anywhere else will not help.{provenance}"
+        f" `{missing.install_command(interpreter)}`."
+        " Installing is the person's call: say what you would run and let them"
+        " decide, and check the package name with them if the notebook is not"
+        " theirs. Note that `!pip install` in a cell installs against whatever"
+        " pip is first on PATH, which need not be this interpreter."
+        + (
+            " That interpreter was chosen with --kernel-python."
+            if chosen
+            else " Nobody chose that interpreter — it is what the editor's own"
+            " environment resolves to, so it may simply be the wrong"
+            " environment, in which case the editor needs restarting with"
+            " --kernel-python."
+        )
+    )
+
+
 # The operation-level message when a cell raised. It repeats what naming the
 # cell already says, so it is dropped rather than printed twice; anything more
 # specific — a dead kernel, an output limit — is kept.
@@ -187,7 +253,9 @@ def _finished(
             "The run was cancelled." + _stopped_early(operation, whole_notebook=whole_notebook)
         )
     if operation.get("state") == "failed":
-        result["note"] = _failure_note(operation) + _stopped_early(
-            operation, whole_notebook=whole_notebook
+        result["note"] = (
+            _failure_note(operation)
+            + _missing_module_note(tools, operation)
+            + _stopped_early(operation, whole_notebook=whole_notebook)
         )
     return result
