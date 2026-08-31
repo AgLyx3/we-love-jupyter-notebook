@@ -343,6 +343,35 @@ def test_run_all_stops_at_a_failing_cell_and_leaves_the_rest_unrun(editor, works
     assert "did not run" in result["note"], "and says the rest was not attempted"
 
 
+def test_a_missing_module_comes_back_with_the_interpreter_and_the_command(editor, workspace):
+    """The half of #52 a caller cannot see for itself.
+
+    `ModuleNotFoundError` means either "this environment is missing a package"
+    or "this is the wrong environment", and the traceback says which only if
+    you know what interpreter looked. A person has the kernel chip and the
+    remediation block in the tab; a tool caller has this note and nothing else.
+
+    End to end because the only part that can be wrong here is the arrangement:
+    the note is built from a second HTTP call to the kernel-status route, and a
+    path that does not exist would silently produce no note at all.
+    """
+    server, tools = editor
+    root, _ = workspace
+    broken = root / "missing-module.ipynb"
+    broken.write_bytes(notebook("import definitely_not_installed_xyz\n"))
+    call(server, "open", path=str(broken))
+
+    result = call(server, "run_cell", cell_id="cell0")
+    assert result["state"] == "failed"
+
+    interpreter = httpx.get(f"{tools.editor.api_url}/kernel/status").json()["interpreter"]
+    assert interpreter, "the editor could not name its own interpreter"
+    assert interpreter in result["note"], "the note does not say which Python looked"
+    assert (
+        f"{interpreter} -m pip install definitely_not_installed_xyz" in result["note"]
+    ), "the note does not carry a command that installs into that interpreter"
+
+
 def test_a_cell_deleted_through_the_tools_is_gone_from_the_document(editor, workspace):
     """Only the refusal — deleting the last cell — was covered end to end.
 

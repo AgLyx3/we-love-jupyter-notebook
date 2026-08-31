@@ -1,7 +1,8 @@
 import Icon from "../ui/Icon";
 import ReactMarkdown from "react-markdown";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import type { AgentChange, AgentOperation, CellOutput, NotebookCellData, TuningPlan, TuningPreview, TuningRecord, TuningWarmResult } from "../api/client";
+import type { AgentChange, AgentOperation, CellOutput, KernelStatus, NotebookCellData, TuningPlan, TuningPreview, TuningRecord, TuningWarmResult } from "../api/client";
+import { installCommand, missingModule, type MissingModule } from "./missingModule";
 import TuningPanel from "../plotTuning/TuningPanel";
 import type { KnobValues } from "../plotTuning/knobs";
 import CellEditor, { type HunkControls } from "./CellEditor";
@@ -62,13 +63,58 @@ function stripAnsi(value: string): string {
   return value.replace(new RegExp(String.fromCharCode(27) + "\[[0-9;]*[A-Za-z]", "g"), "");
 }
 
+/** Everything the remediation below needs that the traceback does not carry. */
+interface Remediation {
+  missing: MissingModule;
+  /** The Python that ran the cell, from `GET /kernel/status`. */
+  interpreter: string;
+  /** Someone passed `--kernel-python`, rather than it being resolved. */
+  chosen: boolean;
+}
+
+/** What to do about `ModuleNotFoundError`, which a traceback cannot say (#52).
+ *
+ *  The error has two opposite fixes and the traceback distinguishes neither:
+ *  the environment the cells run in is missing this package, or it is not the
+ *  environment that was meant. Naming the interpreter is what tells them
+ *  apart, so it is stated first and the command is built from it — this block
+ *  is here to remove a guess, not to add one.
+ *
+ *  It lives under the traceback rather than in the toolbar because the moment
+ *  a person needs it is the moment a cell has failed; the kernel chip's
+ *  tooltip carries the same interpreter for every other moment.
+ */
+function MissingModuleHelp({ missing, interpreter, chosen }: Remediation) {
+  return <div className="output-remediation" role="note" aria-label="Missing module">
+    <p>
+      <code>{missing.module}</code> is not installed in the environment your cells run in, <code className="remediation-path">{interpreter}</code>.
+      {missing.packageName !== missing.module && <> It comes from the <code>{missing.packageName}</code> package.</>}
+    </p>
+    <pre className="remediation-command">{installCommand(interpreter, missing)}</pre>
+    <p className="remediation-aside">{chosen
+      ? "That interpreter was chosen with --kernel-python."
+      : "If that is not the environment you meant, restart the editor with --kernel-python pointing at the one your notebooks use."}</p>
+  </div>;
+}
+
+/** The remediation as plain text, so "Add to chat" hands the agent the same
+ *  environment fact the person can see. Without it the agent gets the bare
+ *  traceback and is left to guess an interpreter — the failure this is for. */
+function remediationText({ missing, interpreter }: Remediation): string {
+  return `The kernel runs cells in ${interpreter}, which does not have ${missing.module}. Installing it there: ${installCommand(interpreter, missing)}`;
+}
+
 // A cell error output (traceback) with a one-click "Add to chat" — no need to
 // select anything; it attaches the whole error message.
-function ErrorOutput({ value, disabled, onAdd }: { value: string; disabled: boolean; onAdd?: (text: string) => void }) {
+function ErrorOutput({ value, disabled, onAdd, remediation }: { value: string; disabled: boolean; onAdd?: (text: string) => void; remediation?: Remediation | null }) {
   const clean = stripAnsi(value);
+  const attached = remediation ? `${clean}\n\n${remediationText(remediation)}` : clean;
   return <div className="output-error-block">
-    {onAdd && !disabled && <button type="button" className="output-add-chat" aria-label="Add error to agent chat" onClick={() => onAdd(clean)}><Icon name="add_comment" /> Add to chat</button>}
+    {onAdd && !disabled && <button type="button" className="output-add-chat" aria-label="Add error to agent chat" onClick={() => onAdd(attached)}><Icon name="add_comment" /> Add to chat</button>}
     <pre className="output-error">{clean}</pre>
+    {/* Shown even while mutations are disabled: it is something to read, not
+        something to press, and a turn in flight does not make it less true. */}
+    {remediation && <MissingModuleHelp {...remediation} />}
   </div>;
 }
 
@@ -139,8 +185,14 @@ function MarkdownPreview({ source, cellId, disabled, onAddSelectionToChat, onInl
   </div>;
 }
 
-export function Outputs({ outputs, disabled = false, onAddErrorToChat, onHoverChange, onTune, tuneLabel = "Tune" }: { outputs: Record<string, unknown>[]; disabled?: boolean; onAddErrorToChat?: (text: string) => void; onHoverChange?: (hovered: boolean) => void; onTune?: () => void; tuneLabel?: string }) {
+export function Outputs({ outputs, disabled = false, kernel, onAddErrorToChat, onHoverChange, onTune, tuneLabel = "Tune" }: { outputs: Record<string, unknown>[]; disabled?: boolean; kernel?: KernelStatus; onAddErrorToChat?: (text: string) => void; onHoverChange?: (hovered: boolean) => void; onTune?: () => void; tuneLabel?: string }) {
   if (!outputs.length) return null;
+  // No interpreter, no remediation. A message that named neither the
+  // environment nor a command it can run would only restate the traceback.
+  const remediationFor = (output: Record<string, unknown>): Remediation | null => {
+    const missing = kernel?.interpreter ? missingModule(output.ename, output.evalue) : null;
+    return missing ? { missing, interpreter: kernel!.interpreter!, chosen: kernel!.interpreterSource === "kernel-python" } : null;
+  };
   return <div className="cell-outputs" aria-label="Cell output" onMouseEnter={() => onHoverChange?.(true)} onMouseLeave={() => onHoverChange?.(false)}>
     {/* Entry point for plot tuning, following the labelled output-add-chat
         precedent below rather than the .cell-actions cluster — the comment on
@@ -152,7 +204,7 @@ export function Outputs({ outputs, disabled = false, onAddErrorToChat, onHoverCh
     {outputs.map((output, index) => {
     const kind = String(output.output_type ?? "output");
     if (kind === "stream") return <pre key={index}>{text(output.text)}</pre>;
-    if (kind === "error") return <ErrorOutput key={index} value={`${text(output.ename)}: ${text(output.evalue)}\n${text(output.traceback)}`} disabled={disabled} onAdd={onAddErrorToChat} />;
+    if (kind === "error") return <ErrorOutput key={index} value={`${text(output.ename)}: ${text(output.evalue)}\n${text(output.traceback)}`} disabled={disabled} onAdd={onAddErrorToChat} remediation={remediationFor(output)} />;
     const data = output.data as Record<string, unknown> | undefined;
     const rasterMime = RASTER_MIMES.find((mime) => data?.[mime]);
     if (rasterMime) return <img className="image-output" alt={`Cell output ${index + 1}`} src={`data:${rasterMime};base64,${text(data?.[rasterMime])}`} key={index} />;
@@ -163,7 +215,7 @@ export function Outputs({ outputs, disabled = false, onAddErrorToChat, onHoverCh
   </div>;
 }
 
-export default function NotebookCell({ cell, focused, selected, outlined = false, dragIds, editable, context, trusted = false, change, operations = [], origin = "agent", retyped, revertable = true, tunable = false, tuning, disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onKeep, onKeepOperation, onUndoOperation, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
+export default function NotebookCell({ cell, focused, selected, outlined = false, dragIds, editable, context, trusted = false, change, operations = [], origin = "agent", retyped, revertable = true, tunable = false, tuning, kernel, disabled, sourceActionsDisabled, autoSave, cellRef, onFocus, onSelect, onContextMenu, onDirtyChange, onSave, onRun, onAddEditable, onAddContext, onRevert, onKeep, onKeepOperation, onUndoOperation, onAddSelectionToChat, onInlineEdit, onAddErrorToChat }: {
   cell: NotebookCellData; focused: boolean; selected: boolean;
   /** Covered by the outline block the pointer is over. Presentational only. */
   outlined?: boolean;
@@ -173,6 +225,9 @@ export default function NotebookCell({ cell, focused, selected, outlined = false
   /** The scan already found knobs for this cell; Tune is worth offering. */
   tunable?: boolean;
   tuning?: CellTuningControls;
+  /** Which interpreter the cells run in, so a `ModuleNotFoundError` in the
+   *  outputs below can say where to install and where not to (#52). */
+  kernel?: KernelStatus;
   retyped?: { from: string; to: string };
   disabled: boolean; sourceActionsDisabled: boolean; autoSave: boolean; cellRef: (node: HTMLElement | null) => void;
   onFocus: () => void; onSelect: (event: MouseEvent) => void; onContextMenu: (event: MouseEvent) => void; onDirtyChange: (dirty: boolean) => void; onSave: (source: string) => void; onRun: () => void; onAddEditable: () => void; onAddContext: () => void; onRevert: () => void; onKeep?: () => void;
@@ -375,7 +430,7 @@ export default function NotebookCell({ cell, focused, selected, outlined = false
           ? <TuningPanel cellId={cell.cellId} open revision={tuning.revision} cellOutputs={cell.outputs}
             onScan={tuning.onScan} onWarm={tuning.onWarm} onPreview={tuning.onPreview} onApply={tuning.onApply}
             onDiscardShadow={tuning.onDiscardShadow} onClose={() => setTuningOpen(false)} />
-          : <Outputs outputs={cell.outputs} disabled={dependentDisabled} onAddErrorToChat={onAddErrorToChat} onHoverChange={setSuppressDrag}
+          : <Outputs outputs={cell.outputs} disabled={dependentDisabled} kernel={kernel} onAddErrorToChat={onAddErrorToChat} onHoverChange={setSuppressDrag}
             onTune={canTune ? () => setTuningOpen(true) : undefined} tuneLabel={`Tune ${description}`} />}
       </div>
     </div>

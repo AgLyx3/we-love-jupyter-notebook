@@ -565,6 +565,7 @@ export default function App() {
       <NotebookView notebook={notebook} scope={scope} turn={selectedTurn} tuningRecord={tuningRecord} trusted={trustedScope} disabled={mutationsDisabled || busy} sourceActionsDisabled={hasDirtyDrafts} autoSave={autoSave} focusRequest={focusRequest}
         outlinedCellIds={outlineHighlight}
         tunableCellIds={tunableCellIds}
+        kernel={kernel}
         tuningControls={{
           revision: notebook.revision,
           onScan: (cellId) => api.openTuning(notebook, cellId),

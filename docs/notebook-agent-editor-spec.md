@@ -1312,6 +1312,36 @@ Selection is the foundation and ships first; provisioning is deferred.
   provider requires the authentication and transport-security design this spec
   currently defers before it binds beyond loopback.
 
+### Naming The Environment When It Goes Wrong
+
+Selection (below) is the fix; until every user has made one, `ModuleNotFoundError`
+is the failure they meet, and it is ambiguous in a way the traceback cannot
+resolve. The same error means either "this is the right environment and it lacks
+a package" or "this is the wrong environment entirely", and those have opposite
+fixes — installing the package in the second case makes a wrong setup work well
+enough to keep. The fact that separates them is which interpreter looked.
+
+- `GET /kernel/status` reports `interpreter` and `interpreterSource`. The source
+  distinguishes an interpreter someone chose (`--kernel-python`) from the one the
+  `python3` kernelspec resolves to, which is the case that goes wrong and the
+  case a `--kernel-python` that did not take effect looks identical to.
+- The kernel indicator names the interpreter on hover, for every moment that is
+  not a failure.
+- A failed cell whose error is `ModuleNotFoundError` carries a remediation under
+  its traceback: the module, the interpreter that did not have it, and the
+  command that installs into *that* interpreter — `<interpreter> -m pip install`,
+  never a guessed sibling `bin/pip`, which is not guaranteed to exist. It is
+  scoped to `ModuleNotFoundError` with a top-level module name; a bare
+  `ImportError`, or a dotted name whose parent package clearly imported, is not
+  fixed by an install and gets no command.
+- `run_cell` and `run_all` put the same thing in the failed run's `note`. A tool
+  caller has strictly less to go on than a person with the tab open, and its
+  wrong guess is worse: an `!pip install` cell written into the notebook installs
+  against whatever `pip` is first on PATH.
+
+This diagnoses the environment; it does not manage it. What is installed in the
+chosen environment stays the project's business, as with Jupyter.
+
 ### Phased Path
 
 1. Extract `KernelProvider` / `EnvironmentSpec`; reimplement today's behavior as
@@ -2080,6 +2110,32 @@ kernel interrupt/restart, and `finally`-based lease/workspace cleanup.
   the execution, lease, source-hash, and approval logic, and gives a clean path
   to isolated and off-box execution — including the sandboxing and transport
   security this spec otherwise defers.
+
+### Missing-Module Remediation
+
+- Decision: Report the kernel's interpreter in `GET /kernel/status`, and turn a
+  cell's `ModuleNotFoundError` into a remediation that names that interpreter and
+  gives `<interpreter> -m pip install <package>` — in the cell's output area, in
+  the text "Add to chat" hands the agent, and in the MCP failed-run `note`. Carry
+  a short table of the module names that are not their own distribution
+  (`sklearn` → `scikit-learn`, `cv2` → `opencv-python`, …), duplicated across the
+  TypeScript and Python sides and pinned equal by a test.
+- Alternatives: Leave the traceback bare and document the environment model;
+  print `pip install <module>` unconditionally; never name a package and only
+  name the module; compute the remediation on the backend and attach it to the
+  execution attempt so there is a single implementation; give the MCP tools the
+  interpreter on every `read`/`status` instead of only on a failure.
+- Rationale: The bare traceback is the failure the `--kernel-python` design
+  exists for, so it is the one users meet most, and it is undiagnosable from
+  inside the tab. `pip install cv2` fails outright, which is worse than no
+  command, so the handful of names a notebook actually trips over are worth
+  knowing exactly; the long tail is not worth pretending to, and the module name
+  is right for the large majority. Attaching the message to the execution attempt
+  would remove the duplication but the remediation would then vanish on the next
+  run and on reload, while the traceback it explains stays on screen. Putting the
+  interpreter in every `read`/`status` spends tokens on every call for a fact
+  that matters at one moment; the failure note delivers it exactly then, at the
+  cost of one extra loopback request on a run that has already failed.
 
 ### Notebook Close
 
