@@ -1,0 +1,48 @@
+name: Dependency drift
+
+# The other half of pinning CI (#59). `constraints/ci.txt` stops an upstream
+# release from turning `main` red on somebody's unrelated pull request, but it
+# also stops CI from noticing that release at all — and users resolve
+# `pyproject.toml`'s permissive ranges, not our pins. So the same suite runs
+# unpinned once a week.
+#
+# A failure here is not a broken build. It means an upstream release is
+# incompatible with the code as written, and it is already reaching users. The
+# fix is a real change, in its own pull request; bumping `constraints/ci.txt`
+# to the version that broke us without fixing anything just moves the failure
+# onto `main`.
+
+on:
+  schedule:
+    # Mondays, 08:00 UTC. Early enough in the week that whoever picks it up is
+    # not doing it on a Friday.
+    - cron: "0 8 * * 1"
+  # So the drift can be checked on demand — after an upstream release lands, or
+  # before cutting a release of our own.
+  workflow_dispatch:
+
+jobs:
+  unpinned:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install without constraints
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[test]'
+          npm ci
+      # The first thing anyone reading a failure here needs is what resolved,
+      # since that is the only thing that changed.
+      - name: Record what was installed
+        run: pip freeze
+      - name: Build the frontend into the package
+        run: npm run build
+      - name: Test
+        run: python -m pytest backend/tests -q

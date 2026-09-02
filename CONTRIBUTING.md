@@ -23,6 +23,35 @@ The app uses the real Claude CLI (`>=2.1.203,<2.2.0`) for agent turns. The
 `--test-agent` flag swaps in a deterministic in-process adapter and exists
 **only** for the automated test suites — it is not a user-facing mode.
 
+### Python dependencies
+
+`pyproject.toml` keeps permissive ranges, because that is what users resolve
+and pinning it would strand them on whatever SDK we happened to test against.
+CI installs under `constraints/ci.txt` instead, so an upstream release cannot
+turn `main` red on a pull request whose diff could not have caused it (#59).
+
+Your local venv is unpinned and may resolve something newer than CI does. That
+is fine and usually invisible. When you need to match CI exactly:
+
+```bash
+.venv/bin/pip install -c constraints/ci.txt -e '.[test]'
+```
+
+Changing a dependency means regenerating the constraints, with the Python
+version CI uses — resolution is version-dependent, and the script refuses to
+run on a different minor rather than pin versions CI cannot install:
+
+```bash
+python3.12 scripts/update_constraints.py
+```
+
+That lands as its own diff with its own author, which is the point. Drift is
+still discovered: `.github/workflows/dependency-drift.yml` runs the suite
+unpinned every Monday, and the `wheel` job is unpinned on every commit because
+it exists to test the install a stranger gets. A red drift run is not a broken
+build — it means an upstream release is already reaching users, and it wants a
+real fix rather than a constraints bump.
+
 ## Before you open a pull request
 
 Run the same checks CI runs and make sure they pass:
