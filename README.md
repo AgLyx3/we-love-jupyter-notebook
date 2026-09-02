@@ -39,18 +39,30 @@ them wherever it was installed — which is the right answer here and the wrong
 one for `uvx` or `pipx`, where a notebook opening with `import pandas` fails on
 its first cell.
 
-So to keep the editor out of your project instead, point `--kernel-python` at
-the environment your cells need:
+So to keep the editor out of your project instead, install it once as its own
+tool and point `--kernel-python` at the environment your cells need:
 
 ```bash
+uv tool install notebook-editor-mcp
+notebook-editor-mcp --help   # once, so the first connect is not the first run
+
 claude mcp add agent-notebook -- \
-  uvx --from notebook-editor-mcp notebook-editor-mcp \
+  /abs/path/to/notebook-editor-mcp \
   --workspace-root /abs/path/to/project \
   --kernel-python /abs/path/to/.venv/bin/python
 ```
 
+`uv tool install` rather than `uvx --from`, which is what this page used to
+say. `uvx` fetches on the run it is asked to work, and that first run takes
+about ten seconds on a machine that has not cached the package against under
+one afterwards — with a client already waiting on it. Installing does the
+fetching while nothing is waiting; the `--help` covers the one slow launch that
+remains, since even an installed binary takes around 2.5s the first time and
+0.7s after. Both matter, for the reason in **One failure to disbelieve** below.
+
 `--workspace-root` confines the editor to one directory. Use absolute paths for
-it and for the executable.
+it and for the executable — `uv tool install` prints where it put the binary,
+and your client does not necessarily have your `PATH`.
 
 Then ask your client for a notebook. The tab opens on its first tool call and
 `show` brings it back. Everything the editor does is there: the agent chat,
@@ -146,16 +158,17 @@ a protocol-version probe, gives up on it after two to three seconds and falls
 back to the older `initialize` handshake; but the probe is still queued in the
 pipe, and the MCP SDK locks the connection to the newer protocol the moment it
 finally reads it, so the handshake queued behind it is refused. The server only
-loses that race when it is slow to answer its first frame, which for `uvx`
-means the first run on a machine that has not cached the package: 8.1s cold
-here against 0.9s once `uv` has it. So warm it once before you register it —
+loses that race when it is slow to answer its first frame, and the install
+above is arranged so that it never is: `uv tool install` does the fetching
+before any client is waiting, and the `--help` spends the one slow launch that
+survives it.
 
-```bash
-uvx --from notebook-editor-mcp notebook-editor-mcp --help
-```
-
-— or just run `claude mcp list` again. A client that does connect is
-unaffected for the life of that session.
+You will still meet this if you registered `uvx --from notebook-editor-mcp`,
+which earlier versions of this page recommended — that pays the ten-second
+fetch with the client already counting. Running `claude mcp list` again is
+enough to get past it once; switching to the install above is what stops it
+coming back. A client that does connect is unaffected for the life of that
+session.
 
 To see the tool surface without wiring up a client, the MCP Inspector speaks
 the same stdio protocol:
