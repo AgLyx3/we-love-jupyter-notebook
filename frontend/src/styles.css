@@ -441,6 +441,17 @@ body.marquee-active iframe { pointer-events: none; }
 .cell-outputs pre { font-family: var(--font-code); margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-small); }
 .cell-outputs pre:last-child { margin-bottom: 0; }
 .output-error { color: var(--error); user-select: text; }
+
+/* The remediation under a ModuleNotFoundError traceback (#52). Deliberately
+   quieter than the traceback above it — surface-toned, not error-toned — so it
+   reads as the answer to the red text rather than as more of it. */
+.output-remediation { margin: 8px 0 0; padding: 10px 12px; border: 1px solid var(--outline-variant); border-radius: var(--radius); background: var(--surface-container); font-size: var(--text-small); user-select: text; }
+.output-remediation p { margin: 0; }
+.output-remediation code { font-family: var(--font-code); overflow-wrap: anywhere; }
+/* The command is the thing to copy, so it gets its own selectable line rather
+   than being wrapped into the sentence above it. */
+.output-remediation .remediation-command { margin: 8px 0; padding: 7px 9px; border-radius: 6px; background: var(--surface-container-highest); color: var(--on-surface); font-family: var(--font-code); font-size: var(--text-small); white-space: pre-wrap; overflow-wrap: anywhere; }
+.output-remediation .remediation-aside { color: var(--on-surface-variant); font-size: var(--text-tiny); }
 .html-output { width: 100%; min-height: 120px; border: 0; background: white; }
 .image-output { display: block; max-width: 100%; height: auto; object-fit: contain; }
 
